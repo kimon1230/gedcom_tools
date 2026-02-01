@@ -1,0 +1,14 @@
+0 HEAD
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 SOUR TestApp
+1 CHAR UTF-8
+1 SUBM @U1@
+0 @U1@ SUBM
+1 NAME Test User
+0 @I1@ INDI
+1 NAME John /Doe/
+1 SEX M
+1 NOTE This is an extremely long note that exceeds the GEDCOM specification limit of 255 characters per line. The GEDCOM standard recommends that lines should not exceed 255 characters including the level number and tag. This line is intentionally made very long to test the strict validation mode line length checking functionality.
+0 TRLR

@@ -49,7 +49,7 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=gedcom_tools --cov-report=term-missing --cov-fail-under=90"
+addopts = "-v --cov=gedcom_tools --cov-report=term-missing --cov-fail-under=95"
 
 [tool.coverage.run]
 source = ["src/gedcom_tools"]

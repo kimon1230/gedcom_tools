@@ -1,0 +1,690 @@
+"""Validation engine orchestrator."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any, Literal
+
+from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
+
+from gedcom_tools.progress import PhaseTracker
+
+if TYPE_CHECKING:
+    from ged4py.model import Record
+from gedcom_tools.validation.issues import (
+    EncodingInfo,
+    ErrorCode,
+    FamilyInfo,
+    IndividualInfo,
+    ValidationIssue,
+)
+from gedcom_tools.validation.reference import ReferenceValidator
+from gedcom_tools.validation.result import ValidationResult
+from gedcom_tools.validation.semantic import SemanticValidator
+
+
+class StopValidation(Exception):
+    """Raised to stop validation early in quick mode."""
+
+    pass
+
+
+# Maximum recommended line length per GEDCOM spec
+MAX_LINE_LENGTH = 255
+
+# Maximum nesting depth per GEDCOM spec (level numbers 0-99)
+MAX_NESTING_DEPTH = 99
+
+
+class ValidationEngine:
+    """Orchestrates the validation process.
+
+    Runs validation in 4 phases:
+    1. Detect encoding
+    2. Parse structure and collect data
+    3. Validate references
+    4. Check semantics
+    """
+
+    def __init__(
+        self,
+        file_path: Path,
+        mode: Literal["quick", "full"] = "quick",
+        strict: str | None = None,
+        quiet: bool = False,
+        verbose: bool = False,
+        no_color: bool = False,
+        stream: IO[str] | None = None,
+    ):
+        self.file_path = file_path
+        self.mode = mode
+        self.strict = strict
+        self.quiet = quiet
+        self.verbose = verbose
+        self.no_color = no_color
+        self.stream = stream
+
+        self.issues: list[ValidationIssue] = []
+        self.encoding_info: EncodingInfo | None = None
+        self.record_counts: dict[str, int] = {}
+
+        self._ref_validator = ReferenceValidator()
+        self._sem_validator = SemanticValidator()
+        self._line_offsets: list[int] = []
+
+    def validate(self) -> ValidationResult:
+        """Run all validation phases and return results."""
+        tracker = PhaseTracker(
+            total_phases=4,
+            stream=self.stream,
+            no_color=self.no_color,
+            quiet=self.quiet,
+            verbose=self.verbose,
+        )
+
+        try:
+            # Phase 1: Detect encoding
+            with tracker.phase("Detecting encoding"):
+                self._detect_encoding()
+
+            # Phase 2: Parse structure
+            with tracker.phase("Parsing structure") as spinner:
+                self._parse_structure(spinner)
+
+            # Phase 3: Validate references
+            with tracker.phase("Validating references"):
+                ref_issues = self._ref_validator.validate()
+                self.issues.extend(ref_issues)
+
+            # Phase 4: Check semantics
+            with tracker.phase("Checking semantics"):
+                sem_issues = self._sem_validator.validate()
+                self.issues.extend(sem_issues)
+
+        except StopValidation:
+            pass
+
+        return ValidationResult(
+            file_path=str(self.file_path),
+            issues=self.issues,
+            encoding_info=self.encoding_info,
+            record_counts=self.record_counts,
+        )
+
+    def _build_line_map(self) -> None:
+        """Build offset-to-line mapping and check line-level issues.
+
+        Checks:
+        - W002: Trailing whitespace
+        - W003: Line too long (soft warning, always checked)
+        - W032: Line too long strict (only in --strict mode)
+        """
+        self._line_offsets = [0]
+        with open(self.file_path, "rb") as f:
+            offset = 0
+            line_num = 0
+            for line in f:
+                line_num += 1
+                line_content = line.rstrip(b"\r\n")
+
+                # W002: Trailing whitespace
+                if line_content != line_content.rstrip():
+                    self._add_issue(
+                        ErrorCode.W002_TRAILING_WHITESPACE,
+                        "Line has trailing whitespace",
+                        line=line_num,
+                    )
+
+                # W003/W032: Line length checks
+                if len(line_content) > MAX_LINE_LENGTH:
+                    if self.strict is not None:
+                        self._add_issue(
+                            ErrorCode.W032_LINE_TOO_LONG_STRICT,
+                            f"Line exceeds {MAX_LINE_LENGTH} characters "
+                            f"({len(line_content)} chars)",
+                            line=line_num,
+                        )
+                    else:
+                        self._add_issue(
+                            ErrorCode.W003_LINE_TOO_LONG,
+                            f"Line exceeds recommended {MAX_LINE_LENGTH} characters "
+                            f"({len(line_content)} chars)",
+                            line=line_num,
+                        )
+
+                offset += len(line)
+                self._line_offsets.append(offset)
+
+    def _offset_to_line(self, offset: int) -> int:
+        """Convert byte offset to line number (1-indexed)."""
+        if not self._line_offsets:
+            return 0
+
+        # Binary search for the line containing this offset
+        lo, hi = 0, len(self._line_offsets) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._line_offsets[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1
+
+    def _detect_encoding(self) -> None:
+        """Detect file encoding and check for ANSEL."""
+        has_bom = False
+        declared_charset = None
+
+        # Check for BOM
+        with open(self.file_path, "rb") as f:
+            bom = f.read(3)
+            if bom.startswith(b"\xef\xbb\xbf"):
+                has_bom = True
+
+        # Try to read header to get declared charset
+        try:
+            with GedcomReader(str(self.file_path)) as reader:
+                if reader.header:
+                    char_rec = reader.header.sub_tag("CHAR")
+                    if char_rec and char_rec.value:
+                        declared_charset = str(char_rec.value)
+
+                        # Check for ANSEL
+                        if declared_charset.upper() == "ANSEL":
+                            self._add_issue(
+                                ErrorCode.E009_ANSEL_NOT_SUPPORTED,
+                                "ANSEL encoding is not supported. "
+                                "Please convert the file to UTF-8.",
+                                line=(
+                                    self._offset_to_line(char_rec.offset)
+                                    if char_rec.offset
+                                    else None
+                                ),
+                            )
+                            if self.mode == "quick":
+                                raise StopValidation()
+
+                # Determine detected encoding from reader
+                detected = "UTF-8"  # Default assumption
+                if has_bom:
+                    detected = "UTF-8"
+                elif declared_charset:
+                    detected = declared_charset.upper()
+
+                self.encoding_info = EncodingInfo(
+                    encoding=detected,
+                    has_bom=has_bom,
+                    declared_charset=declared_charset,
+                )
+
+        except CodecError as e:
+            self._add_issue(
+                ErrorCode.E008_DECODE_FAILURE,
+                f"Failed to decode file: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+    def _parse_structure(self, spinner: object) -> None:
+        """Parse file structure and collect data for validation."""
+        self._build_line_map()
+
+        try:
+            with GedcomReader(str(self.file_path)) as reader:
+                # Check HEAD exists
+                if reader.header is None:
+                    self._add_issue(
+                        ErrorCode.E005_MISSING_HEAD,
+                        "File does not start with HEAD record",
+                        line=1,
+                    )
+                    if self.mode == "quick":
+                        raise StopValidation()
+                else:
+                    # Check for SUBM reference
+                    subm = reader.header.sub_tag("SUBM", follow=False)
+                    if subm is None:
+                        self._add_issue(
+                            ErrorCode.W005_MISSING_SUBM,
+                            "No SUBM (submitter) record referenced in HEAD",
+                            line=1,
+                        )
+
+                    # Version compliance checks (strict mode only)
+                    self._validate_version_compliance(reader.header)
+
+                # Process all level-0 records
+                count = 0
+                has_trlr = False
+
+                for record in reader.records0():
+                    count += 1
+                    if hasattr(spinner, "update") and count % 100 == 0:
+                        spinner.update(f" ({count:,} records)")
+
+                    tag = record.tag
+                    if not tag:
+                        continue
+
+                    offset = record.offset if record.offset else 0
+                    rec_line = self._offset_to_line(offset)
+
+                    # E007: Check for content after TRLR
+                    if has_trlr:
+                        self._add_issue(
+                            ErrorCode.E007_CONTENT_AFTER_TRLR,
+                            f"Record {tag} appears after TRLR",
+                            line=rec_line,
+                        )
+                        if self.mode == "quick":
+                            raise StopValidation()
+                        continue
+
+                    # Track record counts
+                    self.record_counts[tag] = self.record_counts.get(tag, 0) + 1
+
+                    # Check for TRLR
+                    if tag == "TRLR":
+                        has_trlr = True
+                        continue
+
+                    # W004: Check for custom tags (start with _)
+                    if tag.startswith("_"):
+                        self._add_issue(
+                            ErrorCode.W004_CUSTOM_TAG,
+                            f"Custom tag {tag} is non-standard",
+                            line=rec_line,
+                        )
+
+                    # Check sub-records for custom tags
+                    self._check_custom_tags(record)
+
+                    # Collect xref definitions
+                    xref_id = record.xref_id
+                    if xref_id:
+                        issue = self._ref_validator.collect_definition(
+                            xref_id, tag, rec_line
+                        )
+                        if issue:
+                            self.issues.append(issue)
+                            if self.mode == "quick":
+                                raise StopValidation()
+
+                    # Process by record type
+                    if tag == "INDI":
+                        self._process_indi(record)
+                    elif tag == "FAM":
+                        self._process_fam(record)
+                    else:
+                        self._process_generic(record)
+
+                if not has_trlr:
+                    self._add_issue(
+                        ErrorCode.E006_MISSING_TRLR,
+                        "File does not end with TRLR record",
+                    )
+                    if self.mode == "quick":
+                        raise StopValidation()
+
+        except ParserError as e:
+            self._add_issue(
+                ErrorCode.E004_MALFORMED_LINE,
+                f"Parse error: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+        except IntegrityError as e:
+            self._add_issue(
+                ErrorCode.E003_INVALID_LEVEL,
+                f"Structure error: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+    def _process_indi(self, record: Record) -> None:
+        """Process an INDI record."""
+        xref = record.xref_id
+        if not xref:
+            return  # INDI records should always have an xref
+
+        offset = record.offset if record.offset else 0
+        line = self._offset_to_line(offset)
+
+        # Extract birth/death years
+        birth_year = self._extract_year(record, "BIRT/DATE")
+        death_year = self._extract_year(record, "DEAT/DATE")
+
+        # Extract sex
+        sex_rec = record.sub_tag("SEX")
+        sex = str(sex_rec.value) if sex_rec and sex_rec.value else None
+
+        # Extract family links
+        famc_xrefs: list[str] = []
+        fams_xrefs: list[str] = []
+
+        for sub in record.sub_records:
+            sub_offset = sub.offset if sub.offset else 0
+            if sub.tag == "FAMC" and sub.value:
+                fam_xref = self._extract_xref(sub.value)
+                if fam_xref:
+                    famc_xrefs.append(fam_xref)
+                    self._ref_validator.collect_usage(
+                        fam_xref,
+                        self._offset_to_line(sub_offset),
+                        f"FAMC reference in {xref}",
+                    )
+                    self._ref_validator.collect_indi_family_link(xref, fam_xref)
+
+            elif sub.tag == "FAMS" and sub.value:
+                fam_xref = self._extract_xref(sub.value)
+                if fam_xref:
+                    fams_xrefs.append(fam_xref)
+                    self._ref_validator.collect_usage(
+                        fam_xref,
+                        self._offset_to_line(sub_offset),
+                        f"FAMS reference in {xref}",
+                    )
+                    self._ref_validator.collect_indi_family_link(xref, fam_xref)
+
+            # Check for direct pointer references (SOUR, NOTE, OBJE, REPO)
+            elif sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
+                ref_xref = self._extract_xref(sub.value)
+                if ref_xref:
+                    self._ref_validator.collect_usage(
+                        ref_xref,
+                        self._offset_to_line(sub_offset),
+                        f"{sub.tag} reference in {xref}",
+                    )
+
+            # Check for nested pointer references
+            self._collect_sub_xrefs(sub, xref)
+
+        # Store for semantic validation
+        self._sem_validator.collect_individual(
+            IndividualInfo(
+                xref=xref,
+                line=line,
+                birth_year=birth_year,
+                death_year=death_year,
+                sex=sex,
+                famc_xrefs=famc_xrefs,
+                fams_xrefs=fams_xrefs,
+            )
+        )
+
+    def _process_fam(self, record: Record) -> None:
+        """Process a FAM record."""
+        xref = record.xref_id
+        if not xref:
+            return  # FAM records should always have an xref
+
+        offset = record.offset if record.offset else 0
+        line = self._offset_to_line(offset)
+
+        husb_xref: str | None = None
+        wife_xref: str | None = None
+        chil_xrefs: list[str] = []
+        marriage_year = self._extract_year(record, "MARR/DATE")
+
+        for sub in record.sub_records:
+            sub_offset = sub.offset if sub.offset else 0
+            if sub.tag == "HUSB" and sub.value:
+                husb_xref = self._extract_xref(sub.value)
+                if husb_xref:
+                    self._ref_validator.collect_usage(
+                        husb_xref,
+                        self._offset_to_line(sub_offset),
+                        f"HUSB in {xref}",
+                    )
+                    self._ref_validator.collect_fam_member(xref, husb_xref)
+
+            elif sub.tag == "WIFE" and sub.value:
+                wife_xref = self._extract_xref(sub.value)
+                if wife_xref:
+                    self._ref_validator.collect_usage(
+                        wife_xref,
+                        self._offset_to_line(sub_offset),
+                        f"WIFE in {xref}",
+                    )
+                    self._ref_validator.collect_fam_member(xref, wife_xref)
+
+            elif sub.tag == "CHIL" and sub.value:
+                chil_xref = self._extract_xref(sub.value)
+                if chil_xref:
+                    chil_xrefs.append(chil_xref)
+                    self._ref_validator.collect_usage(
+                        chil_xref,
+                        self._offset_to_line(sub_offset),
+                        f"CHIL in {xref}",
+                    )
+                    self._ref_validator.collect_fam_member(xref, chil_xref)
+
+            # Check for direct pointer references (SOUR, NOTE, OBJE, REPO)
+            elif sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
+                ref_xref = self._extract_xref(sub.value)
+                if ref_xref:
+                    self._ref_validator.collect_usage(
+                        ref_xref,
+                        self._offset_to_line(sub_offset),
+                        f"{sub.tag} reference in {xref}",
+                    )
+
+            # Check for nested pointer references
+            self._collect_sub_xrefs(sub, xref)
+
+        # Store for semantic validation
+        self._sem_validator.collect_family(
+            FamilyInfo(
+                xref=xref,
+                line=line,
+                husb_xref=husb_xref,
+                wife_xref=wife_xref,
+                chil_xrefs=chil_xrefs,
+                marriage_year=marriage_year,
+            )
+        )
+
+    def _process_generic(self, record: Record) -> None:
+        """Process a generic record (NOTE, SOUR, REPO, OBJE, etc.)."""
+        xref = record.xref_id
+        if not xref:
+            return
+
+        # Recursively collect xref usages
+        self._collect_sub_xrefs_recursive(record, xref)
+
+    def _collect_sub_xrefs(self, record: Record, parent_xref: str) -> None:
+        """Collect xref usages from a sub-record (one level only)."""
+        # Check for SOUR, NOTE, OBJE, REPO references
+        for sub in record.sub_records:
+            sub_offset = sub.offset if sub.offset else 0
+            if sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
+                ref_xref = self._extract_xref(sub.value)
+                if ref_xref:
+                    self._ref_validator.collect_usage(
+                        ref_xref,
+                        self._offset_to_line(sub_offset),
+                        f"{sub.tag} reference in {parent_xref}",
+                    )
+
+    def _collect_sub_xrefs_recursive(
+        self, record: Record, parent_xref: str, depth: int = 0
+    ) -> None:
+        """Recursively collect all xref usages from sub-records.
+
+        Args:
+            record: The record to process.
+            parent_xref: The xref of the parent record for context.
+            depth: Current recursion depth (GEDCOM allows levels 0-99).
+        """
+        if depth >= MAX_NESTING_DEPTH:
+            return
+
+        for sub in record.sub_records:
+            sub_offset = sub.offset if sub.offset else 0
+            if sub.value:
+                ref_xref = self._extract_xref(sub.value)
+                if ref_xref:
+                    self._ref_validator.collect_usage(
+                        ref_xref,
+                        self._offset_to_line(sub_offset),
+                        f"{sub.tag} reference in {parent_xref}",
+                    )
+            self._collect_sub_xrefs_recursive(sub, parent_xref, depth + 1)
+
+    def _check_custom_tags(self, record: Record, depth: int = 0) -> None:
+        """Recursively check for custom tags in sub-records.
+
+        Custom tags start with underscore (_) and are vendor extensions.
+        """
+        if depth >= MAX_NESTING_DEPTH:
+            return
+
+        for sub in record.sub_records:
+            if sub.tag and sub.tag.startswith("_"):
+                sub_offset = sub.offset if sub.offset else 0
+                self._add_issue(
+                    ErrorCode.W004_CUSTOM_TAG,
+                    f"Custom tag {sub.tag} is non-standard",
+                    line=self._offset_to_line(sub_offset),
+                )
+            self._check_custom_tags(sub, depth + 1)
+
+    def _extract_xref(self, value: Any) -> str | None:
+        """Extract xref ID from a value (handles pointer records)."""
+        if value is None:
+            return None
+
+        # If it's already a string in @XREF@ format
+        val_str = str(value)
+        if val_str.startswith("@") and val_str.endswith("@"):
+            return val_str
+
+        # Check if it's a pointer record
+        if hasattr(value, "xref_id"):
+            xref: str | None = value.xref_id
+            return xref
+
+        return None
+
+    def _extract_year(self, record: Record, path: str) -> int | None:
+        """Extract year from a date at the given path."""
+        date_rec = record.sub_tag(path)
+        if date_rec is None or date_rec.value is None:
+            return None
+
+        # ged4py may return a Date object or string
+        date_val = date_rec.value
+
+        # Try to get year from Date object
+        if hasattr(date_val, "year") and date_val.year:
+            year: int = date_val.year
+            return year
+
+        # Fall back to regex extraction from string
+        date_str = str(date_val)
+        # Match 4-digit year
+        match = re.search(r"\b(\d{4})\b", date_str)
+        if match:
+            return int(match.group(1))
+
+        return None
+
+    def _validate_version_compliance(self, header: Record) -> None:
+        """Check version-specific requirements when --strict is set.
+
+        Args:
+            header: The HEAD record from the GEDCOM file.
+        """
+        if self.strict is None:
+            return
+
+        # Check GEDC record exists
+        gedc = header.sub_tag("GEDC")
+        if gedc is None:
+            gedc_line = 1  # HEAD is at line 1
+            self._add_issue(
+                ErrorCode.E013_MISSING_GEDC,
+                "HEAD record missing required GEDC sub-record",
+                line=gedc_line,
+            )
+            if self.mode == "quick":
+                raise StopValidation()
+        else:
+            # Check VERS exists under GEDC
+            vers = gedc.sub_tag("VERS")
+            if vers is None:
+                gedc_offset = gedc.offset if gedc.offset else 0
+                self._add_issue(
+                    ErrorCode.E014_MISSING_GEDC_VERS,
+                    "GEDC record missing required VERS sub-record",
+                    line=self._offset_to_line(gedc_offset),
+                )
+                if self.mode == "quick":
+                    raise StopValidation()
+            else:
+                # Check version mismatch
+                declared_version = str(vers.value) if vers.value else None
+                if declared_version and declared_version != self.strict:
+                    vers_offset = vers.offset if vers.offset else 0
+                    self._add_issue(
+                        ErrorCode.W031_VERSION_MISMATCH,
+                        f"File declares version {declared_version}, "
+                        f"but --strict {self.strict} was specified",
+                        line=self._offset_to_line(vers_offset),
+                    )
+
+        # Check SOUR exists
+        sour = header.sub_tag("SOUR")
+        if sour is None:
+            self._add_issue(
+                ErrorCode.E015_MISSING_SOUR,
+                "HEAD record missing required SOUR sub-record",
+                line=1,
+            )
+            if self.mode == "quick":
+                raise StopValidation()
+
+        # Check CHAR exists
+        char = header.sub_tag("CHAR")
+        if char is None:
+            self._add_issue(
+                ErrorCode.E016_MISSING_CHAR,
+                "HEAD record missing required CHAR sub-record",
+                line=1,
+            )
+            if self.mode == "quick":
+                raise StopValidation()
+        else:
+            # Check ANSEL deprecation in 5.5.5
+            if self.strict == "5.5.5":
+                charset = str(char.value).upper() if char.value else ""
+                if charset == "ANSEL":
+                    char_offset = char.offset if char.offset else 0
+                    self._add_issue(
+                        ErrorCode.W030_ANSEL_DEPRECATED,
+                        "ANSEL encoding is deprecated in GEDCOM 5.5.5; "
+                        "UTF-8 is recommended",
+                        line=self._offset_to_line(char_offset),
+                    )
+
+    def _add_issue(
+        self,
+        code: ErrorCode,
+        message: str,
+        line: int | None = None,
+        xref: str | None = None,
+        context: str | None = None,
+    ) -> None:
+        """Add a validation issue."""
+        self.issues.append(
+            ValidationIssue(
+                code=code,
+                message=message,
+                line=line,
+                xref=xref,
+                context=context,
+            )
+        )

@@ -29,7 +29,7 @@ def create_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbose output",
+        help="Show detailed progress with timing",
     )
     parser.add_argument(
         "-q",
@@ -42,6 +42,11 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["text", "json"],
         default="text",
         help="Output format (default: text)",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
     )
 
     subparsers = parser.add_subparsers(

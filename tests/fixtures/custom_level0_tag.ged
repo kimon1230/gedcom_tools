@@ -1,0 +1,9 @@
+0 HEAD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+1 SOUR TestApp
+0 _CUSTOM Custom record at level 0
+0 @I1@ INDI
+1 NAME Test /Person/
+0 TRLR

@@ -1,0 +1,10 @@
+0 HEAD
+1 SOUR TestApp
+1 CHAR UTF-8
+1 SUBM @U1@
+0 @U1@ SUBM
+1 NAME Test User
+0 @I1@ INDI
+1 NAME John /Doe/
+1 SEX M
+0 TRLR

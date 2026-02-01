@@ -43,30 +43,33 @@ def test_validate_help(capsys):
 
 def test_validate_missing_file(capsys):
     result = main(["validate", "nonexistent.ged"])
-    assert result != EXIT_SUCCESS
+    assert result == EXIT_USAGE_ERROR
     assert "not found" in capsys.readouterr().err.lower()
 
 
 def test_validate_directory_instead_of_file(tmp_path, capsys):
     result = main(["validate", str(tmp_path)])
-    assert result != EXIT_SUCCESS
+    assert result == EXIT_USAGE_ERROR
     assert "not a file" in capsys.readouterr().err.lower()
 
 
 def test_validate_basic(temp_gedcom_file, capsys):
     result = main(["validate", str(temp_gedcom_file)])
     assert result == EXIT_SUCCESS
-    assert "not yet implemented" in capsys.readouterr().out.lower()
+    out = capsys.readouterr().out.lower()
+    assert "valid" in out
 
 
 def test_validate_quick_mode(temp_gedcom_file, capsys):
     assert main(["validate", "--quick", str(temp_gedcom_file)]) == EXIT_SUCCESS
-    assert "quick" in capsys.readouterr().out.lower()
+    out = capsys.readouterr().out.lower()
+    assert "valid" in out
 
 
 def test_validate_full_mode(temp_gedcom_file, capsys):
     assert main(["validate", "--full", str(temp_gedcom_file)]) == EXIT_SUCCESS
-    assert "full" in capsys.readouterr().out.lower()
+    out = capsys.readouterr().out.lower()
+    assert "valid" in out
 
 
 def test_validate_sample_file(sample_gedcom_path):
@@ -75,6 +78,46 @@ def test_validate_sample_file(sample_gedcom_path):
 
 def test_format_json_accepted(temp_gedcom_file):
     assert main(["--format", "json", "validate", str(temp_gedcom_file)]) == EXIT_SUCCESS
+
+
+def test_no_color_flag_accepted(temp_gedcom_file):
+    assert main(["--no-color", "validate", str(temp_gedcom_file)]) == EXIT_SUCCESS
+
+
+def test_quiet_mode_valid_file_no_output(temp_gedcom_file, capsys):
+    """Quiet mode on valid file produces no stdout output."""
+    assert main(["-q", "validate", str(temp_gedcom_file)]) == EXIT_SUCCESS
+    out = capsys.readouterr().out
+    assert out == ""
+
+
+def test_quiet_mode_errors_only(tmp_path, capsys):
+    """Quiet mode shows only errors, not warnings or file info."""
+    from gedcom_tools.constants import EXIT_ERROR
+
+    # Create file with an error (unresolved xref)
+    ged = tmp_path / "bad.ged"
+    ged.write_text(
+        "0 HEAD\n"
+        "1 GEDC\n"
+        "2 VERS 5.5.1\n"
+        "1 CHAR UTF-8\n"
+        "0 @I1@ INDI\n"
+        "1 NAME Test /Person/\n"
+        "1 FAMC @F99@\n"
+        "0 TRLR\n"
+    )
+
+    result = main(["-q", "validate", "--full", str(ged)])
+    assert result == EXIT_ERROR
+
+    out = capsys.readouterr().out
+    # Should contain error
+    assert "[E001]" in out
+    # Should NOT contain file info or warnings
+    assert "File:" not in out
+    assert "Encoding:" not in out
+    assert "[W0" not in out  # No warning codes
 
 
 def _raise_error(args):

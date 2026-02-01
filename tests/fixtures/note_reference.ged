@@ -1,0 +1,10 @@
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Doe/
+1 NOTE @N1@
+0 @N1@ NOTE This is a referenced note.
+0 TRLR
