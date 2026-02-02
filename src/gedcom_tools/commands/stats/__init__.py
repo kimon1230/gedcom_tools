@@ -1,4 +1,4 @@
-"""Validate command for GEDCOM files."""
+"""Stats command for GEDCOM files."""
 
 from __future__ import annotations
 
@@ -8,44 +8,74 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# Re-export public API
+from gedcom_tools.commands.stats.collector import StatsCollector
+from gedcom_tools.commands.stats.formatters import StatsResult
+from gedcom_tools.commands.stats.models import (
+    AggregateStats,
+    CoverageStats,
+    DatePrecisionStats,
+    FamilyData,
+    FamilyEntry,
+    GenderedAggregateStats,
+    GenerationEntry,
+    IndividualData,
+    LifespanStats,
+    MarriageStats,
+    RankedItem,
+    TimelineEntry,
+)
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import Colors
-from gedcom_tools.validation import validate_file
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
 
+__all__ = [
+    # Main API
+    "register_subcommand",
+    "run",
+    "StatsCollector",
+    "StatsResult",
+    # Models
+    "AggregateStats",
+    "CoverageStats",
+    "DatePrecisionStats",
+    "FamilyData",
+    "FamilyEntry",
+    "GenderedAggregateStats",
+    "GenerationEntry",
+    "IndividualData",
+    "LifespanStats",
+    "MarriageStats",
+    "RankedItem",
+    "TimelineEntry",
+]
+
 
 def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the stats subcommand."""
     parser = subparsers.add_parser(
-        "validate",
-        help="Validate a GEDCOM file for errors and issues",
-        description="Check a GEDCOM file for structural errors and data issues.",
+        "stats",
+        help="Display statistics about a GEDCOM file",
+        description="Analyze a GEDCOM file and display genealogical statistics.",
     )
     parser.add_argument(
         "file",
         type=Path,
-        help="Path to the GEDCOM file to validate",
+        help="Path to the GEDCOM file to analyze",
     )
-
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--quick", action="store_true", help="Fail fast on first error (default)"
-    )
-    mode.add_argument(
-        "--full",
-        action="store_true",
-        help="Collect all errors with IDs and line numbers",
-    )
-
     parser.add_argument(
-        "--strict",
-        choices=["5.5.1", "5.5.5"],
-        help="Validate against a specific GEDCOM version",
+        "--top",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Number of items in top-N lists (default: 10)",
     )
 
 
 def run(args: Namespace) -> int:
+    """Execute the stats command."""
     file_path: Path = args.file
 
     if not file_path.exists():
@@ -62,40 +92,31 @@ def run(args: Namespace) -> int:
         )
         return EXIT_ERROR
 
-    # Determine validation mode
-    from typing import Literal
-
-    mode: Literal["quick", "full"] = "full" if args.full else "quick"
-
-    # Get global options from parent parser
     output_format = getattr(args, "format", "text")
     quiet = getattr(args, "quiet", False)
     verbose = getattr(args, "verbose", False)
     no_color = getattr(args, "no_color", False)
-    strict = getattr(args, "strict", None)
+    top_n = getattr(args, "top", 10)
 
     try:
-        # Run validation
-        result = validate_file(
+        collector = StatsCollector(
             file_path=file_path,
-            mode=mode,
-            strict=strict,
             quiet=quiet,
             verbose=verbose,
             no_color=no_color,
-            stream=sys.stderr,
+            top_n=top_n,
         )
+        result = collector.collect()
 
-        # Output results
         if output_format == "json":
             print(result.format_json())
         else:
             colors = Colors(sys.stdout, force_disable=no_color)
             output = result.format_text(colors, quiet=quiet)
-            if output:  # Don't print empty string in quiet mode for valid files
+            if output:
                 print(output)
 
-        return EXIT_SUCCESS if result.success else EXIT_ERROR
+        return EXIT_SUCCESS
 
     except Exception as e:
         if verbose:

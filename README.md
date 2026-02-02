@@ -32,6 +32,7 @@ gedcom-tools <command> [options] <file>
 | `-v, --verbose` | Show detailed progress with timing |
 | `-q, --quiet` | Suppress non-essential output |
 | `--format {text,json}` | Output format (default: text) |
+| `--no-color` | Disable colored output |
 
 ### Commands
 
@@ -84,13 +85,100 @@ When `--strict` is specified, additional validation is performed:
 | 1 | Validation failed (errors found) |
 | 2 | Usage error (invalid arguments, file not found) |
 
-#### stats (coming soon)
+#### stats
 
-Display statistics about a GEDCOM file.
+Display statistics about a GEDCOM file including record counts, demographics, timeline, and data quality metrics.
+
+```bash
+# Basic statistics
+gedcom-tools stats family.ged
+
+# Limit top-N lists (surnames, locations, etc.)
+gedcom-tools stats family.ged --top 5
+
+# JSON output (for programmatic use)
+gedcom-tools --format json stats family.ged
+
+# Quiet mode (one-line summary)
+gedcom-tools -q stats family.ged
+
+# Verbose mode (with timing)
+gedcom-tools -v stats family.ged
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--top N` | Number of items in top-N lists (default: 10) |
+
+**Statistics Provided:**
+
+- **Record Counts**: Individuals, families, sources, unique locations
+- **Timeline**: Date span, earliest/latest births, century distribution, average lifespan
+- **Tree Structure**: Generation depth, largest families by child count, average children per family
+- **Demographics**: Gender distribution, top surnames, top lineages, top given names (male/female)
+- **Marriage Stats**: Total marriages, percentage with dates
+- **Locations**: Most common places in the tree
+- **Data Completeness**: Birth/death date coverage, marriage date coverage, source citations, notes, media, orphans, estimated living
+- **Life Events**: Age at first marriage (by gender and century), age at first child (by gender), spousal age gap
+- **Family Size**: Children per family distribution with buckets (1, 2-3, 4-6, 7-9, 10+)
+- **Birth Patterns**: Monthly distribution showing seasonal trends
+- **Lifespan Trends**: Average lifespan by century (1700s, 1800s, 1900s, etc.)
+- **Research Quality**: Birth date precision breakdown (full/partial/approximate/missing), occupation coverage, source depth (avg sources per person)
+
+**Date Extraction:**
+- Birth year: Uses BIRT/DATE, falls back to CHR/DATE (christening), then BAPM/DATE (baptism)
+- Death year: Uses DEAT/DATE, falls back to BURI/DATE (burial)
+
+**Surname Handling:**
+- "Top Surnames" shows individual surname components (e.g., "García" and "López" separately)
+- "Top Lineages" shows full SURN values (e.g., "García López" as one entry)
+
+**Given Name Handling:**
+- Extracts first given name from NAME tuple (e.g., "John William" → "John")
+- GIVN sub-record overrides tuple extraction if present
+- Reported separately for male and female individuals
+
+**Lifespan Calculation:**
+- Computed from individuals with both birth and death dates
+- Filters out implausible values (negative or >120 years)
+- Reports average, min, max, and sample size
+
+**Source Coverage:**
+- Counts individuals with at least one SOUR citation
+- Checks both direct citations (INDI/SOUR) and event citations (BIRT/SOUR, DEAT/SOUR, etc.)
+
+**Life Events:**
+- Age at first marriage calculated from birth year and earliest marriage date
+- Requires FAMS links between individuals and families
+- Filters implausible ages (marriage age 12-80, parent age 12-70)
+- Shows breakdown by gender and century for historical trends
+
+**Birth Patterns:**
+- Extracts month from full birth dates (e.g., "2 OCT 1850")
+- Excludes approximate dates (ABT, BEF, etc.) for accuracy
+- Shows 12-month distribution with peak month
+
+**Research Quality:**
+- Date precision categorizes birth dates as:
+  - Full: day/month/year (e.g., "2 OCT 1850")
+  - Partial: month/year or year only (e.g., "1850")
+  - Approximate: prefixed dates (ABT, BEF, AFT, etc.)
+  - Missing: no birth date recorded
+- Occupation coverage: percentage with OCCU records
+- Source depth: average SOUR citations per person (recursive count)
 
 #### search (coming soon)
 
 Search for individuals within a GEDCOM file.
+
+## Documentation
+
+Detailed documentation for each command:
+
+- [Validate Command](docs/validate.md) - Error/warning codes and strict mode
+- [Stats Command](docs/stats.md) - Statistics output and JSON schema
 
 ## Requirements
 

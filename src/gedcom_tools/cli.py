@@ -7,7 +7,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from gedcom_tools import __version__
-from gedcom_tools.commands import validate
+from gedcom_tools.commands import stats, validate
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 
 if TYPE_CHECKING:
@@ -55,6 +55,7 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="<command>",
     )
     validate.register_subcommand(subparsers)
+    stats.register_subcommand(subparsers)
 
     return parser
 
@@ -76,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
 def _run_command(args: Namespace) -> int:
     handlers = {
         "validate": validate.run,
+        "stats": stats.run,
     }
 
     try:

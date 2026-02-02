@@ -27,10 +27,17 @@ gedcom_tools/
 │   └── gedcom_tools/
 │       ├── __init__.py          # Package init, version
 │       ├── cli.py               # Main entry point, argument parsing
+│       ├── constants.py         # Shared constants (exit codes, thresholds)
+│       ├── dates.py             # Shared date parsing utilities
 │       ├── progress.py          # Terminal UI (spinners, progress)
 │       ├── commands/
 │       │   ├── __init__.py      # Commands package init
-│       │   └── validate.py      # Validation command handler
+│       │   ├── validate.py      # Validation command handler
+│       │   └── stats/           # Stats command package
+│       │       ├── __init__.py  # CLI registration, public API
+│       │       ├── models.py    # Data classes (IndividualData, etc.)
+│       │       ├── collector.py # StatsCollector class
+│       │       └── formatters.py# StatsResult with format methods
 │       └── validation/
 │           ├── __init__.py      # Public API: validate_file()
 │           ├── engine.py        # 4-phase validation orchestrator
@@ -43,10 +50,16 @@ gedcom_tools/
 │   ├── fixtures/                # Test GEDCOM files
 │   ├── test_cli.py              # CLI integration tests
 │   ├── test_progress.py         # Progress UI tests
+│   ├── test_stats.py            # Stats command tests
 │   └── test_validation/         # Validation engine tests
+├── docs/
+│   ├── validate.md              # Validation error/warning codes
+│   ├── stats.md                 # Stats command documentation
+│   └── stats-schema.json        # JSON schema for stats output
 ├── pyproject.toml               # Project metadata and tool config
 ├── README.md                    # User documentation
-└── DEVELOPER.md                 # This file
+├── DEVELOPER.md                 # This file
+└── CHANGELOG.md                 # Version history
 ```
 
 ## Architecture
@@ -239,3 +252,14 @@ pip-audit
 - `black` - Code formatting
 - `mypy` - Type checking
 - `pip-audit` - Security vulnerability scanning
+
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/).
+
+See [CHANGELOG.md](CHANGELOG.md) for release history and notable changes.
+
+When making changes:
+1. Update version in `pyproject.toml` and `src/gedcom_tools/__init__.py`
+2. Add entry to CHANGELOG.md under "Unreleased" section
+3. On release, move "Unreleased" items to new version section with date

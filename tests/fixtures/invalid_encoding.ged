@@ -1,0 +1,8 @@
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME ÿþ Invalid UTF-8
+0 TRLR

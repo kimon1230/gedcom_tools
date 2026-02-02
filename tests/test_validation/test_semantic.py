@@ -335,3 +335,45 @@ class TestSemanticValidator:
 
         issues = validator.validate()
         assert len(issues) == 0
+
+
+class TestAncestryEdgeCases:
+    def test_diamond_ancestry_no_false_positive(self):
+        """Diamond pattern (shared ancestor) should not be flagged as cycle."""
+        individuals = {
+            "@I1@": IndividualInfo(xref="@I1@", line=1, famc_xrefs=["@F1@"]),
+            "@I2@": IndividualInfo(xref="@I2@", line=2, famc_xrefs=["@F1@"]),
+            "@I3@": IndividualInfo(xref="@I3@", line=3),
+        }
+        families = {
+            "@F1@": FamilyInfo(
+                xref="@F1@", line=10, husb_xref="@I3@", chil_xrefs=["@I1@", "@I2@"]
+            ),
+        }
+        validator = SemanticValidator(individuals=individuals, families=families)
+        issues = validator.validate()
+        cycle_issues = [i for i in issues if i.code == ErrorCode.E010_ANCESTRY_CYCLE]
+        assert len(cycle_issues) == 0, "Diamond ancestry should not be a cycle"
+
+    def test_multi_generation_cycle_detected(self):
+        """A -> B -> C -> A cycle should be detected."""
+        individuals = {
+            "@I1@": IndividualInfo(xref="@I1@", line=1, famc_xrefs=["@F1@"]),
+            "@I2@": IndividualInfo(xref="@I2@", line=2, famc_xrefs=["@F2@"]),
+            "@I3@": IndividualInfo(xref="@I3@", line=3, famc_xrefs=["@F3@"]),
+        }
+        families = {
+            "@F1@": FamilyInfo(
+                xref="@F1@", line=10, husb_xref="@I3@", chil_xrefs=["@I1@"]
+            ),
+            "@F2@": FamilyInfo(
+                xref="@F2@", line=20, husb_xref="@I1@", chil_xrefs=["@I2@"]
+            ),
+            "@F3@": FamilyInfo(
+                xref="@F3@", line=30, husb_xref="@I2@", chil_xrefs=["@I3@"]
+            ),
+        }
+        validator = SemanticValidator(individuals=individuals, families=families)
+        issues = validator.validate()
+        cycle_issues = [i for i in issues if i.code == ErrorCode.E010_ANCESTRY_CYCLE]
+        assert len(cycle_issues) >= 1, "Multi-generation cycle should be detected"

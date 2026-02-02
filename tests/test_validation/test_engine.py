@@ -234,3 +234,53 @@ class TestVerboseMode:
             FIXTURES / "555sample.ged", mode="full", verbose=True, quiet=False
         )
         assert result.success is True
+
+
+class TestExceptionPaths:
+    """Tests for parser exception handling paths."""
+
+    def test_invalid_level_integrity_error(self):
+        """E003: Level jump from 1 to 3 triggers IntegrityError handling."""
+        result = validate_file(FIXTURES / "invalid_level.ged", mode="full", quiet=True)
+        level_errors = [
+            i for i in result.issues if i.code == ErrorCode.E003_INVALID_LEVEL
+        ]
+        assert len(level_errors) >= 1
+        assert not result.success
+
+    def test_invalid_level_quick_mode(self):
+        """Quick mode stops on IntegrityError."""
+        result = validate_file(FIXTURES / "invalid_level.ged", mode="quick", quiet=True)
+        assert not result.success
+        assert len(result.errors) >= 1
+
+    def test_malformed_line_parser_error(self):
+        """E004: Malformed GEDCOM line triggers ParserError handling."""
+        result = validate_file(FIXTURES / "malformed_line.ged", mode="full", quiet=True)
+        parse_errors = [
+            i for i in result.issues if i.code == ErrorCode.E004_MALFORMED_LINE
+        ]
+        assert len(parse_errors) >= 1
+        assert not result.success
+
+    def test_malformed_line_quick_mode(self):
+        """Quick mode stops on ParserError."""
+        result = validate_file(
+            FIXTURES / "malformed_line.ged", mode="quick", quiet=True
+        )
+        assert not result.success
+        assert len(result.errors) >= 1
+
+
+class TestEncodingErrors:
+    def test_invalid_encoding_reports_error(self):
+        """Verify encoding errors produce proper issues."""
+        result = validate_file(
+            FIXTURES / "invalid_encoding.ged",
+            mode="full",
+            quiet=True,
+        )
+        # File should either be invalid or have encoding-related issues
+        assert not result.success or any(
+            "encoding" in str(i.message).lower() for i in result.issues
+        )

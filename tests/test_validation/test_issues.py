@@ -34,10 +34,12 @@ class TestErrorCode:
             assert code.severity == Severity.WARNING
 
     def test_description_exists(self):
+        """Every ErrorCode has a meaningful description that's not a fallback."""
         for code in ErrorCode:
             desc = code.description
             assert desc is not None
-            assert len(desc) > 0
+            assert desc != "Unknown issue", f"{code} missing description"
+            assert len(desc) > 10, f"{code} description too short: {desc}"
 
     def test_specific_codes(self):
         assert ErrorCode.E001_UNRESOLVED_XREF.value == "E001"

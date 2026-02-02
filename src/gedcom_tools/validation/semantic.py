@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from gedcom_tools.constants import (
+    MAX_FATHER_AGE,
+    MAX_LIFESPAN,
+    MAX_MOTHER_AGE,
+    MIN_PARENT_AGE,
+)
 from gedcom_tools.validation.issues import (
     ErrorCode,
     FamilyInfo,
     IndividualInfo,
     ValidationIssue,
 )
-
-# Age thresholds for plausibility checks
-MIN_PARENT_AGE = 12
-MAX_MOTHER_AGE = 50
-MAX_FATHER_AGE = 80
-MAX_LIFESPAN = 120
 
 
 @dataclass
@@ -27,6 +27,7 @@ class SemanticValidator:
 
     individuals: dict[str, IndividualInfo] = field(default_factory=dict)
     families: dict[str, FamilyInfo] = field(default_factory=dict)
+    _reported_cycles: set[frozenset[str]] = field(default_factory=set)
 
     def collect_individual(self, info: IndividualInfo) -> None:
         """Record individual data for later validation."""
@@ -73,17 +74,20 @@ class SemanticValidator:
                     continue
 
                 if xref in path_set:
-                    # Found a cycle
+                    # Found a cycle - deduplicate by normalizing cycle representation
                     cycle_start = path.index(xref)
                     cycle = path[cycle_start:] + [xref]
-                    issues.append(
-                        ValidationIssue(
-                            code=ErrorCode.E010_ANCESTRY_CYCLE,
-                            message=f"Ancestry cycle detected: {' → '.join(cycle)}",
-                            line=self.individuals[start_xref].line,
-                            xref=start_xref,
+                    cycle_members = frozenset(cycle[:-1])
+                    if cycle_members not in self._reported_cycles:
+                        self._reported_cycles.add(cycle_members)
+                        issues.append(
+                            ValidationIssue(
+                                code=ErrorCode.E010_ANCESTRY_CYCLE,
+                                message=f"Ancestry cycle detected: {' → '.join(cycle)}",
+                                line=self.individuals[start_xref].line,
+                                xref=start_xref,
+                            )
                         )
-                    )
                     continue
 
                 if xref in visited_global:

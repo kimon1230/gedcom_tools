@@ -36,6 +36,9 @@ MAX_LINE_LENGTH = 255
 # Maximum nesting depth per GEDCOM spec (level numbers 0-99)
 MAX_NESTING_DEPTH = 99
 
+# Maximum unique custom tags to warn about before suppressing
+MAX_CUSTOM_TAG_WARNINGS = 10
+
 
 class ValidationEngine:
     """Orchestrates the validation process.
@@ -72,6 +75,7 @@ class ValidationEngine:
         self._ref_validator = ReferenceValidator()
         self._sem_validator = SemanticValidator()
         self._line_offsets: list[int] = []
+        self._warned_custom_tags: set[str] = set()
 
     def validate(self) -> ValidationResult:
         """Run all validation phases and return results."""
@@ -176,11 +180,15 @@ class ValidationEngine:
         has_bom = False
         declared_charset = None
 
-        # Check for BOM
+        # Check for BOM (UTF-8, UTF-16-LE, UTF-16-BE)
         with open(self.file_path, "rb") as f:
             bom = f.read(3)
             if bom.startswith(b"\xef\xbb\xbf"):
-                has_bom = True
+                has_bom = True  # UTF-8
+            elif bom[:2] == b"\xff\xfe":
+                has_bom = True  # UTF-16-LE
+            elif bom[:2] == b"\xfe\xff":
+                has_bom = True  # UTF-16-BE
 
         # Try to read header to get declared charset
         try:
@@ -222,6 +230,22 @@ class ValidationEngine:
             self._add_issue(
                 ErrorCode.E008_DECODE_FAILURE,
                 f"Failed to decode file: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+        except ParserError as e:
+            self._add_issue(
+                ErrorCode.E004_MALFORMED_LINE,
+                f"Parse error: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+        except IntegrityError as e:
+            self._add_issue(
+                ErrorCode.E003_INVALID_LEVEL,
+                f"Structure error: {e}",
             )
             if self.mode == "quick":
                 raise StopValidation() from None
@@ -339,6 +363,14 @@ class ValidationEngine:
             self._add_issue(
                 ErrorCode.E003_INVALID_LEVEL,
                 f"Structure error: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+
+        except UnicodeDecodeError as e:
+            self._add_issue(
+                ErrorCode.E008_DECODE_FAILURE,
+                f"Encoding error: {e}",
             )
             if self.mode == "quick":
                 raise StopValidation() from None
@@ -538,18 +570,30 @@ class ValidationEngine:
         """Recursively check for custom tags in sub-records.
 
         Custom tags start with underscore (_) and are vendor extensions.
+        Warnings are deduplicated to avoid flooding output.
         """
         if depth >= MAX_NESTING_DEPTH:
             return
 
         for sub in record.sub_records:
-            if sub.tag and sub.tag.startswith("_"):
-                sub_offset = sub.offset if sub.offset else 0
-                self._add_issue(
-                    ErrorCode.W004_CUSTOM_TAG,
-                    f"Custom tag {sub.tag} is non-standard",
-                    line=self._offset_to_line(sub_offset),
-                )
+            tag = sub.tag
+            if tag and tag.startswith("_"):
+                if tag not in self._warned_custom_tags:
+                    sub_offset = sub.offset if sub.offset else 0
+                    if len(self._warned_custom_tags) < MAX_CUSTOM_TAG_WARNINGS:
+                        self._add_issue(
+                            ErrorCode.W004_CUSTOM_TAG,
+                            f"Custom tag {tag} is non-standard",
+                            line=self._offset_to_line(sub_offset),
+                        )
+                    elif len(self._warned_custom_tags) == MAX_CUSTOM_TAG_WARNINGS:
+                        self._add_issue(
+                            ErrorCode.W004_CUSTOM_TAG,
+                            f"Additional custom tags suppressed "
+                            f"(>{MAX_CUSTOM_TAG_WARNINGS} unique tags found)",
+                            line=self._offset_to_line(sub_offset),
+                        )
+                    self._warned_custom_tags.add(tag)
             self._check_custom_tags(sub, depth + 1)
 
     def _extract_xref(self, value: Any) -> str | None:
