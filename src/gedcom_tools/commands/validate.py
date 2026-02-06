@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.progress import Colors
+from gedcom_tools.utils import validate_input_file
 from gedcom_tools.validation import validate_file
 
 if TYPE_CHECKING:
@@ -48,22 +48,8 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
 def run(args: Namespace) -> int:
     file_path: Path = args.file
 
-    if not file_path.exists():
-        print(f"Error: File not found: {file_path}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-    if not file_path.is_file():
-        print(f"Error: Not a file: {file_path}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-    if not os.access(file_path, os.R_OK):
-        print(
-            f"Error: Cannot read file (permission denied): {file_path}", file=sys.stderr
-        )
-        return EXIT_ERROR
-
-    # Determine validation mode
-    from typing import Literal
+    if err := validate_input_file(file_path):
+        return err
 
     mode: Literal["quick", "full"] = "full" if args.full else "quick"
 

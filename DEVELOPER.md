@@ -29,9 +29,12 @@ gedcom_tools/
 │       ├── cli.py               # Main entry point, argument parsing
 │       ├── constants.py         # Shared constants (exit codes, thresholds)
 │       ├── dates.py             # Shared date parsing utilities
-│       ├── progress.py          # Terminal UI (spinners, progress)
+│       ├── graph.py             # Graph algorithms (UnionFind, components)
+│       ├── progress.py          # Terminal UI (Colors, PhaseTracker)
+│       ├── utils.py             # Shared utilities (encoding, xref, validation)
 │       ├── commands/
 │       │   ├── __init__.py      # Commands package init
+│       │   ├── isolated.py      # Isolated individuals command
 │       │   ├── validate.py      # Validation command handler
 │       │   └── stats/           # Stats command package
 │       │       ├── __init__.py  # CLI registration, public API
@@ -47,12 +50,18 @@ gedcom_tools/
 │           └── semantic.py      # Semantic validation (dates, cycles)
 ├── tests/
 │   ├── conftest.py              # Pytest fixtures
-│   ├── fixtures/                # Test GEDCOM files
+│   ├── fixtures/                # Test GEDCOM files (555sample.ged, etc.)
 │   ├── test_cli.py              # CLI integration tests
+│   ├── test_dates.py            # Date parsing utility tests
+│   ├── test_graph.py            # Graph algorithm tests
+│   ├── test_isolated.py         # Isolated command tests
 │   ├── test_progress.py         # Progress UI tests
 │   ├── test_stats.py            # Stats command tests
+│   ├── test_stats_schema.py     # JSON schema validation tests
+│   ├── test_utils.py            # Shared utility tests
 │   └── test_validation/         # Validation engine tests
 ├── docs/
+│   ├── isolated.md              # Isolated command documentation
 │   ├── validate.md              # Validation error/warning codes
 │   ├── stats.md                 # Stats command documentation
 │   └── stats-schema.json        # JSON schema for stats output
@@ -63,6 +72,32 @@ gedcom_tools/
 ```
 
 ## Architecture
+
+### Shared Modules
+
+**`utils.py`** — Common utilities used across all commands:
+- `EncodingInfo` dataclass — encoding detection results (detected, declared, BOM)
+- `detect_encoding()` — BOM detection + declared CHAR header parsing
+- `extract_xref()` — extract xref string from ged4py records
+- `validate_input_file()` — shared file existence/readability check
+- `count_sources_recursive()` — count SOUR citations at all nesting levels
+
+**`dates.py`** — Date parsing and classification:
+- `extract_year_from_date()` — year extraction from GEDCOM date strings
+- `extract_month()` — month extraction for birth pattern analysis
+- `classify_date_precision()` — categorize dates as full/partial/approximate/missing
+
+**`graph.py`** — Graph algorithms for family connectivity:
+- `UnionFind` — union-find data structure with path compression and union by rank
+- `find_connected_components()` — identify connected components from family member sets
+
+### Command Architecture
+
+Each command follows the same pattern: `register_subcommand(subparsers)` to wire up argparse, `run(args)` as the entry point. Results are dataclasses with `format_text()` and `format_json()` methods.
+
+- **validate** — 4-phase validation engine (see below)
+- **stats** — Collector/Models/Formatters pattern: `StatsCollector` gathers raw data into `IndividualData`/`FamilyData` models, then `StatsResult` computes aggregates and formats output
+- **isolated** — Builds family member sets from GEDCOM FAM records, runs `find_connected_components()` via UnionFind, reports singletons (size 1) and isolated pairs (size 2)
 
 ### Validation Engine (4-Phase Design)
 
@@ -142,7 +177,9 @@ The severity is automatically derived from the code prefix.
 
 ## Test Data
 
-The test suite uses `555sample.ged` from [gedcom.org](https://www.gedcom.org/samples/555SAMPLE.GED) as the primary test fixture. This is a standard GEDCOM sample file used for testing GEDCOM parsers and tools.
+- **`tests/fixtures/555sample.ged`** — from [gedcom.org](https://www.gedcom.org/samples/555SAMPLE.GED), used as the primary regression test fixture.
+- **`tests/fixtures/royal92.ged`** — 3,010 individuals of European royalty, created by Denis R. Reid (1992). Used for README sample output and manual testing.
+- Most unit tests use inline GEDCOM strings via `tmp_path` for isolation and readability.
 
 ## Running Tests
 
@@ -224,6 +261,8 @@ pip-audit
    # In _dispatch_command():
    handlers = {
        "validate": validate.run,
+       "stats": stats.run,
+       "isolated": isolated.run,
        "mycommand": mycommand.run,
    }
    ```
@@ -248,6 +287,7 @@ pip-audit
 ### Development
 - `pytest` - Testing framework
 - `pytest-cov` - Coverage reporting
+- `jsonschema` - JSON schema validation (used in tests)
 - `ruff` - Linting
 - `black` - Code formatting
 - `mypy` - Type checking

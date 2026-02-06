@@ -196,7 +196,7 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1960,  # Mother was 60
+                birth_year=1985,  # Mother was 85
                 famc_xrefs=["@F1@"],
             )
         )

@@ -106,7 +106,6 @@ class TestValidateFile:
         assert len(age_warnings) == 1
 
     def test_direct_note_reference_not_orphaned(self):
-        """Verify that direct NOTE references (level 1) are correctly tracked."""
         result = validate_file(FIXTURES / "note_reference.ged", mode="full", quiet=True)
         orphan_warnings = [
             i for i in result.issues if i.code == ErrorCode.W010_ORPHANED_NOTE
@@ -144,7 +143,6 @@ class TestLineChecks:
     """Tests for line-level validation checks."""
 
     def test_trailing_whitespace(self):
-        """W002: Line with trailing whitespace."""
         result = validate_file(
             FIXTURES / "trailing_whitespace.ged", mode="full", quiet=True
         )
@@ -155,7 +153,6 @@ class TestLineChecks:
         assert "whitespace" in whitespace_warnings[0].message.lower()
 
     def test_content_after_trlr(self):
-        """E007: Records appearing after TRLR."""
         result = validate_file(
             FIXTURES / "content_after_trlr.ged", mode="full", quiet=True
         )
@@ -166,7 +163,6 @@ class TestLineChecks:
         assert "TRLR" in after_trlr_errors[0].message
 
     def test_custom_tag_at_level_0(self):
-        """W004: Custom tag at level 0."""
         result = validate_file(
             FIXTURES / "custom_level0_tag.ged", mode="full", quiet=True
         )
@@ -181,7 +177,6 @@ class TestStrictModeChecks:
     """Tests for strict mode validation checks."""
 
     def test_missing_gedc_vers(self):
-        """E014: GEDC without VERS in strict mode."""
         result = validate_file(
             FIXTURES / "missing_gedc_vers.ged", mode="full", strict="5.5.1", quiet=True
         )
@@ -192,7 +187,6 @@ class TestStrictModeChecks:
         assert "VERS" in vers_errors[0].message
 
     def test_missing_char(self):
-        """E016: HEAD without CHAR in strict mode."""
         result = validate_file(
             FIXTURES / "missing_char.ged", mode="full", strict="5.5.1", quiet=True
         )
@@ -203,7 +197,6 @@ class TestStrictModeChecks:
         assert "CHAR" in char_errors[0].message
 
     def test_strict_quick_mode_stops_on_missing_gedc(self):
-        """Quick mode with strict stops on E013."""
         result = validate_file(
             FIXTURES / "missing_gedc.ged", mode="quick", strict="5.5.1", quiet=True
         )
@@ -214,7 +207,6 @@ class TestStrictModeChecks:
         assert len(gedc_errors) >= 1
 
     def test_strict_quick_mode_stops_on_missing_sour(self):
-        """Quick mode with strict stops on E015."""
         result = validate_file(
             FIXTURES / "missing_sour.ged", mode="quick", strict="5.5.1", quiet=True
         )
@@ -229,7 +221,6 @@ class TestVerboseMode:
     """Tests for verbose mode."""
 
     def test_verbose_mode_accepted(self):
-        """Verbose mode runs without error."""
         result = validate_file(
             FIXTURES / "555sample.ged", mode="full", verbose=True, quiet=False
         )
@@ -240,7 +231,6 @@ class TestExceptionPaths:
     """Tests for parser exception handling paths."""
 
     def test_invalid_level_integrity_error(self):
-        """E003: Level jump from 1 to 3 triggers IntegrityError handling."""
         result = validate_file(FIXTURES / "invalid_level.ged", mode="full", quiet=True)
         level_errors = [
             i for i in result.issues if i.code == ErrorCode.E003_INVALID_LEVEL
@@ -249,13 +239,11 @@ class TestExceptionPaths:
         assert not result.success
 
     def test_invalid_level_quick_mode(self):
-        """Quick mode stops on IntegrityError."""
         result = validate_file(FIXTURES / "invalid_level.ged", mode="quick", quiet=True)
         assert not result.success
         assert len(result.errors) >= 1
 
     def test_malformed_line_parser_error(self):
-        """E004: Malformed GEDCOM line triggers ParserError handling."""
         result = validate_file(FIXTURES / "malformed_line.ged", mode="full", quiet=True)
         parse_errors = [
             i for i in result.issues if i.code == ErrorCode.E004_MALFORMED_LINE
@@ -264,7 +252,6 @@ class TestExceptionPaths:
         assert not result.success
 
     def test_malformed_line_quick_mode(self):
-        """Quick mode stops on ParserError."""
         result = validate_file(
             FIXTURES / "malformed_line.ged", mode="quick", quiet=True
         )
@@ -272,9 +259,46 @@ class TestExceptionPaths:
         assert len(result.errors) >= 1
 
 
+class TestOffsetToLine:
+    def test_empty_line_offsets_returns_zero(self):
+        from gedcom_tools.validation.engine import ValidationEngine
+
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = []
+        assert engine._offset_to_line(100) == 0
+
+    def test_offset_at_exact_boundary(self):
+        from gedcom_tools.validation.engine import ValidationEngine
+
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = [0, 10, 20, 30]
+        assert engine._offset_to_line(10) == 2  # Line 2 starts at offset 10
+
+    def test_offset_beyond_file(self):
+        from gedcom_tools.validation.engine import ValidationEngine
+
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = [0, 10, 20, 30]
+        result = engine._offset_to_line(1000)
+        assert result == 4  # Last line
+
+    def test_offset_in_middle_of_line(self):
+        from gedcom_tools.validation.engine import ValidationEngine
+
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = [0, 10, 20, 30]
+        assert engine._offset_to_line(15) == 2  # Between line 2 (10) and line 3 (20)
+
+    def test_offset_zero(self):
+        from gedcom_tools.validation.engine import ValidationEngine
+
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = [0, 10, 20, 30]
+        assert engine._offset_to_line(0) == 1
+
+
 class TestEncodingErrors:
     def test_invalid_encoding_reports_error(self):
-        """Verify encoding errors produce proper issues."""
         result = validate_file(
             FIXTURES / "invalid_encoding.ged",
             mode="full",

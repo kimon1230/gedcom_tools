@@ -15,7 +15,15 @@ gedcom-tools stats <file> [options]
 | `--format {text,json}` | Output format (default: text) |
 | `--top N` | Number of items in top-N lists (default: 10) |
 | `-v, --verbose` | Show timing information |
-| `-q, --quiet` | Minimal output |
+| `-q, --quiet` | One-line summary of record counts |
+
+### Quiet Mode
+
+With `-q`, outputs a single line:
+
+```
+100 individuals, 50 families, 10 sources, 25 locations
+```
 
 ## Output Sections
 
@@ -39,6 +47,23 @@ Basic counts of records in the file: individuals, families, sources, locations.
 - Gender distribution
 - Top surnames and lineages
 - Top given names by gender
+
+### Data Completeness
+
+Coverage metrics showing how complete the data is:
+
+| Metric | Description |
+|--------|-------------|
+| Birth Date | Individuals with a birth (or christening/baptism) date |
+| Death Date | Individuals with a death (or burial) date |
+| Marriage Date | Families with a marriage date |
+| Source Citations | Individuals with at least one SOUR reference |
+| Notes | Individuals with a NOTE record |
+| Media | Individuals with an OBJE (media) record |
+| Isolated | Individuals in components of size 1 (singletons) or 2 (pairs) — see [isolated command](isolated.md) |
+| Estimated Living | Individuals estimated to be alive (born after threshold year, no death record) |
+
+Each metric shows: count / total (percentage).
 
 ### Life Events
 
@@ -149,3 +174,4 @@ Extreme values are filtered to avoid data errors skewing statistics:
 | Lifespan | 0-120 years |
 
 Values outside these ranges are silently excluded from aggregates.
+These thresholds are defined in `src/gedcom_tools/constants.py`.

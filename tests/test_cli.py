@@ -147,3 +147,79 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="boom"):
         main(["--verbose", "validate", str(f)])
+
+
+# ---------------------------------------------------------------------------
+# Stats command smoke tests
+# ---------------------------------------------------------------------------
+
+
+def test_stats_basic(sample_gedcom_path):
+    assert main(["stats", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+def test_stats_json_format(sample_gedcom_path, capsys):
+    assert main(["--format", "json", "stats", str(sample_gedcom_path)]) == EXIT_SUCCESS
+    import json
+
+    data = json.loads(capsys.readouterr().out)
+    assert "records" in data
+    assert data["records"]["individuals"] > 0
+
+
+def test_stats_quiet_mode(sample_gedcom_path, capsys):
+    assert main(["-q", "stats", str(sample_gedcom_path)]) == EXIT_SUCCESS
+    out = capsys.readouterr().out
+    assert "individuals" in out
+    assert "===" not in out  # Quiet mode omits section headers
+
+
+def test_stats_top_n_flag(sample_gedcom_path):
+    assert main(["stats", "--top", "5", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+def test_stats_missing_file():
+    assert main(["stats", "nonexistent.ged"]) == EXIT_USAGE_ERROR
+
+
+def test_stats_no_color(sample_gedcom_path):
+    assert main(["--no-color", "stats", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+def test_stats_help(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["stats", "--help"])
+    assert exc.value.code == 0
+    assert "--top" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Isolated command smoke tests
+# ---------------------------------------------------------------------------
+
+
+def test_isolated_basic(sample_gedcom_path):
+    assert main(["isolated", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+def test_isolated_json_format(sample_gedcom_path, capsys):
+    assert (
+        main(["--format", "json", "isolated", str(sample_gedcom_path)]) == EXIT_SUCCESS
+    )
+    import json
+
+    data = json.loads(capsys.readouterr().out)
+    assert "summary" in data
+    assert "total_individuals" in data["summary"]
+
+
+def test_isolated_quiet_mode(sample_gedcom_path, capsys):
+    assert main(["-q", "isolated", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+def test_isolated_missing_file():
+    assert main(["isolated", "nonexistent.ged"]) == EXIT_USAGE_ERROR
+
+
+def test_isolated_no_color(sample_gedcom_path):
+    assert main(["--no-color", "isolated", str(sample_gedcom_path)]) == EXIT_SUCCESS

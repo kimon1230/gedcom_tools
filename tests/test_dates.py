@@ -11,12 +11,12 @@ from gedcom_tools.dates import (
     MONTH_PATTERN,
     MONTH_TO_NUM,
     classify_date_precision,
-    count_sources_recursive,
     extract_month,
     extract_year_from_date,
     get_century,
     is_phrase_date,
 )
+from gedcom_tools.utils import count_sources_recursive
 
 
 class TestMonthConstants:
@@ -381,6 +381,125 @@ class TestCountSourcesRecursive:
         mock_record.sub_records = [mock_name, mock_birt]
 
         assert count_sources_recursive(mock_record) == 0
+
+
+class TestExtractYearEdgeCases:
+    def test_year_attr_with_invalid_value(self):
+        """ValueError/TypeError in .year conversion falls back to string."""
+        mock_date = MagicMock()
+        mock_date.year = "not_a_number"
+        mock_date.date = None
+        mock_date.date1 = None
+        mock_date.__str__ = lambda self: "ABT 1850"
+        assert extract_year_from_date(mock_date) == 1850
+
+    def test_date_attr_year_invalid(self):
+        """ValueError in .date.year conversion falls back to string."""
+        mock_cal = MagicMock()
+        mock_cal.year = "invalid"
+        mock_date = MagicMock()
+        mock_date.date = mock_cal
+        mock_date.date1 = None
+        del mock_date.year
+        mock_date.__str__ = lambda self: "1920"
+        assert extract_year_from_date(mock_date) == 1920
+
+    def test_date1_attr_year_invalid(self):
+        """ValueError in .date1.year conversion falls back to string."""
+        mock_cal = MagicMock()
+        mock_cal.year = "bad"
+        mock_date = MagicMock()
+        mock_date.date = None
+        mock_date.date1 = mock_cal
+        del mock_date.year
+        mock_date.__str__ = lambda self: "BET 1800 AND 1900"
+        assert extract_year_from_date(mock_date) == 1800
+
+    def test_no_year_anywhere_returns_none(self):
+        """All paths exhausted, no year found."""
+        mock_date = MagicMock()
+        mock_date.date = None
+        mock_date.date1 = None
+        del mock_date.year
+        mock_date.__str__ = lambda self: "no date here"
+        assert extract_year_from_date(mock_date) is None
+
+
+class TestExtractMonthEdgeCases:
+    def test_month_from_string_fallback(self):
+        """Month extracted via regex when no .date/.date1."""
+        mock_date = MagicMock()
+        mock_date.date = None
+        mock_date.date1 = None
+        mock_date.__str__ = lambda self: "15 MAR 1850"
+        assert extract_month(mock_date) == 3
+
+    def test_no_month_in_string(self):
+        """No month found in any path."""
+        mock_date = MagicMock()
+        mock_date.date = None
+        mock_date.date1 = None
+        mock_date.__str__ = lambda self: "1850"
+        assert extract_month(mock_date) is None
+
+    def test_empty_string_date(self):
+        assert extract_month("") is None
+
+
+class TestClassifyDatePrecisionEdgeCases:
+    def test_circa_prefix(self):
+        assert classify_date_precision("CIRCA 1850") == ("approximate", False)
+
+    def test_c_dot_prefix(self):
+        assert classify_date_precision("C. 1850") == ("approximate", False)
+
+    def test_from_prefix(self):
+        assert classify_date_precision("FROM 1850") == ("approximate", False)
+
+    def test_int_prefix(self):
+        assert classify_date_precision("INT 1850") == ("approximate", False)
+
+    def test_no_year_only_month(self):
+        """Date with month but no year → missing."""
+        assert classify_date_precision("ABT MAR") == ("missing", False)
+
+    def test_invalid_day_32(self):
+        """Day > 31 is not treated as a day."""
+        result = classify_date_precision("32 JAN 1850")
+        assert result[0] == "partial"  # Has month+year but no valid day
+
+    def test_invalid_day_0(self):
+        """Day == 0 is not treated as a day."""
+        result = classify_date_precision("0 JAN 1850")
+        assert result[0] == "partial"
+
+    def test_single_digit_day(self):
+        """Single-digit day is valid."""
+        result = classify_date_precision("5 JAN 1850")
+        assert result == ("full", True)
+
+    def test_whitespace_only(self):
+        assert classify_date_precision("   ") == ("missing", False)
+
+    def test_ged4py_range_type(self):
+        """Range type uses .date1 and is approximate."""
+        try:
+            from ged4py.date import DateValueTypes
+
+            mock_cal = MagicMock()
+            mock_cal.year = 1850
+            mock_cal.month = "JAN"
+            mock_cal.day = 15
+
+            mock_date = MagicMock()
+            mock_date.kind = DateValueTypes.RANGE
+            mock_date.date = None
+            mock_date.date1 = mock_cal
+
+            result = classify_date_precision(mock_date)
+            assert result == ("approximate", True)
+        except ImportError:
+            pytest.skip("ged4py not available")
 
 
 class TestRealGedcomDates:

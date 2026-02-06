@@ -1,80 +1,356 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/user/gedcom-tools/stats-schema.json",
   "title": "GEDCOM Stats Output",
-  "description": "Schema for gedcom-tools stats command JSON output (v3 fields)",
+  "description": "Schema for gedcom-tools stats command JSON output",
   "type": "object",
   "properties": {
+    "file": {
+      "type": "string",
+      "description": "Path to the GEDCOM file that was analyzed"
+    },
+    "encoding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "File encoding details",
+          "properties": {
+            "detected": { "type": "string", "description": "Detected character encoding (e.g. UTF-8)" },
+            "has_bom": { "type": "boolean", "description": "Whether the file has a byte order mark" },
+            "declared": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "null" }
+              ],
+              "description": "Character set declared in GEDCOM CHAR header, or null if absent"
+            }
+          },
+          "required": ["detected", "has_bom", "declared"],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ],
+      "description": "Encoding information, or null if detection failed"
+    },
+    "records": {
+      "type": "object",
+      "description": "Count of top-level GEDCOM records by type",
+      "properties": {
+        "individuals": { "type": "integer", "minimum": 0 },
+        "families": { "type": "integer", "minimum": 0 },
+        "sources": { "type": "integer", "minimum": 0 },
+        "locations": { "type": "integer", "minimum": 0, "description": "Distinct place names referenced" }
+      },
+      "required": ["individuals", "families", "sources", "locations"],
+      "additionalProperties": false
+    },
+    "timeline": {
+      "type": "object",
+      "description": "Chronological span and century distribution of individuals",
+      "properties": {
+        "earliest_year": {
+          "oneOf": [
+            { "$ref": "#/$defs/timelineEntry" },
+            { "type": "null" }
+          ],
+          "description": "Individual with the earliest birth year"
+        },
+        "latest_year": {
+          "oneOf": [
+            { "$ref": "#/$defs/timelineEntry" },
+            { "type": "null" }
+          ],
+          "description": "Individual with the latest birth year"
+        },
+        "earliest_generation": {
+          "oneOf": [
+            { "$ref": "#/$defs/generationEntry" },
+            { "type": "null" }
+          ],
+          "description": "Individual at the deepest generation depth"
+        },
+        "date_span_years": {
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "null" }
+          ],
+          "description": "Difference in years between earliest and latest birth year"
+        },
+        "by_century": {
+          "type": "object",
+          "description": "Number of individuals born per century (key is century start year, e.g. '1800')",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "lifespan": {
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Overall lifespan statistics for individuals with both birth and death dates",
+              "properties": {
+                "average": { "type": "number" },
+                "min": { "type": "integer", "minimum": 0 },
+                "max": { "type": "integer", "minimum": 0 },
+                "sample_size": { "type": "integer", "minimum": 1 }
+              },
+              "required": ["average", "min", "max", "sample_size"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ],
+          "description": "Lifespan statistics, or null if no individual has both birth and death dates"
+        }
+      },
+      "required": ["earliest_year", "latest_year", "earliest_generation", "date_span_years", "by_century", "lifespan"],
+      "additionalProperties": false
+    },
+    "tree_structure": {
+      "type": "object",
+      "description": "Family tree structural metrics",
+      "properties": {
+        "generation_depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum ancestor depth found in the tree"
+        },
+        "largest_families": {
+          "type": "array",
+          "description": "Top families by number of children (up to 3)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "xref": { "type": "string", "description": "Family GEDCOM cross-reference ID" },
+              "parents": { "type": "string", "description": "Parent surnames formatted as 'Surname/Surname'" },
+              "children": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["xref", "parents", "children"],
+            "additionalProperties": false
+          }
+        },
+        "marriage": {
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Marriage statistics across all families",
+              "properties": {
+                "total": { "type": "integer", "minimum": 0, "description": "Total number of families" },
+                "with_date": { "type": "integer", "minimum": 0 },
+                "without_date": { "type": "integer", "minimum": 0 },
+                "avg_children": { "type": "number", "minimum": 0, "description": "Average children per family" }
+              },
+              "required": ["total", "with_date", "without_date", "avg_children"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ],
+          "description": "Marriage and family statistics, or null if no families exist"
+        }
+      },
+      "required": ["generation_depth", "largest_families", "marriage"],
+      "additionalProperties": false
+    },
+    "demographics": {
+      "type": "object",
+      "description": "Gender distribution, surname frequency, and given name frequency",
+      "properties": {
+        "gender": {
+          "type": "object",
+          "properties": {
+            "male": { "type": "integer", "minimum": 0 },
+            "female": { "type": "integer", "minimum": 0 },
+            "unknown": { "type": "integer", "minimum": 0 }
+          },
+          "required": ["male", "female", "unknown"],
+          "additionalProperties": false
+        },
+        "surnames": {
+          "type": "array",
+          "description": "Top surnames by frequency (individual name parts)",
+          "items": { "$ref": "#/$defs/rankedItem" }
+        },
+        "lineages": {
+          "type": "array",
+          "description": "Top lineages by frequency (full surname value)",
+          "items": { "$ref": "#/$defs/rankedItem" }
+        },
+        "given_names_male": {
+          "type": "array",
+          "description": "Top male given names by frequency",
+          "items": { "$ref": "#/$defs/rankedItem" }
+        },
+        "given_names_female": {
+          "type": "array",
+          "description": "Top female given names by frequency",
+          "items": { "$ref": "#/$defs/rankedItem" }
+        }
+      },
+      "required": ["gender", "surnames", "lineages", "given_names_male", "given_names_female"],
+      "additionalProperties": false
+    },
+    "locations": {
+      "type": "array",
+      "description": "Top places referenced across all records, ranked by frequency",
+      "items": {
+        "type": "object",
+        "properties": {
+          "place": { "type": "string" },
+          "count": { "type": "integer", "minimum": 1 },
+          "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+        },
+        "required": ["place", "count", "percent"],
+        "additionalProperties": false
+      }
+    },
+    "completeness": {
+      "type": "object",
+      "description": "Data completeness metrics across all individuals",
+      "properties": {
+        "birth_date": { "$ref": "#/$defs/coverageStats" },
+        "death_date": { "$ref": "#/$defs/coverageStats" },
+        "source_citations": { "$ref": "#/$defs/coverageStats" },
+        "notes": { "$ref": "#/$defs/coverageStats" },
+        "media": { "$ref": "#/$defs/coverageStats" },
+        "isolated": {
+          "type": "object",
+          "description": "Individuals in components of size 1 or 2 (disconnected from the main tree)",
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "required": ["count", "percent"],
+          "additionalProperties": false
+        },
+        "estimated_living": {
+          "type": "object",
+          "description": "Individuals estimated to still be alive (born within 110 years, no death record)",
+          "properties": {
+            "count": { "type": "integer", "minimum": 0 },
+            "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "required": ["count", "percent"],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "life_events": {
       "type": "object",
+      "description": "Age statistics for major life events",
       "properties": {
-        "age_at_first_marriage": {"$ref": "#/$defs/genderedAggregateStats"},
-        "age_at_first_child": {"$ref": "#/$defs/genderedAggregateStats"},
-        "spousal_age_gap": {"$ref": "#/$defs/aggregateStats"}
+        "age_at_first_marriage": { "$ref": "#/$defs/genderedAggregateStats" },
+        "age_at_first_child": { "$ref": "#/$defs/genderedAggregateStats" },
+        "spousal_age_gap": { "$ref": "#/$defs/aggregateStats" }
       },
       "additionalProperties": false
     },
     "family_size": {
       "oneOf": [
-        {"$ref": "#/$defs/aggregateStats"},
-        {"type": "null"}
-      ]
+        { "$ref": "#/$defs/aggregateStats" },
+        { "type": "null" }
+      ],
+      "description": "Children per family distribution (families with 1+ children only), or null if no families have children"
     },
     "birth_patterns": {
       "oneOf": [
         {
           "type": "object",
+          "description": "Birth month distribution from non-approximate dates",
           "properties": {
             "by_month": {
               "type": "object",
-              "additionalProperties": {"type": "integer", "minimum": 0}
+              "description": "Birth counts keyed by month number (1-12). Only months with births are included.",
+              "additionalProperties": { "type": "integer", "minimum": 0 }
             },
-            "peak_month": {"type": "integer", "minimum": 1, "maximum": 12},
-            "total": {"type": "integer", "minimum": 0}
+            "peak_month": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Month number with the most births" },
+            "total": { "type": "integer", "minimum": 1, "description": "Total births with month data" }
           },
           "required": ["by_month", "peak_month", "total"],
           "additionalProperties": false
         },
-        {"type": "null"}
-      ]
+        { "type": "null" }
+      ],
+      "description": "Birth month patterns, or null if no month-level birth data is available"
     },
     "lifespan_trends": {
       "oneOf": [
         {
           "type": "object",
+          "description": "Lifespan statistics broken down by birth century",
           "properties": {
             "by_century": {
               "type": "object",
-              "additionalProperties": {"$ref": "#/$defs/aggregateStats"}
+              "description": "Lifespan stats per century (key is century start year, e.g. '1800')",
+              "additionalProperties": { "$ref": "#/$defs/aggregateStats" }
             }
           },
           "required": ["by_century"],
           "additionalProperties": false
         },
-        {"type": "null"}
-      ]
+        { "type": "null" }
+      ],
+      "description": "Lifespan trends by century, or null if no individuals have both birth and death dates"
     },
     "research_quality": {
       "type": "object",
+      "description": "Indicators of genealogical research depth and quality",
       "properties": {
-        "date_precision": {"$ref": "#/$defs/datePrecisionStats"},
-        "occupation_coverage": {"$ref": "#/$defs/coverageStats"},
-        "source_depth": {"$ref": "#/$defs/aggregateStats"}
+        "date_precision": { "$ref": "#/$defs/datePrecisionStats" },
+        "occupation_coverage": { "$ref": "#/$defs/coverageStats" },
+        "source_depth": { "$ref": "#/$defs/aggregateStats" }
       },
       "additionalProperties": false
     }
   },
+  "required": [
+    "file", "encoding", "records", "timeline", "tree_structure",
+    "demographics", "locations", "completeness", "life_events",
+    "family_size", "birth_patterns", "lifespan_trends", "research_quality"
+  ],
+  "additionalProperties": false,
   "$defs": {
+    "timelineEntry": {
+      "type": "object",
+      "description": "An individual referenced in timeline context (by birth year)",
+      "properties": {
+        "year": { "type": "integer" },
+        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" },
+        "name": { "type": "string" }
+      },
+      "required": ["year", "xref", "name"],
+      "additionalProperties": false
+    },
+    "generationEntry": {
+      "type": "object",
+      "description": "An individual referenced by generation depth",
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1 },
+        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" },
+        "name": { "type": "string" }
+      },
+      "required": ["generation", "xref", "name"],
+      "additionalProperties": false
+    },
+    "rankedItem": {
+      "type": "object",
+      "description": "A name or place with its count and percentage of total",
+      "properties": {
+        "name": { "type": "string" },
+        "count": { "type": "integer", "minimum": 1 },
+        "percent": { "type": "number", "minimum": 0, "maximum": 100 }
+      },
+      "required": ["name", "count", "percent"],
+      "additionalProperties": false
+    },
     "aggregateStats": {
       "type": "object",
+      "description": "Generic aggregate statistics for any numeric measurement. The min, max, and distribution fields are only present when the sample contains data.",
       "properties": {
-        "average": {"type": "number"},
-        "min": {"type": "integer"},
-        "max": {"type": "integer"},
-        "sample_size": {"type": "integer", "minimum": 0},
+        "average": { "type": "number" },
+        "min": { "type": "integer", "description": "Only present when sample_size > 0" },
+        "max": { "type": "integer", "description": "Only present when sample_size > 0" },
+        "sample_size": { "type": "integer", "minimum": 0 },
         "distribution": {
           "type": "object",
-          "additionalProperties": {"type": "integer", "minimum": 0}
+          "description": "Only present when sample_size > 0",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
         }
       },
       "required": ["average", "sample_size"],
@@ -82,16 +358,18 @@
     },
     "genderedAggregateStats": {
       "type": "object",
+      "description": "Aggregate stats split by gender with optional century breakdown. All fields are optional — male/female are only present when sufficient data exists for that gender.",
       "properties": {
-        "male": {"$ref": "#/$defs/aggregateStats"},
-        "female": {"$ref": "#/$defs/aggregateStats"},
+        "male": { "$ref": "#/$defs/aggregateStats" },
+        "female": { "$ref": "#/$defs/aggregateStats" },
         "by_century": {
           "type": "object",
+          "description": "Century-level breakdown (key is century start year, e.g. '1800')",
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "male": {"$ref": "#/$defs/aggregateStats"},
-              "female": {"$ref": "#/$defs/aggregateStats"}
+              "male": { "$ref": "#/$defs/aggregateStats" },
+              "female": { "$ref": "#/$defs/aggregateStats" }
             },
             "additionalProperties": false
           }
@@ -101,31 +379,34 @@
     },
     "datePrecisionStats": {
       "type": "object",
+      "description": "Breakdown of birth date precision across all individuals",
       "properties": {
-        "full": {"type": "integer", "minimum": 0},
-        "partial": {"type": "integer", "minimum": 0},
+        "full": { "type": "integer", "minimum": 0, "description": "Dates with day/month/year" },
+        "partial": { "type": "integer", "minimum": 0, "description": "Dates with month/year or year only" },
         "approximate": {
           "type": "object",
+          "description": "Dates qualified with ABT, BEF, AFT, etc.",
           "properties": {
-            "total": {"type": "integer", "minimum": 0},
-            "with_full_date": {"type": "integer", "minimum": 0},
-            "with_partial_date": {"type": "integer", "minimum": 0}
+            "total": { "type": "integer", "minimum": 0 },
+            "with_full_date": { "type": "integer", "minimum": 0 },
+            "with_partial_date": { "type": "integer", "minimum": 0 }
           },
           "required": ["total", "with_full_date", "with_partial_date"],
           "additionalProperties": false
         },
-        "missing": {"type": "integer", "minimum": 0},
-        "total": {"type": "integer", "minimum": 0}
+        "missing": { "type": "integer", "minimum": 0, "description": "No birth date recorded" },
+        "total": { "type": "integer", "minimum": 0, "description": "Total individuals assessed" }
       },
       "required": ["full", "partial", "approximate", "missing", "total"],
       "additionalProperties": false
     },
     "coverageStats": {
       "type": "object",
+      "description": "Coverage metric showing how many individuals have vs lack a given attribute",
       "properties": {
-        "with": {"type": "integer", "minimum": 0},
-        "without": {"type": "integer", "minimum": 0},
-        "percent": {"type": "number", "minimum": 0, "maximum": 100}
+        "with": { "type": "integer", "minimum": 0, "description": "Number of individuals with the attribute" },
+        "without": { "type": "integer", "minimum": 0, "description": "Number of individuals without it" },
+        "percent": { "type": "number", "minimum": 0, "maximum": 100, "description": "Percentage with the attribute" }
       },
       "required": ["with", "without", "percent"],
       "additionalProperties": false

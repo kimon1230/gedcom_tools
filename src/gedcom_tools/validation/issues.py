@@ -114,7 +114,7 @@ class ErrorCode(Enum):
             "W025": "Child born before parents' marriage",
             "W030": "ANSEL encoding deprecated in GEDCOM 5.5.5",
             "W031": "Declared version does not match --strict version",
-            "W032": "Line exceeds 255 character limit (strict)",
+            "W032": "Line exceeds 255 byte limit (strict)",
         }
         return descriptions.get(self.value, "Unknown issue")
 
@@ -142,26 +142,6 @@ class ValidationIssue:
         if self.xref:
             parts.append(f"({self.xref})")
         parts.append(self.message)
-        return " ".join(parts)
-
-
-@dataclass
-class EncodingInfo:
-    """Information about the detected encoding of a GEDCOM file."""
-
-    encoding: str
-    has_bom: bool = False
-    declared_charset: str | None = None
-
-    def __str__(self) -> str:
-        parts = [self.encoding]
-        if self.has_bom:
-            parts.append("(with BOM)")
-        if (
-            self.declared_charset
-            and self.declared_charset.lower() != self.encoding.lower()
-        ):
-            parts.append(f"(declared: {self.declared_charset})")
         return " ".join(parts)
 
 

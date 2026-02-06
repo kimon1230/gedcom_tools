@@ -26,22 +26,27 @@ from gedcom_tools.commands.stats.models import (
     TimelineEntry,
 )
 from gedcom_tools.constants import (
+    MAX_FIRST_CHILD_AGE,
     MAX_LIFESPAN,
     MAX_MARRIAGE_AGE,
-    MAX_PARENT_AGE,
     MAX_SPOUSAL_AGE_GAP,
     MIN_MARRIAGE_AGE,
     MIN_PARENT_AGE,
 )
 from gedcom_tools.dates import (
     classify_date_precision,
-    count_sources_recursive,
     extract_month,
     extract_year_from_date,
     get_century,
 )
+from gedcom_tools.graph import build_family_members, count_isolated, find_connected_components
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.validation.issues import EncodingInfo
+from gedcom_tools.utils import (
+    EncodingInfo,
+    count_sources_recursive,
+    detect_encoding,
+    extract_xref,
+)
 
 if TYPE_CHECKING:
     from ged4py.model import Record
@@ -105,37 +110,12 @@ class StatsCollector:
 
     def _detect_encoding(self) -> None:
         """Detect file encoding."""
-        has_bom = False
-        declared_charset = None
-
-        # Check for BOM in a single read
-        with open(self.file_path, "rb") as f:
-            bom = f.read(3)
-            if bom.startswith(b"\xef\xbb\xbf"):
-                has_bom = True
-
         try:
-            with GedcomReader(str(self.file_path)) as reader:
-                if reader.header:
-                    char_rec = reader.header.sub_tag("CHAR")
-                    if char_rec and char_rec.value:
-                        declared_charset = str(char_rec.value)
-
-                detected = "UTF-8"
-                if has_bom:
-                    detected = "UTF-8"
-                elif declared_charset:
-                    detected = declared_charset.upper()
-
-                self.encoding_info = EncodingInfo(
-                    encoding=detected,
-                    has_bom=has_bom,
-                    declared_charset=declared_charset,
-                )
+            self.encoding_info = detect_encoding(self.file_path)
         except (CodecError, ParserError, IntegrityError) as e:
             if not self.quiet:
                 print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
-            self.encoding_info = EncodingInfo(encoding="Unknown", has_bom=has_bom)
+            self.encoding_info = EncodingInfo(encoding="Unknown")
 
     def _collect_data(self, spinner: object) -> None:
         """Collect all data in a single pass through the file."""
@@ -180,7 +160,8 @@ class StatsCollector:
                     name_parts.append(suffix)
                 data.name = " ".join(p for p in name_parts if p)
                 # Extract first given name (handle "John William" -> "John")
-                data.given_name = given.split()[0] if given else ""
+                parts = given.split() if given else []
+                data.given_name = parts[0] if parts else ""
                 if not data.surname:
                     data.surname = surname
                     data.surname_parts = surname.split() if surname else []
@@ -191,7 +172,8 @@ class StatsCollector:
             for sub in name_rec.sub_records:
                 if sub.tag == "GIVN" and sub.value:
                     givn = str(sub.value)
-                    data.given_name = givn.split()[0] if givn else ""
+                    givn_parts = givn.split() if givn else []
+                    data.given_name = givn_parts[0] if givn_parts else ""
                 elif sub.tag == "SURN" and sub.value:
                     data.surname = str(sub.value)
                     data.surname_parts = data.surname.split()
@@ -201,7 +183,7 @@ class StatsCollector:
         if sex_rec and sex_rec.value:
             data.sex = str(sex_rec.value).upper()
 
-        # V3: Birth data with precision, month, and year
+        # Birth data with precision, month, and year
         birth_rec = record.sub_tag("BIRT")
         if birth_rec:
             date_rec = birth_rec.sub_tag("DATE")
@@ -226,12 +208,12 @@ class StatsCollector:
             record, "BURI/DATE"
         )
 
-        # V3: Occupation (first one found)
+        # Occupation (first one found)
         occu_rec = record.sub_tag("OCCU")
         if occu_rec and occu_rec.value:
             data.occupation = str(occu_rec.value)
 
-        # V3: Source count (recursive) - replaces old has_source logic
+        # Source count (recursive)
         data.source_count = count_sources_recursive(record)
         data.has_source = data.source_count > 0
 
@@ -303,20 +285,9 @@ class StatsCollector:
             return None
         return extract_year_from_date(date_rec.value)
 
-    def _extract_xref(self, value: object) -> str | None:
-        """Extract xref ID from a value."""
-        if value is None:
-            return None
-
-        val_str = str(value)
-        if val_str.startswith("@") and val_str.endswith("@"):
-            return val_str
-
-        if hasattr(value, "xref_id"):
-            xref_id: str | None = value.xref_id
-            return xref_id
-
-        return None
+    @staticmethod
+    def _extract_xref(value: object) -> str | None:
+        return extract_xref(value)
 
     def _format_name(self, raw_name: str) -> str:
         """Format a GEDCOM name (remove slashes around surname)."""
@@ -361,18 +332,18 @@ class StatsCollector:
         # Locations
         self._calculate_locations(result)
 
-        # V3: Life event calculations (must run after families collected)
+        # Life event calculations (must run after families collected)
         self._calculate_marriage_ages()  # Populates individual fields
         self._calculate_first_child_ages()  # Populates individual fields
         self._calculate_life_events(result)  # Aggregates into result
         self._calculate_spousal_age_gap(result)  # Iterates families directly
 
-        # V3: Family and demographic patterns
+        # Family and demographic patterns
         self._calculate_family_size(result)
         self._calculate_birth_patterns(result)
         self._calculate_lifespan_by_century(result)
 
-        # V3: Research quality
+        # Research quality
         self._calculate_date_precision(result)
         self._calculate_occupation_coverage(result)
         self._calculate_source_depth(result)
@@ -608,7 +579,6 @@ class StatsCollector:
         notes_with = 0
         media_with = 0
         source_with = 0
-        orphans = 0
         estimated_living = 0
 
         for indi in self.individuals.values():
@@ -622,10 +592,6 @@ class StatsCollector:
                 media_with += 1
             if indi.has_source:
                 source_with += 1
-
-            # Orphan: no FAMC and no FAMS
-            if not indi.famc_xref and not indi.fams_xrefs:
-                orphans += 1
 
             # Estimated living: born after threshold, no death/burial
             if (
@@ -660,10 +626,18 @@ class StatsCollector:
             without_count=total - media_with,
             percent=media_with / total * 100,
         )
-        result.orphans = CoverageStats(
-            with_count=orphans,
-            without_count=total - orphans,
-            percent=orphans / total * 100,
+        # Isolated: components of size 1 (singletons) or 2 (pairs)
+        family_members = build_family_members(
+            (fam.xref, fam) for fam in self.families.values()
+        )
+        components = find_connected_components(
+            set(self.individuals.keys()), family_members
+        )
+        isolated = count_isolated(components)
+        result.isolated = CoverageStats(
+            with_count=isolated,
+            without_count=total - isolated,
+            percent=isolated / total * 100,
         )
         result.estimated_living = CoverageStats(
             with_count=estimated_living,
@@ -683,7 +657,7 @@ class StatsCollector:
         ]
 
     # -------------------------------------------------------------------------
-    # V3: New calculation methods
+    # Life event and pattern calculation methods
     # -------------------------------------------------------------------------
 
     def _build_aggregate_stats(self, values: list[int]) -> AggregateStats | None:
@@ -709,7 +683,7 @@ class StatsCollector:
 
             for fam_xref in indi.fams_xrefs:
                 fam = self.families.get(fam_xref)
-                if fam and fam.marriage_year:
+                if fam and fam.marriage_year is not None:
                     if (
                         earliest_marriage is None
                         or fam.marriage_year < earliest_marriage
@@ -717,7 +691,7 @@ class StatsCollector:
                         earliest_marriage = fam.marriage_year
                         earliest_fam_xref = fam_xref
 
-            if earliest_marriage and earliest_fam_xref:
+            if earliest_marriage is not None and earliest_fam_xref:
                 indi.first_marriage_year = earliest_marriage
                 indi.first_marriage_age = earliest_marriage - indi.birth_year
                 indi.first_marriage_fam_xref = earliest_fam_xref
@@ -750,7 +724,7 @@ class StatsCollector:
 
                 for child_xref in fam.chil_xrefs:
                     child = self.individuals.get(child_xref)
-                    if child and child.birth_year:
+                    if child and child.birth_year is not None:
                         if (
                             earliest_child_year is None
                             or child.birth_year < earliest_child_year
@@ -758,9 +732,9 @@ class StatsCollector:
                             earliest_child_year = child.birth_year
 
             # Only set field if age is plausible
-            if earliest_child_year:
+            if earliest_child_year is not None:
                 age = earliest_child_year - indi.birth_year
-                if MIN_PARENT_AGE <= age <= MAX_PARENT_AGE:
+                if MIN_PARENT_AGE <= age <= MAX_FIRST_CHILD_AGE:
                     indi.first_child_year = earliest_child_year
                     indi.first_child_age = age
 
@@ -797,7 +771,7 @@ class StatsCollector:
 
             # First child age
             if indi.first_child_age is not None:
-                if MIN_PARENT_AGE <= indi.first_child_age <= MAX_PARENT_AGE:
+                if MIN_PARENT_AGE <= indi.first_child_age <= MAX_FIRST_CHILD_AGE:
                     if indi.sex == "M":
                         male_child_ages.append(indi.first_child_age)
                     elif indi.sex == "F":

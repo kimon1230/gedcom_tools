@@ -3,8 +3,8 @@
 import json
 
 from gedcom_tools.progress import Colors
+from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import (
-    EncodingInfo,
     ErrorCode,
     ValidationIssue,
 )

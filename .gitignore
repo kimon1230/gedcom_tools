@@ -2,8 +2,9 @@
 CLAUDE.md
 .claude/
 
-# Private test data
-*.private.ged
+# GEDCOM data files (prevent accidental commit of large/private files)
+*.ged
+!tests/fixtures/*.ged
 
 # Virtual environment
 .venv/

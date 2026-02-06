@@ -24,7 +24,7 @@ class IndividualData:
     has_media: bool = False
     has_source: bool = False  # Has any source citation
 
-    # V3: Demographics
+    # Demographics
     birth_month: int | None = None  # 1-12, for birth month distribution
     birth_date_precision: str = "missing"  # "full", "partial", "approximate", "missing"
     birth_date_has_full: bool = (
@@ -33,7 +33,7 @@ class IndividualData:
     occupation: str = ""  # First occupation found
     source_count: int = 0  # Number of source citations (recursive)
 
-    # V3: Life events (populated after initial collection)
+    # Life events (populated after initial collection)
     first_marriage_year: int | None = None
     first_marriage_age: int | None = None
     first_marriage_fam_xref: str | None = None  # For age gap deduplication
@@ -100,7 +100,6 @@ class AggregateStats:
     distribution: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization."""
         result: dict[str, Any] = {
             "average": round(self.average, 1),
             "sample_size": self.sample_size,
@@ -189,7 +188,6 @@ class CoverageStats:
     percent: float
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization."""
         return {
             "with": self.with_count,
             "without": self.without_count,
@@ -202,12 +200,11 @@ class LifespanStats:
     """Lifespan statistics."""
 
     average: float
-    min_value: int  # Renamed from min_years
-    max_value: int  # Renamed from max_years
+    min_value: int
+    max_value: int
     sample_size: int  # Number of individuals with both birth and death
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization."""
         return {
             "average": round(self.average, 1),
             "min": self.min_value,
@@ -226,7 +223,6 @@ class MarriageStats:
     avg_children: float
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization."""
         return {
             "total": self.total_marriages,
             "with_date": self.with_date,

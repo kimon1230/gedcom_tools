@@ -76,7 +76,7 @@ Warnings indicate potential issues that don't make the file invalid.
 | Code | Description |
 |------|-------------|
 | W002 | **Trailing whitespace** - Line has spaces/tabs at end |
-| W003 | **Line too long** - Line exceeds 255 characters (soft warning) |
+| W003 | **Line too long** - Line exceeds 255 bytes (soft warning) |
 | W004 | **Custom tag** - Non-standard tag starting with underscore |
 | W005 | **Missing SUBM** - No submitter record found |
 
@@ -96,11 +96,13 @@ Warnings indicate potential issues that don't make the file invalid.
 | Code | Description | Threshold |
 |------|-------------|-----------|
 | W020 | **Parent too young** | Father < 12 or Mother < 12 at child's birth |
-| W021 | **Mother too old** | Mother > 50 at child's birth |
+| W021 | **Mother too old** | Mother > 80 at child's birth |
 | W022 | **Father too old** | Father > 80 at child's birth |
 | W023 | **Implausible lifespan** | Age at death > 120 years |
 | W024 | **Marriage before birth** | Marriage date before spouse's birth |
 | W025 | **Child before marriage** | Child born before parents' marriage |
+
+These thresholds are defined in `src/gedcom_tools/constants.py`.
 
 ### Strict Mode Warnings (W030-W032)
 
@@ -110,9 +112,20 @@ Only checked when `--strict` is specified.
 |------|-------------|
 | W030 | **ANSEL deprecated** | ANSEL encoding deprecated in GEDCOM 5.5.5 |
 | W031 | **Version mismatch** | Declared version differs from --strict version |
-| W032 | **Line too long (strict)** | Line exceeds 255 characters (strict check) |
+| W032 | **Line too long (strict)** | Line exceeds 255 bytes (strict check) |
 
 ## Output Formats
+
+### Quiet Mode
+
+With `-q`, only errors are shown (no file info, no warnings, no summary). If the file
+is valid, there is no output.
+
+```
+[E001] Unresolved cross-reference
+    Line 10: @F99@ Reference to undefined @F99@
+    → FAMC reference in @I1@
+```
 
 ### Text (default)
 
@@ -132,17 +145,31 @@ gedcom-tools --format json validate --full file.ged
 {
   "file": "file.ged",
   "valid": false,
-  "errors": [
+  "encoding": {
+    "detected": "UTF-8",
+    "has_bom": true,
+    "declared": "UTF-8"
+  },
+  "record_counts": {
+    "HEAD": 1,
+    "INDI": 3,
+    "FAM": 2,
+    "TRLR": 1
+  },
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  },
+  "issues": [
     {
       "code": "E001",
+      "severity": "error",
       "description": "Unresolved cross-reference",
-      "line": 10,
-      "xref": "@F99@",
       "message": "Reference to undefined @F99@",
-      "context": "FAMC reference in @I1@"
+      "line": 10,
+      "xref": "@I1@"
     }
-  ],
-  "warnings": []
+  ]
 }
 ```
 
@@ -160,5 +187,5 @@ The validator auto-detects encoding:
 Strict mode (`--strict 5.5.1` or `--strict 5.5.5`) enables:
 - Required header checks (GEDC, VERS, SOUR, CHAR)
 - Version mismatch warnings
-- Strict line length enforcement (255 chars)
+- Strict line length enforcement (255 bytes)
 - ANSEL deprecation warning (5.5.5 only)

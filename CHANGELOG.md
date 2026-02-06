@@ -6,11 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- `isolated` command — detects singletons (component size 1) and isolated pairs (component size 2) using graph analysis
+- Shared `graph.py` module with `UnionFind` and `find_connected_components` for reuse across commands
+
 ### Changed
 - Consolidated age plausibility constants into shared `constants.py` module
 - Improved exception handling in validation engine for malformed files
+- **Breaking:** Stats JSON key `"orphans"` renamed to `"isolated"` in completeness section
+- Stats text label `"Orphans:"` renamed to `"Isolated:"`
+- Stats isolated count now uses graph analysis instead of FAMS/FAMC heuristic
 
 ### Fixed
+- Stats isolated count now includes both singletons and pairs (aligned with isolated command)
+- Pluralization fix in isolated command quiet mode ("1 pair" instead of "1 pairs")
 - Documentation: Removed incorrect reference to chardet library
 - Documentation: Fixed parent age threshold (< 12, not < 13)
 

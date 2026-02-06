@@ -1,7 +1,7 @@
 """Tests for validation issues module."""
 
+from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import (
-    EncodingInfo,
     ErrorCode,
     FamilyInfo,
     IndividualInfo,

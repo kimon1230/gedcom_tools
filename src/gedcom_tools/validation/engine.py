@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal
 
 from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
+from gedcom_tools.dates import extract_year_from_date
 from gedcom_tools.progress import PhaseTracker
-
-if TYPE_CHECKING:
-    from ged4py.model import Record
+from gedcom_tools.utils import EncodingInfo, detect_encoding, extract_xref
 from gedcom_tools.validation.issues import (
-    EncodingInfo,
     ErrorCode,
     FamilyInfo,
     IndividualInfo,
     ValidationIssue,
 )
+
+if TYPE_CHECKING:
+    from ged4py.model import Record
 from gedcom_tools.validation.reference import ReferenceValidator
 from gedcom_tools.validation.result import ValidationResult
 from gedcom_tools.validation.semantic import SemanticValidator
@@ -145,15 +145,15 @@ class ValidationEngine:
                     if self.strict is not None:
                         self._add_issue(
                             ErrorCode.W032_LINE_TOO_LONG_STRICT,
-                            f"Line exceeds {MAX_LINE_LENGTH} characters "
-                            f"({len(line_content)} chars)",
+                            f"Line exceeds {MAX_LINE_LENGTH} bytes "
+                            f"({len(line_content)} bytes)",
                             line=line_num,
                         )
                     else:
                         self._add_issue(
                             ErrorCode.W003_LINE_TOO_LONG,
-                            f"Line exceeds recommended {MAX_LINE_LENGTH} characters "
-                            f"({len(line_content)} chars)",
+                            f"Line exceeds recommended {MAX_LINE_LENGTH} bytes "
+                            f"({len(line_content)} bytes)",
                             line=line_num,
                         )
 
@@ -177,55 +177,8 @@ class ValidationEngine:
 
     def _detect_encoding(self) -> None:
         """Detect file encoding and check for ANSEL."""
-        has_bom = False
-        declared_charset = None
-
-        # Check for BOM (UTF-8, UTF-16-LE, UTF-16-BE)
-        with open(self.file_path, "rb") as f:
-            bom = f.read(3)
-            if bom.startswith(b"\xef\xbb\xbf"):
-                has_bom = True  # UTF-8
-            elif bom[:2] == b"\xff\xfe":
-                has_bom = True  # UTF-16-LE
-            elif bom[:2] == b"\xfe\xff":
-                has_bom = True  # UTF-16-BE
-
-        # Try to read header to get declared charset
         try:
-            with GedcomReader(str(self.file_path)) as reader:
-                if reader.header:
-                    char_rec = reader.header.sub_tag("CHAR")
-                    if char_rec and char_rec.value:
-                        declared_charset = str(char_rec.value)
-
-                        # Check for ANSEL
-                        if declared_charset.upper() == "ANSEL":
-                            self._add_issue(
-                                ErrorCode.E009_ANSEL_NOT_SUPPORTED,
-                                "ANSEL encoding is not supported. "
-                                "Please convert the file to UTF-8.",
-                                line=(
-                                    self._offset_to_line(char_rec.offset)
-                                    if char_rec.offset
-                                    else None
-                                ),
-                            )
-                            if self.mode == "quick":
-                                raise StopValidation()
-
-                # Determine detected encoding from reader
-                detected = "UTF-8"  # Default assumption
-                if has_bom:
-                    detected = "UTF-8"
-                elif declared_charset:
-                    detected = declared_charset.upper()
-
-                self.encoding_info = EncodingInfo(
-                    encoding=detected,
-                    has_bom=has_bom,
-                    declared_charset=declared_charset,
-                )
-
+            self.encoding_info = detect_encoding(self.file_path)
         except CodecError as e:
             self._add_issue(
                 ErrorCode.E008_DECODE_FAILURE,
@@ -233,7 +186,7 @@ class ValidationEngine:
             )
             if self.mode == "quick":
                 raise StopValidation() from None
-
+            return
         except ParserError as e:
             self._add_issue(
                 ErrorCode.E004_MALFORMED_LINE,
@@ -241,7 +194,7 @@ class ValidationEngine:
             )
             if self.mode == "quick":
                 raise StopValidation() from None
-
+            return
         except IntegrityError as e:
             self._add_issue(
                 ErrorCode.E003_INVALID_LEVEL,
@@ -249,6 +202,19 @@ class ValidationEngine:
             )
             if self.mode == "quick":
                 raise StopValidation() from None
+            return
+
+        # ANSEL check (validation-specific)
+        if (
+            self.encoding_info.declared_charset
+            and self.encoding_info.declared_charset.upper() == "ANSEL"
+        ):
+            self._add_issue(
+                ErrorCode.E009_ANSEL_NOT_SUPPORTED,
+                "ANSEL encoding is not supported. " "Please convert the file to UTF-8.",
+            )
+            if self.mode == "quick":
+                raise StopValidation()
 
     def _parse_structure(self, spinner: object) -> None:
         """Parse file structure and collect data for validation."""
@@ -596,45 +562,16 @@ class ValidationEngine:
                     self._warned_custom_tags.add(tag)
             self._check_custom_tags(sub, depth + 1)
 
-    def _extract_xref(self, value: Any) -> str | None:
-        """Extract xref ID from a value (handles pointer records)."""
-        if value is None:
-            return None
-
-        # If it's already a string in @XREF@ format
-        val_str = str(value)
-        if val_str.startswith("@") and val_str.endswith("@"):
-            return val_str
-
-        # Check if it's a pointer record
-        if hasattr(value, "xref_id"):
-            xref: str | None = value.xref_id
-            return xref
-
-        return None
+    @staticmethod
+    def _extract_xref(value: Any) -> str | None:
+        return extract_xref(value)
 
     def _extract_year(self, record: Record, path: str) -> int | None:
         """Extract year from a date at the given path."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
-
-        # ged4py may return a Date object or string
-        date_val = date_rec.value
-
-        # Try to get year from Date object
-        if hasattr(date_val, "year") and date_val.year:
-            year: int = date_val.year
-            return year
-
-        # Fall back to regex extraction from string
-        date_str = str(date_val)
-        # Match 4-digit year
-        match = re.search(r"\b(\d{4})\b", date_str)
-        if match:
-            return int(match.group(1))
-
-        return None
+        return extract_year_from_date(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
         """Check version-specific requirements when --strict is set.

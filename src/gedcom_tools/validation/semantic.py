@@ -5,9 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from gedcom_tools.constants import (
-    MAX_FATHER_AGE,
     MAX_LIFESPAN,
-    MAX_MOTHER_AGE,
+    MAX_PARENT_AGE_AT_BIRTH,
     MIN_PARENT_AGE,
 )
 from gedcom_tools.validation.issues import (
@@ -243,7 +242,7 @@ class SemanticValidator:
                                     xref=child_xref,
                                 )
                             )
-                        elif age > MAX_FATHER_AGE:
+                        elif age > MAX_PARENT_AGE_AT_BIRTH:
                             issues.append(
                                 ValidationIssue(
                                     code=ErrorCode.W022_FATHER_TOO_OLD,
@@ -268,7 +267,7 @@ class SemanticValidator:
                                     xref=child_xref,
                                 )
                             )
-                        elif age > MAX_MOTHER_AGE:
+                        elif age > MAX_PARENT_AGE_AT_BIRTH:
                             issues.append(
                                 ValidationIssue(
                                     code=ErrorCode.W021_MOTHER_TOO_OLD,

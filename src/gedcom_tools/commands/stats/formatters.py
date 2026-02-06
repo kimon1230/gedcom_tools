@@ -21,7 +21,7 @@ from gedcom_tools.commands.stats.models import (
 
 if TYPE_CHECKING:
     from gedcom_tools.progress import Colors
-    from gedcom_tools.validation.issues import EncodingInfo
+    from gedcom_tools.utils import EncodingInfo
 
 
 @dataclass
@@ -72,20 +72,20 @@ class StatsResult:
     source_citations: CoverageStats | None = None
     notes: CoverageStats | None = None
     media: CoverageStats | None = None
-    orphans: CoverageStats | None = None
+    isolated: CoverageStats | None = None
     estimated_living: CoverageStats | None = None
 
-    # V3: Life Events
+    # Life Events
     age_at_first_marriage: GenderedAggregateStats | None = None
     age_at_first_child: GenderedAggregateStats | None = None
     spousal_age_gap: AggregateStats | None = None
 
-    # V3: Family patterns
+    # Family patterns
     family_size: AggregateStats | None = None  # Only families with 1+ children
     birth_by_month: dict[int, int] = field(default_factory=dict)
     lifespan_by_century: dict[str, AggregateStats] = field(default_factory=dict)
 
-    # V3: Research quality
+    # Research quality
     date_precision: DatePrecisionStats | None = None
     occupation_coverage: CoverageStats | None = None
     source_depth: AggregateStats | None = None
@@ -264,10 +264,10 @@ class StatsResult:
                 f"  Has Media:            {self.media.with_count:>5} / "
                 f"{self.individuals:,} ({self.media.percent:.1f}%)"
             )
-        if self.orphans:
+        if self.isolated:
             lines.append(
-                f"  Orphans:              {self.orphans.with_count:>5} / "
-                f"{self.individuals:,} ({self.orphans.percent:.1f}%)"
+                f"  Isolated:             {self.isolated.with_count:>5} / "
+                f"{self.individuals:,} ({self.isolated.percent:.1f}%)"
             )
         if self.estimated_living:
             lines.append(
@@ -275,7 +275,7 @@ class StatsResult:
                 f"{self.individuals:,} ({self.estimated_living.percent:.1f}%)"
             )
 
-        # V3: Life Events
+        # Life Events
         if (
             self.age_at_first_marriage
             or self.age_at_first_child
@@ -341,7 +341,7 @@ class StatsResult:
                     f"(n={g.sample_size}, range {g.min_value}-{g.max_value})"
                 )
 
-        # V3: Family Size
+        # Family Size
         if self.family_size:
             lines.append("")
             lines.append(f"{colors.cyan}=== Family Size ==={colors.reset}")
@@ -358,7 +358,7 @@ class StatsResult:
                     lines.append(f"    {label:15} {count:>5} ({pct:.0f}%)")
             lines.append(f"  Largest: {fs.max_value} children")
 
-        # V3: Birth Patterns
+        # Birth Patterns
         if self.birth_by_month:
             total = sum(self.birth_by_month.values())
             if total > 0:
@@ -408,7 +408,7 @@ class StatsResult:
                 "  No birth month data available (dates may be approximate or missing)"
             )
 
-        # V3: Lifespan Trends
+        # Lifespan Trends
         if self.lifespan_by_century:
             lines.append("")
             lines.append(f"{colors.cyan}=== Lifespan Trends ==={colors.reset}")
@@ -418,7 +418,7 @@ class StatsResult:
                 n = stats.sample_size
                 lines.append(f"    {century}s:  {avg:.1f} years (n={n})")
 
-        # V3: Research Quality
+        # Research Quality
         if self.date_precision or self.occupation_coverage or self.source_depth:
             lines.append("")
             lines.append(f"{colors.cyan}=== Research Quality ==={colors.reset}")
@@ -607,10 +607,10 @@ class StatsResult:
                 "without": self.media.without_count,
                 "percent": self.media.percent,
             }
-        if self.orphans:
-            data["completeness"]["orphans"] = {
-                "count": self.orphans.with_count,
-                "percent": self.orphans.percent,
+        if self.isolated:
+            data["completeness"]["isolated"] = {
+                "count": self.isolated.with_count,
+                "percent": self.isolated.percent,
             }
         if self.estimated_living:
             data["completeness"]["estimated_living"] = {
@@ -618,7 +618,7 @@ class StatsResult:
                 "percent": self.estimated_living.percent,
             }
 
-        # V3: Life events
+        # Life events
         data["life_events"] = {}
         if self.age_at_first_marriage:
             data["life_events"][
@@ -631,10 +631,10 @@ class StatsResult:
         if self.spousal_age_gap:
             data["life_events"]["spousal_age_gap"] = self.spousal_age_gap.to_dict()
 
-        # V3: Family size
+        # Family size
         data["family_size"] = self.family_size.to_dict() if self.family_size else None
 
-        # V3: Birth patterns
+        # Birth patterns
         if self.birth_by_month:
             total = sum(self.birth_by_month.values())
             if total > 0:
@@ -652,7 +652,7 @@ class StatsResult:
         else:
             data["birth_patterns"] = None
 
-        # V3: Lifespan trends
+        # Lifespan trends
         if self.lifespan_by_century:
             data["lifespan_trends"] = {
                 "by_century": {
@@ -663,7 +663,7 @@ class StatsResult:
         else:
             data["lifespan_trends"] = None
 
-        # V3: Research quality
+        # Research quality
         data["research_quality"] = {}
         if self.date_precision:
             data["research_quality"]["date_precision"] = self.date_precision.to_dict()

@@ -6,7 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from gedcom_tools.validation.issues import EncodingInfo, Severity, ValidationIssue
+from gedcom_tools.utils import EncodingInfo
+from gedcom_tools.validation.issues import Severity, ValidationIssue
 
 if TYPE_CHECKING:
     from gedcom_tools.progress import Colors

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,8 +24,9 @@ from gedcom_tools.commands.stats.models import (
     RankedItem,
     TimelineEntry,
 )
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.progress import Colors
+from gedcom_tools.utils import validate_input_file
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -78,19 +78,8 @@ def run(args: Namespace) -> int:
     """Execute the stats command."""
     file_path: Path = args.file
 
-    if not file_path.exists():
-        print(f"Error: File not found: {file_path}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-    if not file_path.is_file():
-        print(f"Error: Not a file: {file_path}", file=sys.stderr)
-        return EXIT_USAGE_ERROR
-
-    if not os.access(file_path, os.R_OK):
-        print(
-            f"Error: Cannot read file (permission denied): {file_path}", file=sys.stderr
-        )
-        return EXIT_ERROR
+    if err := validate_input_file(file_path):
+        return err
 
     output_format = getattr(args, "format", "text")
     quiet = getattr(args, "quiet", False)

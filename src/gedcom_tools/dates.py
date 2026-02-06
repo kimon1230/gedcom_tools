@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
 # ged4py DateValueTypes - import once at module level for performance
 try:
@@ -13,9 +12,6 @@ try:
 except ImportError:
     DateValueTypes = None  # type: ignore[misc, assignment]
     HAS_DATE_VALUE_TYPES = False
-
-if TYPE_CHECKING:
-    from ged4py.model import Record
 
 __all__ = [
     "HAS_DATE_VALUE_TYPES",
@@ -28,7 +24,6 @@ __all__ = [
     "extract_year_from_date",
     "extract_month",
     "classify_date_precision",
-    "count_sources_recursive",
 ]
 
 # Month name to number mapping
@@ -265,26 +260,3 @@ def classify_date_precision(date_val: object) -> tuple[str, bool]:
         return ("full", True)
     else:
         return ("partial", False)
-
-
-def count_sources_recursive(record: Record, _visited: set[int] | None = None) -> int:
-    """
-    Count all SOUR references in a record and all sub-records recursively.
-
-    Uses visited-set tracking to protect against circular references in
-    malformed GEDCOM data.
-    """
-    if _visited is None:
-        _visited = set()
-
-    record_id = id(record)
-    if record_id in _visited:
-        return 0
-    _visited.add(record_id)
-
-    count = 0
-    for sub in record.sub_records:
-        if sub.tag == "SOUR":
-            count += 1
-        count += count_sources_recursive(sub, _visited)
-    return count
