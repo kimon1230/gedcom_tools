@@ -29,8 +29,6 @@ class ErrorCode(Enum):
     E006_MISSING_TRLR = "E006"
     E007_CONTENT_AFTER_TRLR = "E007"
     E008_DECODE_FAILURE = "E008"
-    E009_ANSEL_NOT_SUPPORTED = "E009"
-
     # Errors: Semantic
     E010_ANCESTRY_CYCLE = "E010"
     E011_DEATH_BEFORE_BIRTH = "E011"
@@ -87,7 +85,6 @@ class ErrorCode(Enum):
             "E006": "Missing TRLR record",
             "E007": "Content after TRLR record",
             "E008": "Character encoding decode failure",
-            "E009": "ANSEL encoding not supported",
             "E010": "Ancestry cycle detected",
             "E011": "Death date before birth date",
             "E012": "Birth date before parent's birth",

@@ -88,9 +88,7 @@ def build_family_members(
     result: dict[str, list[str]] = {}
     for fam_xref, fam in families:
         members = [
-            m
-            for m in [fam.husb_xref, fam.wife_xref, *fam.chil_xrefs]
-            if m is not None
+            m for m in [fam.husb_xref, fam.wife_xref, *fam.chil_xrefs] if m is not None
         ]
         result[fam_xref] = members
     return result

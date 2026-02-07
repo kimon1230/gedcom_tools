@@ -4,7 +4,15 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.1]
+
+### Added
+- ANSEL encoding support — GEDCOM files with `CHAR ANSEL` are now validated and analyzed correctly
+
+### Removed
+- `E009_ANSEL_NOT_SUPPORTED` error code (ANSEL is supported via ged4py's ansel codec)
+
+## [0.2.0]
 
 ### Added
 - `isolated` command — detects singletons (component size 1) and isolated pairs (component size 2) using graph analysis
@@ -26,7 +34,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Removed
 - Dead code: Removed unused `_has_source_citation()` method
 
-## [0.0.2]
+## [0.1.1]
 
 ### Added
 - Stats command with comprehensive genealogical statistics
@@ -37,7 +45,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Family size distribution
 - Given name frequency by gender
 
-## [0.0.1]
+## [0.1.0]
 
 ### Added
 - Initial release

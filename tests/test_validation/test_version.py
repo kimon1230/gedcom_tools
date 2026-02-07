@@ -156,9 +156,12 @@ class TestAnselDeprecation:
         engine = ValidationEngine(ged_file, mode="full", strict="5.5.5")
         result = engine.validate()
 
-        # Should have both E009 (ANSEL not supported) and W030 (deprecated)
+        # ANSEL is supported; should have W030 (deprecated in 5.5.5) but no E009
         error_codes = [i.code for i in result.issues]
+        error_values = {c.value for c in error_codes}
         assert ErrorCode.W030_ANSEL_DEPRECATED in error_codes
+        assert "E009" not in error_values
+        assert result.success is True  # warnings don't fail validation
 
     def test_ansel_not_deprecated_in_551(self, tmp_path: Path) -> None:
         """No W030 for ANSEL in 5.5.1 strict mode."""
@@ -181,6 +184,9 @@ class TestAnselDeprecation:
         engine = ValidationEngine(ged_file, mode="full", strict="5.5.1")
         result = engine.validate()
 
-        # Should NOT have W030 (deprecated only in 5.5.5)
+        # ANSEL is not deprecated in 5.5.1
         error_codes = [i.code for i in result.issues]
+        error_values = {c.value for c in error_codes}
         assert ErrorCode.W030_ANSEL_DEPRECATED not in error_codes
+        assert "E009" not in error_values
+        assert result.success is True

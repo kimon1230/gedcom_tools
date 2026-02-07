@@ -223,3 +223,22 @@ def test_isolated_missing_file():
 
 def test_isolated_no_color(sample_gedcom_path):
     assert main(["--no-color", "isolated", str(sample_gedcom_path)]) == EXIT_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# ANSEL encoding support
+# ---------------------------------------------------------------------------
+
+
+def test_validate_royal92_ansel(capsys):
+    """ANSEL-encoded royal92.ged should not produce E009."""
+    from pathlib import Path
+
+    from gedcom_tools.constants import EXIT_ERROR
+
+    royal92 = Path(__file__).parent / "fixtures" / "royal92.ged"
+    result = main(["validate", "--full", str(royal92)])
+    assert result == EXIT_ERROR  # has real errors, but not E009
+
+    out = capsys.readouterr().out
+    assert "E009" not in out

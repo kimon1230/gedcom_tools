@@ -39,7 +39,11 @@ from gedcom_tools.dates import (
     extract_year_from_date,
     get_century,
 )
-from gedcom_tools.graph import build_family_members, count_isolated, find_connected_components
+from gedcom_tools.graph import (
+    build_family_members,
+    count_isolated,
+    find_connected_components,
+)
 from gedcom_tools.progress import PhaseTracker
 from gedcom_tools.utils import (
     EncodingInfo,

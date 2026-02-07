@@ -297,6 +297,84 @@ class TestOffsetToLine:
         assert engine._offset_to_line(0) == 1
 
 
+class TestAnselSupport:
+    """Tests for ANSEL encoding support."""
+
+    def test_ansel_file_validates_successfully(self, tmp_path):
+        """ANSEL-declared file with ASCII content validates cleanly."""
+        ged = tmp_path / "ansel.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "2 FORM LINEAGE-LINKED\n"
+            "1 CHAR ANSEL\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Smith/\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        assert result.success is True
+        assert result.encoding_info is not None
+        assert result.encoding_info.encoding == "ANSEL"
+        error_values = {i.code.value for i in result.issues}
+        assert "E009" not in error_values
+
+    def test_ansel_file_with_diacritics(self, tmp_path):
+        """ANSEL file with combining diacritics parses without errors."""
+        ged = tmp_path / "ansel_diacritics.ged"
+        # ANSEL combining acute (0xE2) precedes the base character
+        lines = [
+            b"0 HEAD\n",
+            b"1 SOUR Test\n",
+            b"1 GEDC\n",
+            b"2 VERS 5.5.1\n",
+            b"2 FORM LINEAGE-LINKED\n",
+            b"1 CHAR ANSEL\n",
+            b"0 @I1@ INDI\n",
+            b"1 NAME Jos\xe2e /Garc\xe2ia/\n",
+            b"0 TRLR\n",
+        ]
+        ged.write_bytes(b"".join(lines))
+
+        result = validate_file(ged, mode="full", quiet=True)
+        assert result.success is True
+        assert result.encoding_info is not None
+        assert result.encoding_info.encoding == "ANSEL"
+
+    def test_royal92_validates_without_ansel_error(self):
+        """royal92.ged (ANSEL file) should not produce E009."""
+        royal92 = FIXTURES / "royal92.ged"
+        result = validate_file(royal92, mode="full", quiet=True)
+
+        error_values = {i.code.value for i in result.issues}
+        assert "E009" not in error_values
+        assert result.encoding_info is not None
+        assert result.encoding_info.encoding == "ANSEL"
+
+    def test_malformed_ansel_gets_decode_error(self, tmp_path):
+        """Invalid ANSEL byte triggers E008 decode failure."""
+        ged = tmp_path / "bad_ansel.ged"
+        lines = [
+            b"0 HEAD\n",
+            b"1 SOUR Test\n",
+            b"1 GEDC\n",
+            b"2 VERS 5.5.1\n",
+            b"2 FORM LINEAGE-LINKED\n",
+            b"1 CHAR ANSEL\n",
+            b"0 @I1@ INDI\n",
+            b"1 NAME \xff /Bad/\n",
+            b"0 TRLR\n",
+        ]
+        ged.write_bytes(b"".join(lines))
+
+        result = validate_file(ged, mode="full", quiet=True)
+        assert result.success is False
+        error_codes = {i.code for i in result.errors}
+        assert ErrorCode.E008_DECODE_FAILURE in error_codes
+
+
 class TestEncodingErrors:
     def test_invalid_encoding_reports_error(self):
         result = validate_file(

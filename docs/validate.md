@@ -34,7 +34,7 @@ gedcom-tools validate <file> [options]
 
 Errors indicate problems that make the file invalid or unusable.
 
-### Structural Errors (E001-E009)
+### Structural Errors (E001-E008)
 
 | Code | Description |
 |------|-------------|
@@ -46,7 +46,6 @@ Errors indicate problems that make the file invalid or unusable.
 | E006 | **Missing TRLR record** - File must end with TRLR |
 | E007 | **Content after TRLR** - No records allowed after TRLR |
 | E008 | **Decode failure** - Cannot decode file with detected encoding |
-| E009 | **ANSEL not supported** - ANSEL encoding is not supported by this tool |
 
 ### Semantic Errors (E010-E012)
 
@@ -181,6 +180,7 @@ The validator auto-detects encoding:
 1. Checks for BOM (UTF-8, UTF-16)
 2. Reads CHAR declaration in header
 3. Defaults to UTF-8 if no BOM or CHAR declaration found
+4. Supports ANSEL encoding (common in older GEDCOM files)
 
 ### Strict Mode
 

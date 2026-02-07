@@ -67,15 +67,20 @@ gedcom-tools validate --strict 5.5.5 --full family.ged
 ```
 $ gedcom-tools validate royal92.ged
 
-✗ [1/4] Detecting encoding
+✓ [1/4] Detecting encoding
+✓ [2/4] Parsing structure
+✓ [3/4] Validating references
+✓ [4/4] Checking semantics
 File: royal92.ged
 Encoding: ANSEL
+Records: 1422 FAM, 1 HEAD, 3010 INDI, 1 SUBM, 1 TRLR
 
-Errors (1):
-  [E009] ANSEL encoding not supported
-    ANSEL encoding is not supported. Please convert the file to UTF-8.
+Errors (5):
+  [E012] Birth date before parent's birth
+    Line 1813: @I169@ Born (1931) before parent @I812@ (1980)
+  ...
 
-✗ Invalid (1 error(s), 0 warning(s))
+✗ Invalid (5 error(s), 33 warning(s))
 ```
 
 Quick mode fails fast on the first error. Use `--full` to see everything.
@@ -96,9 +101,7 @@ File: royal92.ged
 Encoding: ANSEL
 Records: 1422 FAM, 1 HEAD, 3010 INDI, 1 SUBM, 1 TRLR
 
-Errors (6):
-  [E009] ANSEL encoding not supported
-    ANSEL encoding is not supported. Please convert the file to UTF-8.
+Errors (5):
   [E012] Birth date before parent's birth
     Line 1813: @I169@ Born (1931) before parent @I812@ (1980)
   [E012] Birth date before parent's birth
@@ -128,7 +131,7 @@ Warnings (33):
     Line 7294: @I812@ Father @I2946@ was 108 at birth
   ...
 
-✗ Invalid (6 error(s), 33 warning(s))
+✗ Invalid (5 error(s), 33 warning(s))
 ```
 
 Every issue includes a code, description, line number, and actionable message.
@@ -157,22 +160,24 @@ $ gedcom-tools --format json validate --full royal92.ged
     "TRLR": 1
   },
   "summary": {
-    "errors": 6,
+    "errors": 5,
     "warnings": 33
   },
   "issues": [
-    {
-      "code": "E009",
-      "description": "ANSEL encoding not supported",
-      "severity": "error",
-      "message": "ANSEL encoding is not supported. Please convert the file to UTF-8."
-    },
     {
       "code": "W005",
       "description": "Missing SUBM record",
       "severity": "warning",
       "message": "No SUBM (submitter) record referenced in HEAD",
       "line": 1
+    },
+    {
+      "code": "E012",
+      "description": "Birth date before parent's birth",
+      "severity": "error",
+      "message": "Born (1931) before parent @I812@ (1980)",
+      "line": 1813,
+      "xref": "@I169@"
     },
     ...
   ]

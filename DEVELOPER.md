@@ -113,7 +113,7 @@ The validation engine (`src/gedcom_tools/validation/engine.py`) processes GEDCOM
 │  Phase 1: Encoding Detection                                    │
 │  - Check BOM (Byte Order Mark)                                  │
 │  - Read declared CHAR encoding from header                      │
-│  - Reject ANSEL (not supported)                                 │
+│  - Detect ANSEL encoding (supported via ansel codec)                                 │
 │  - Report encoding mismatches                                   │
 └─────────────────────────────────────────────────────────────────┘
                               │

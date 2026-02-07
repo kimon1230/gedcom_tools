@@ -176,7 +176,7 @@ class ValidationEngine:
         return lo + 1
 
     def _detect_encoding(self) -> None:
-        """Detect file encoding and check for ANSEL."""
+        """Detect file encoding."""
         try:
             self.encoding_info = detect_encoding(self.file_path)
         except CodecError as e:
@@ -203,18 +203,6 @@ class ValidationEngine:
             if self.mode == "quick":
                 raise StopValidation() from None
             return
-
-        # ANSEL check (validation-specific)
-        if (
-            self.encoding_info.declared_charset
-            and self.encoding_info.declared_charset.upper() == "ANSEL"
-        ):
-            self._add_issue(
-                ErrorCode.E009_ANSEL_NOT_SUPPORTED,
-                "ANSEL encoding is not supported. " "Please convert the file to UTF-8.",
-            )
-            if self.mode == "quick":
-                raise StopValidation()
 
     def _parse_structure(self, spinner: object) -> None:
         """Parse file structure and collect data for validation."""
