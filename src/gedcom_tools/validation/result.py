@@ -38,12 +38,6 @@ class ValidationResult:
         return len(self.errors) == 0
 
     def format_text(self, colors: Colors, quiet: bool = False) -> str:
-        """Format the result as human-readable text.
-
-        Args:
-            colors: Color configuration for terminal output.
-            quiet: If True, show errors only (no file info, warnings, summary).
-        """
         if quiet:
             return self._format_text_quiet(colors)
         return self._format_text_full(colors)

@@ -38,9 +38,10 @@
         "individuals": { "type": "integer", "minimum": 0 },
         "families": { "type": "integer", "minimum": 0 },
         "sources": { "type": "integer", "minimum": 0 },
-        "locations": { "type": "integer", "minimum": 0, "description": "Distinct place names referenced" }
+        "locations": { "type": "integer", "minimum": 0, "description": "Distinct place names referenced" },
+        "distinct_languages": { "type": "integer", "minimum": 0, "description": "Number of distinct languages detected in text content" }
       },
-      "required": ["individuals", "families", "sources", "locations"],
+      "required": ["individuals", "families", "sources", "locations", "distinct_languages"],
       "additionalProperties": false
     },
     "timeline": {

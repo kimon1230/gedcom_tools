@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class EncodingInfo:
-    """Information about the detected encoding of a GEDCOM file."""
+    """BOM + CHAR header detection result."""
 
     encoding: str
     has_bom: bool = False
@@ -37,16 +37,7 @@ class EncodingInfo:
 
 
 def detect_encoding(file_path: Path) -> EncodingInfo:
-    """Detect GEDCOM file encoding from BOM and CHAR header.
-
-    Checks for UTF-8, UTF-16-LE, and UTF-16-BE byte-order marks,
-    then reads the CHAR header via GedcomReader.
-
-    Raises:
-        CodecError: If the file cannot be decoded.
-        ParserError: If the file contains malformed GEDCOM lines.
-        IntegrityError: If the file has structural issues.
-    """
+    """Detect GEDCOM file encoding from BOM and CHAR header."""
     has_bom = False
     declared_charset = None
 
@@ -82,7 +73,7 @@ def detect_encoding(file_path: Path) -> EncodingInfo:
 
 
 def extract_xref(value: Any) -> str | None:
-    """Extract xref ID from a value (string or ged4py pointer)."""
+    # HACK: ged4py's pointer type is inconsistent — handle both forms
     if value is None:
         return None
 
@@ -118,11 +109,7 @@ def validate_input_file(file_path: Path) -> int | None:
 
 
 def count_sources_recursive(record: Record, _visited: set[int] | None = None) -> int:
-    """Count all SOUR references in a record and all sub-records recursively.
-
-    Uses visited-set tracking to protect against circular references in
-    malformed GEDCOM data.
-    """
+    # visited-set guards against circular refs in malformed GEDCOM
     if _visited is None:
         _visited = set()
 

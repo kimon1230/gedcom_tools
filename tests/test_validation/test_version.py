@@ -1,5 +1,3 @@
-"""Tests for --strict version validation."""
-
 from pathlib import Path
 
 from gedcom_tools.validation.engine import ValidationEngine
@@ -9,7 +7,6 @@ FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
 class TestStrictValidation:
-    """Tests for --strict mode validation."""
 
     def test_no_strict_skips_version_checks(self) -> None:
         """Without --strict, missing GEDC is acceptable."""
@@ -132,7 +129,6 @@ class TestStrictValidation:
 
 
 class TestAnselDeprecation:
-    """Tests for ANSEL deprecation warning in 5.5.5."""
 
     def test_ansel_deprecated_in_555(self, tmp_path: Path) -> None:
         """W030 for ANSEL encoding in 5.5.5 strict mode."""

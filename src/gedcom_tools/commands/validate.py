@@ -61,7 +61,6 @@ def run(args: Namespace) -> int:
     strict = getattr(args, "strict", None)
 
     try:
-        # Run validation
         result = validate_file(
             file_path=file_path,
             mode=mode,
@@ -72,7 +71,6 @@ def run(args: Namespace) -> int:
             stream=sys.stderr,
         )
 
-        # Output results
         if output_format == "json":
             print(result.format_json())
         else:

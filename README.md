@@ -543,6 +543,97 @@ File: royal92.ged
 
 Uses graph analysis to identify connected components in the family tree.
 
+#### languages
+
+Detect languages used in GEDCOM text content (notes, stories, events) using fast-langdetect.
+
+```bash
+# Detect languages in a GEDCOM file
+gedcom-tools languages family.ged
+
+# Filter for a specific language
+gedcom-tools languages family.ged --language Greek
+
+# Filter using ISO code + JSON output
+gedcom-tools --format json languages family.ged --language el
+
+# Set minimum text length for detection
+gedcom-tools languages family.ged --min-length 30
+
+# Quiet mode
+gedcom-tools -q languages family.ged
+```
+
+<details>
+<summary><b>Sample: Aggregate language detection</b> (family.ged)</summary>
+
+```
+$ gedcom-tools languages family.ged
+
+File: family.ged
+Encoding: UTF-8
+
+=== Language Detection ===
+  Texts analyzed: 42 (5 skipped, too short)
+
+  Language             Notes  Stories  Events   Total
+  ─────────────────────────────────────────────────────
+  English                 10       15       8      33
+  Greek                    2        4       3       9
+  ─────────────────────────────────────────────────────
+  Total                   12       19      11      42
+
+  Distinct languages: 2 (excluding unknown)
+
+  Notes   = standalone top-level notes
+  Stories = biographical notes on individuals
+  Events  = notes on births, deaths, marriages, and other events
+  Tip: use --language <name> to list individual records in that language.
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Filter by language</b> (family.ged)</summary>
+
+```
+$ gedcom-tools languages family.ged --language Greek
+
+File: family.ged
+Encoding: UTF-8
+
+=== Greek (el) ===
+  Texts analyzed: 42 (5 skipped, too short)
+
+  Persons with biographical notes (2):
+    Eleni Papadopoulos (@I5@)
+    Nikolaos Andreou (@I12@)
+
+  Standalone notes (1):
+    @N7@
+
+  Events with notes (2):
+    @I5@  BIRT  — Eleni Papadopoulos
+    @F3@  MARR
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--language LANG` | Filter for a specific language (name or ISO 639-1 code) |
+| `--min-length N` | Minimum text length for detection (default: 10) |
+
+**Categories:**
+
+- **Notes**: Standalone top-level notes not referenced by any individual or family
+- **Stories**: Biographical notes directly attached to individuals
+- **Events**: Notes on births, deaths, marriages, and other life events
+
+**Supported languages:** 26 languages via fast-langdetect, including Arabic, Chinese, English, French, German, Greek, and more. Also accepts "unknown" for unclassifiable texts.
+
 ## Documentation
 
 Detailed documentation for each command:
@@ -550,6 +641,7 @@ Detailed documentation for each command:
 - [Validate Command](docs/validate.md) - Error/warning codes and strict mode
 - [Stats Command](docs/stats.md) - Statistics output and JSON schema
 - [Isolated Command](docs/isolated.md) - Detecting unconnected individuals
+- [Languages Command](docs/languages.md) - Language detection and filtering
 
 ## Sample Data
 

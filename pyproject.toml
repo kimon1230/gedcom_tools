@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gedcom-tools"
-version = "0.2.1"
+version = "0.3.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "ged4py>=0.4.4",
+    "fast-langdetect>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ select = ["E", "W", "F", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

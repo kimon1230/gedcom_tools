@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from typing import IO, TYPE_CHECKING
 
@@ -60,11 +61,13 @@ class Colors:
 class Spinner:
     """Animated spinner for showing activity.
 
-    Use as a context manager:
-        with Spinner("Processing...") as s:
-            for item in items:
+    Animation runs automatically in a background thread. Use update()
+    to display progress information like record counts.
+
+        with Spinner("Processing...", stream=sys.stderr) as s:
+            for i, item in enumerate(items):
                 process(item)
-                s.update()
+                s.update(f" ({i+1} items)")
     """
 
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -85,6 +88,10 @@ class Spinner:
         self._running = False
         self._line_written = False
         self._start_time: float | None = None
+        self._suffix = ""
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
     def __enter__(self) -> Spinner:
         self.start()
@@ -101,20 +108,43 @@ class Spinner:
 
     def start(self) -> None:
         """Start the spinner."""
+        if self._running:
+            return
         self._running = True
         self._start_time = time.perf_counter()
-        self._render()
+        self._frame = 0
+        self._suffix = ""
+        self._line_written = False
+        self._stop_event.clear()
+        if self.is_tty:
+            self._thread = threading.Thread(
+                target=self._animate, daemon=True, name="spinner-animate"
+            )
+            self._thread.start()
+
+    def _animate(self) -> None:
+        while not self._stop_event.wait(0.08):
+            with self._lock:
+                self._frame = (self._frame + 1) % len(self.FRAMES)
+                try:
+                    self._render()
+                except OSError:
+                    break
 
     def update(self, suffix: str = "") -> None:
-        """Advance spinner frame and optionally update suffix text."""
+        """Update suffix text displayed after the spinner message."""
         if not self._running:
             return
-        self._frame = (self._frame + 1) % len(self.FRAMES)
-        self._render(suffix)
+        with self._lock:
+            self._suffix = suffix
 
     def stop(self, success: bool = True) -> None:
         """Stop spinner and show final state."""
         self._running = False
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
         elapsed = ""
         if self.show_timing and self._start_time is not None:
             duration = time.perf_counter() - self._start_time
@@ -130,11 +160,14 @@ class Spinner:
         self.stream.write(f"{icon} {self.message}{elapsed}{self.colors.reset}\n")
         self.stream.flush()
 
-    def _render(self, suffix: str = "") -> None:
+    # caller must hold _lock
+    def _render(self) -> None:
         if not self.is_tty:
             return
         frame = self.FRAMES[self._frame]
-        line = f"{self.colors.cyan}{frame}{self.colors.reset} {self.message}{suffix}"
+        line = (
+            f"{self.colors.cyan}{frame}{self.colors.reset} {self.message}{self._suffix}"
+        )
         self.stream.write(f"\r\033[K{line}")
         self.stream.flush()
         self._line_written = True

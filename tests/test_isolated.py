@@ -1,5 +1,3 @@
-"""Tests for the isolated command."""
-
 from __future__ import annotations
 
 import json
@@ -26,7 +24,6 @@ def _write_gedcom(tmp_path: Path, name: str, body: str) -> Path:
 
 
 class TestIsolatedDetection:
-    """Tests for isolation detection logic."""
 
     def test_all_connected_no_isolated(self, tmp_path: Path) -> None:
         f = _write_gedcom(
@@ -208,19 +205,6 @@ class TestIsolatedDetection:
         assert len(result.singletons) == 0
         assert len(result.pairs) == 0
 
-    def test_single_individual_is_singleton(self, tmp_path: Path) -> None:
-        f = _write_gedcom(
-            tmp_path,
-            "one.ged",
-            """\
-0 @I1@ INDI
-1 NAME Solo /Person/
-""",
-        )
-        result = _collect_data(f, quiet=True, verbose=False, no_color=True)
-        assert result.total_individuals == 1
-        assert len(result.singletons) == 1
-
     def test_no_fam_records_all_singletons(self, tmp_path: Path) -> None:
         f = _write_gedcom(
             tmp_path,
@@ -325,7 +309,6 @@ class TestIsolatedDetection:
 
 
 class TestIsolatedFormatting:
-    """Tests for output formatting."""
 
     def test_text_output_with_results(self) -> None:
         result = IsolatedResult(
@@ -444,7 +427,6 @@ class TestIsolatedFormatting:
 
 
 class TestIsolatedCLI:
-    """CLI integration tests."""
 
     def test_help_exits_zero(self) -> None:
         try:

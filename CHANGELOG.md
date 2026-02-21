@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0]
+
+### Added
+- `languages` command — detects languages used in notes, stories, and event descriptions
+- `--language` filter mode — lists persons, notes, and events written in a specific language (accepts name or ISO 639-1 code)
+- `--min-length` option to set minimum text length threshold for language detection
+- Full language model (126MB) auto-downloaded on first run
+- New dependency: `fast-langdetect` for language detection
+
 ## [0.2.1]
 
 ### Added

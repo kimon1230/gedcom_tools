@@ -1,5 +1,3 @@
-"""Tests that validate stats JSON output against docs/stats-schema.json."""
-
 from __future__ import annotations
 
 import json
@@ -111,7 +109,13 @@ class TestSchemaCompliance:
         data = {
             "file": "/test.ged",
             "encoding": None,
-            "records": {"individuals": 0, "families": 0, "sources": 0, "locations": 0},
+            "records": {
+                "individuals": 0,
+                "families": 0,
+                "sources": 0,
+                "locations": 0,
+                "distinct_languages": 0,
+            },
             "timeline": {
                 "earliest_year": None,
                 "latest_year": None,

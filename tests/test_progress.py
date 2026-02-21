@@ -1,12 +1,36 @@
-"""Tests for progress indicator module."""
-
 import io
 import os
+import threading
 from unittest.mock import patch
 
 import pytest
 
 from gedcom_tools.progress import Colors, PhaseTracker, Spinner, _NullSpinner
+
+
+def _controlled_wait(max_ticks):
+    """Return a wait function that allows max_ticks iterations then stops."""
+    call_count = 0
+
+    def wait(timeout=None):
+        nonlocal call_count
+        call_count += 1
+        return call_count > max_ticks
+
+    return wait
+
+
+def _make_tty_stream():
+    stream = io.StringIO()
+    stream.isatty = lambda: True
+    return stream
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_spinner_threads():
+    yield
+    leaked = [t for t in threading.enumerate() if t.name == "spinner-animate"]
+    assert not leaked, f"Spinner thread leaked: {leaked}"
 
 
 class TestColors:
@@ -33,8 +57,7 @@ class TestColors:
         assert not colors.enabled
 
     def test_colors_enabled_for_tty(self):
-        stream = io.StringIO()
-        stream.isatty = lambda: True
+        stream = _make_tty_stream()
         colors = Colors(stream=stream)
         assert colors.enabled
         assert colors.cyan == "\033[36m"
@@ -57,13 +80,18 @@ class TestSpinner:
         assert "\r" not in output
 
     def test_spinner_tty_has_animation(self):
-        stream = io.StringIO()
-        stream.isatty = lambda: True
-        with Spinner("Testing...", stream=stream) as s:
-            s.update()
+        stream = _make_tty_stream()
+        s = Spinner("Testing...", stream=stream)
+        s._stop_event.wait = _controlled_wait(5)
+        try:
+            s.start()
+            if s._thread is not None:
+                s._thread.join()
+        finally:
+            s.stop()
         output = stream.getvalue()
-        assert "⠋" in output or "⠙" in output
-        assert "\r" in output
+        braille_in_output = [c for c in output if c in Spinner.FRAMES]
+        assert len(braille_in_output) >= 2
 
     def test_spinner_success_shows_checkmark(self):
         stream = io.StringIO()
@@ -89,13 +117,16 @@ class TestSpinner:
         assert "✗" in output
 
     def test_spinner_no_color_flag(self):
-        stream = io.StringIO()
-        stream.isatty = lambda: True
-        with Spinner("Testing...", stream=stream, no_color=True):
-            pass
+        stream = _make_tty_stream()
+        s = Spinner("Testing...", stream=stream, no_color=True)
+        s._stop_event.wait = _controlled_wait(2)
+        try:
+            s.start()
+            if s._thread is not None:
+                s._thread.join()
+        finally:
+            s.stop()
         output = stream.getvalue()
-        # Color codes should not be present (36m=cyan, 32m=green, 31m=red, etc.)
-        # But cursor control codes like \033[K (clear line) are still allowed
         assert "\033[36m" not in output  # cyan
         assert "\033[32m" not in output  # green
         assert "\033[31m" not in output  # red
@@ -116,6 +147,140 @@ class TestSpinner:
         s.update()
         output = stream.getvalue()
         assert output == ""
+
+    def test_spinner_auto_animates(self):
+        stream = _make_tty_stream()
+        s = Spinner("Animating...", stream=stream)
+        s._stop_event.wait = _controlled_wait(5)
+        try:
+            s.start()
+            if s._thread is not None:
+                s._thread.join()
+        finally:
+            s.stop()
+        output = stream.getvalue()
+        distinct_frames = {c for c in output if c in Spinner.FRAMES}
+        assert len(distinct_frames) >= 2
+
+    def test_animate_produces_distinct_frames(self):
+        stream = _make_tty_stream()
+        s = Spinner("Direct test", stream=stream)
+        s._stop_event.wait = _controlled_wait(3)
+        s._animate()
+        output = stream.getvalue()
+        frames_seen = [c for c in output if c in Spinner.FRAMES]
+        assert len(frames_seen) >= 2
+
+    def test_spinner_update_stores_suffix(self):
+        stream = io.StringIO()
+        s = Spinner("Suffix test", stream=stream)
+        s.start()
+        try:
+            s.update(" (500 records)")
+            assert s._suffix == " (500 records)"
+        finally:
+            s.stop()
+
+    def test_spinner_suffix_appears_in_output(self):
+        stream = _make_tty_stream()
+        s = Spinner("Loading", stream=stream)
+        s._stop_event.wait = _controlled_wait(3)
+        s.update(" (42 items)")  # stored even before start
+        s._suffix = " (42 items)"
+        s._animate()
+        output = stream.getvalue()
+        assert "(42 items)" in output
+
+    def test_spinner_non_tty_no_thread(self):
+        stream = io.StringIO()
+        s = Spinner("No thread", stream=stream)
+        s.start()
+        try:
+            assert s._thread is None
+        finally:
+            s.stop()
+
+    def test_spinner_stop_joins_thread(self):
+        stream = _make_tty_stream()
+        s = Spinner("Join test", stream=stream)
+        s._stop_event.wait = _controlled_wait(2)
+        s.start()
+        s.stop()
+        assert s._thread is None
+
+    def test_spinner_exception_stops_thread(self):
+        stream = _make_tty_stream()
+        s = Spinner("Exception test", stream=stream)
+        s._stop_event.wait = _controlled_wait(2)
+        with pytest.raises(ValueError):
+            with s:
+                raise ValueError("boom")
+        assert s._thread is None
+
+    def test_spinner_double_start_ignored(self):
+        stream = _make_tty_stream()
+        s = Spinner("Double start", stream=stream)
+        s._stop_event.wait = _controlled_wait(2)
+        try:
+            s.start()
+            first_thread = s._thread
+            s.start()  # should be a no-op
+            assert s._thread is first_thread
+        finally:
+            s.stop()
+
+    def test_spinner_update_after_stop(self):
+        stream = io.StringIO()
+        s = Spinner("After stop", stream=stream)
+        s.start()
+        s.stop()
+        s.update(" should not crash")
+        assert s._suffix == ""  # suffix unchanged — update was a no-op
+
+    def test_spinner_reuse_after_stop(self):
+        stream = _make_tty_stream()
+        s = Spinner("Reuse test", stream=stream)
+        s._stop_event.wait = _controlled_wait(2)
+        s.start()
+        s.stop()
+
+        # Second cycle — use 0 ticks so the thread exits before rendering
+        s._stop_event.wait = _controlled_wait(0)
+        s.start()
+        try:
+            assert s._running
+            assert s._thread is not None
+            assert not s._line_written  # reset by start()
+        finally:
+            s.stop()
+
+    def test_animate_handles_broken_stream_write(self):
+        stream = _make_tty_stream()
+        s = Spinner("Broken write", stream=stream)
+        s._stop_event.wait = _controlled_wait(3)
+        original_write = stream.write
+        call_count = 0
+
+        def failing_write(data):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise OSError("broken pipe")
+            return original_write(data)
+
+        stream.write = failing_write
+        s._animate()  # should not raise
+
+    def test_animate_handles_broken_stream_flush(self):
+        stream = _make_tty_stream()
+        s = Spinner("Broken flush", stream=stream)
+        s._stop_event.wait = _controlled_wait(3)
+
+        def failing_flush():
+            raise OSError("broken pipe")
+
+        stream.flush = failing_flush
+        s._animate()  # should not raise
 
 
 class TestPhaseTracker:
@@ -155,7 +320,6 @@ class TestPhaseTracker:
             pass
 
         output = stream.getvalue()
-        # Color codes should not be present
         assert "\033[36m" not in output  # cyan
         assert "\033[32m" not in output  # green
         assert "\033[2m" not in output  # dim

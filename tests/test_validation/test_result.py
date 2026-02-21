@@ -1,5 +1,3 @@
-"""Tests for validation result formatting."""
-
 import json
 
 from gedcom_tools.progress import Colors

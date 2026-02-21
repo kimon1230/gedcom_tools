@@ -498,13 +498,7 @@ class ValidationEngine:
     def _collect_sub_xrefs_recursive(
         self, record: Record, parent_xref: str, depth: int = 0
     ) -> None:
-        """Recursively collect all xref usages from sub-records.
-
-        Args:
-            record: The record to process.
-            parent_xref: The xref of the parent record for context.
-            depth: Current recursion depth (GEDCOM allows levels 0-99).
-        """
+        # GEDCOM allows levels 0-99; cap depth to avoid runaway recursion
         if depth >= MAX_NESTING_DEPTH:
             return
 
@@ -562,11 +556,7 @@ class ValidationEngine:
         return extract_year_from_date(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
-        """Check version-specific requirements when --strict is set.
-
-        Args:
-            header: The HEAD record from the GEDCOM file.
-        """
+        # --strict mode: enforce version-specific requirements
         if self.strict is None:
             return
 

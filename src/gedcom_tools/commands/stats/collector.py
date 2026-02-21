@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import sys
+import unicodedata
 from collections import Counter
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from ged4py.model import Pointer
 from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
 from gedcom_tools.commands.stats.formatters import StatsResult
@@ -44,6 +46,7 @@ from gedcom_tools.graph import (
     count_isolated,
     find_connected_components,
 )
+from gedcom_tools.language_detect import GedcomLanguageDetector
 from gedcom_tools.progress import PhaseTracker
 from gedcom_tools.utils import (
     EncodingInfo,
@@ -63,9 +66,49 @@ MAX_LIFESPAN_YEARS = 110
 # Practical limit for place hierarchy traversal
 MAX_LOCATION_DEPTH = 10
 
+# Tags on INDI sub-records that are NOT events/attributes
+_INDI_NON_EVENT_TAGS = frozenset(
+    {
+        "NAME",
+        "SEX",
+        "NOTE",
+        "FAMC",
+        "FAMS",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "RFN",
+        "AFN",
+        "REFN",
+        "RIN",
+        "ALIA",
+        "ANCI",
+        "DESI",
+        "SUBM",
+        "ASSO",
+        "RESN",
+    }
+)
+
+# Tags on FAM sub-records that are NOT events
+_FAM_NON_EVENT_TAGS = frozenset(
+    {
+        "HUSB",
+        "WIFE",
+        "CHIL",
+        "NCHI",
+        "NOTE",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "REFN",
+        "RIN",
+        "SUBM",
+    }
+)
+
 
 class StatsCollector:
-    """Collects and calculates statistics from a GEDCOM file."""
 
     def __init__(
         self,
@@ -87,13 +130,19 @@ class StatsCollector:
         self.record_counts: dict[str, int] = {}
         self.encoding_info: EncodingInfo | None = None
 
+        # Language detection state
+        self.note_lookup: dict[str, str] = {}
+        self.referenced_xrefs: set[str] = set()
+        self.detected_languages: set[str] = set()
+        self.lang_detector: GedcomLanguageDetector | None = None
+
         # Calculate living threshold dynamically
         self.living_threshold_year = date.today().year - MAX_LIFESPAN_YEARS
 
     def collect(self) -> StatsResult:
         """Run collection and return statistics result."""
         tracker = PhaseTracker(
-            total_phases=3,
+            total_phases=4,
             stream=sys.stderr,
             no_color=self.no_color,
             quiet=self.quiet,
@@ -104,16 +153,21 @@ class StatsCollector:
         with tracker.phase("Detecting encoding"):
             self._detect_encoding()
 
-        # Phase 2: Collect data
+        # Phase 2: Collect data (also builds note_lookup)
         with tracker.phase("Collecting data") as spinner:
             self._collect_data(spinner)
 
-        # Phase 3: Calculate statistics
+        # Phase 3: Load language models (if the file has INDI/FAM records)
+        with tracker.phase("Loading language models"):
+            if self.individuals or self.families:
+                self.lang_detector = GedcomLanguageDetector()
+                self._detect_languages()
+
+        # Phase 4: Calculate statistics
         with tracker.phase("Calculating statistics"):
             return self._calculate_stats()
 
     def _detect_encoding(self) -> None:
-        """Detect file encoding."""
         try:
             self.encoding_info = detect_encoding(self.file_path)
         except (CodecError, ParserError, IntegrityError) as e:
@@ -124,6 +178,11 @@ class StatsCollector:
     def _collect_data(self, spinner: object) -> None:
         """Collect all data in a single pass through the file."""
         with GedcomReader(str(self.file_path)) as reader:
+            # Pre-pass: build note lookup for language detection
+            for rec in reader.records0("NOTE"):
+                if rec.xref_id and rec.value:
+                    self.note_lookup[rec.xref_id] = str(rec.value)
+
             count = 0
             for record in reader.records0():
                 count += 1
@@ -141,15 +200,78 @@ class StatsCollector:
                 elif tag == "FAM":
                     self._collect_family(record)
 
+    def _detect_note_language(self, sub: Any, category: str) -> None:
+        """Detect language of a NOTE sub-record and track it."""
+        if self.lang_detector is None:
+            return
+
+        if isinstance(sub, Pointer):
+            xref = str(sub.value)
+            self.referenced_xrefs.add(xref)
+            text = self.note_lookup.get(xref)
+        elif sub.value is not None:
+            xref = None
+            text = str(sub.value)
+            if not text.strip():
+                return
+        else:
+            return
+
+        if text is None:
+            return
+
+        text = unicodedata.normalize("NFC", text).strip()
+        if len(text) < self.lang_detector.min_length:
+            return
+
+        # Use xref as cache key for pointer notes
+        lang, was_skipped = self.lang_detector.detect(text)
+        if not was_skipped and lang != "unknown":
+            self.detected_languages.add(lang)
+
+    def _detect_languages(self) -> None:
+        """Run language detection across all collected INDI/FAM note sub-records."""
+        with GedcomReader(str(self.file_path)) as reader:
+            for rec in reader.records0("INDI"):
+                for sub in rec.sub_records:
+                    if sub.tag == "NOTE":
+                        self._detect_note_language(sub, "stories")
+                    elif sub.tag not in _INDI_NON_EVENT_TAGS:
+                        for subsub in sub.sub_records:
+                            if subsub.tag == "NOTE":
+                                self._detect_note_language(subsub, "events")
+
+            for rec in reader.records0("FAM"):
+                for sub in rec.sub_records:
+                    if sub.tag == "NOTE":
+                        self._detect_note_language(sub, "events")
+                    elif sub.tag not in _FAM_NON_EVENT_TAGS:
+                        for subsub in sub.sub_records:
+                            if subsub.tag == "NOTE":
+                                self._detect_note_language(subsub, "events")
+
+            # Post-pass: unreferenced top-level notes
+            for xref, text in self.note_lookup.items():
+                if xref not in self.referenced_xrefs:
+                    self._detect_note_language_text(text)
+
+    def _detect_note_language_text(self, text: str) -> None:
+        if self.lang_detector is None:
+            return
+        text = unicodedata.normalize("NFC", text).strip()
+        if len(text) < self.lang_detector.min_length:
+            return
+        lang, was_skipped = self.lang_detector.detect(text)
+        if not was_skipped and lang != "unknown":
+            self.detected_languages.add(lang)
+
     def _collect_individual(self, record: Record) -> None:
-        """Collect data from an INDI record."""
         xref = record.xref_id
         if not xref:
             return
 
         data = IndividualData(xref=xref)
 
-        # Name
         name_rec = record.sub_tag("NAME")
         if name_rec and name_rec.value:
             name_val = name_rec.value
@@ -182,12 +304,11 @@ class StatsCollector:
                     data.surname = str(sub.value)
                     data.surname_parts = data.surname.split()
 
-        # Sex
         sex_rec = record.sub_tag("SEX")
         if sex_rec and sex_rec.value:
             data.sex = str(sex_rec.value).upper()
 
-        # Birth data with precision, month, and year
+        # FIXME: ged4py date parsing is flaky with non-English months
         birth_rec = record.sub_tag("BIRT")
         if birth_rec:
             date_rec = birth_rec.sub_tag("DATE")
@@ -243,7 +364,6 @@ class StatsCollector:
         self.individuals[xref] = data
 
     def _collect_family(self, record: Record) -> None:
-        """Collect data from a FAM record."""
         xref = record.xref_id
         if not xref:
             return
@@ -269,11 +389,9 @@ class StatsCollector:
         self.families[xref] = data
 
     def _collect_locations(self, record: Record) -> None:
-        """Collect all PLAC values from a record and its sub-records."""
         self._collect_locations_recursive(record)
 
     def _collect_locations_recursive(self, record: Record, depth: int = 0) -> None:
-        """Recursively collect PLAC values."""
         if depth > MAX_LOCATION_DEPTH:
             return
 
@@ -283,7 +401,6 @@ class StatsCollector:
             self._collect_locations_recursive(sub, depth + 1)
 
     def _extract_year(self, record: Record, path: str) -> int | None:
-        """Extract year from a date at the given path."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
@@ -298,7 +415,6 @@ class StatsCollector:
         return raw_name.replace("/", "").strip()
 
     def _get_surname_safe(self, indi: IndividualData) -> str:
-        """Safely get surname from individual, handling empty names."""
         if indi.surname:
             return indi.surname
         if indi.name:
@@ -308,7 +424,6 @@ class StatsCollector:
         return "?"
 
     def _calculate_stats(self) -> StatsResult:
-        """Calculate all statistics from collected data."""
         result = StatsResult(
             file_path=str(self.file_path),
             encoding_info=self.encoding_info,
@@ -316,6 +431,7 @@ class StatsCollector:
             families=len(self.families),
             sources=self.record_counts.get("SOUR", 0),
             locations=len(self.locations),
+            distinct_languages=len(self.detected_languages),
         )
 
         if not self.individuals:
@@ -573,7 +689,6 @@ class StatsCollector:
         return f"{husb_surname}/{wife_surname}"
 
     def _calculate_completeness(self, result: StatsResult) -> None:
-        """Calculate data completeness statistics."""
         total = len(self.individuals)
         if total == 0:
             return
@@ -650,7 +765,6 @@ class StatsCollector:
         )
 
     def _calculate_locations(self, result: StatsResult) -> None:
-        """Calculate top locations."""
         total_loc_refs = sum(self.locations.values())
         if total_loc_refs == 0:
             return
@@ -665,7 +779,6 @@ class StatsCollector:
     # -------------------------------------------------------------------------
 
     def _build_aggregate_stats(self, values: list[int]) -> AggregateStats | None:
-        """Build AggregateStats from a list of values. Returns None if empty."""
         if not values:
             return None
 
@@ -677,7 +790,6 @@ class StatsCollector:
         )
 
     def _calculate_marriage_ages(self) -> None:
-        """Calculate first marriage age for all individuals."""
         for xref, indi in self.individuals.items():
             if not indi.fams_xrefs or indi.birth_year is None:
                 continue
@@ -714,7 +826,6 @@ class StatsCollector:
                     indi.spouse_birth_year = self.individuals[spouse_xref].birth_year
 
     def _calculate_first_child_ages(self) -> None:
-        """Calculate age at first child for all parents."""
         for indi in self.individuals.values():
             if not indi.fams_xrefs or indi.birth_year is None:
                 continue
@@ -743,7 +854,6 @@ class StatsCollector:
                     indi.first_child_age = age
 
     def _calculate_life_events(self, result: StatsResult) -> None:
-        """Calculate life event statistics."""
         # Marriage age by gender and century
         male_ages: list[int] = []
         female_ages: list[int] = []
@@ -812,7 +922,6 @@ class StatsCollector:
             )
 
     def _calculate_spousal_age_gap(self, result: StatsResult) -> None:
-        """Calculate spousal age gap by iterating families (not individuals)."""
         age_gaps: list[int] = []
 
         for fam in self.families.values():
@@ -835,7 +944,6 @@ class StatsCollector:
         result.spousal_age_gap = self._build_aggregate_stats(age_gaps)
 
     def _calculate_family_size(self, result: StatsResult) -> None:
-        """Calculate children per family distribution (families with 1+ children)."""
         sizes: list[int] = []
         for fam in self.families.values():
             child_count = len(fam.chil_xrefs)
@@ -874,7 +982,6 @@ class StatsCollector:
         )
 
     def _calculate_birth_patterns(self, result: StatsResult) -> None:
-        """Calculate birth month distribution (non-approximate dates only)."""
         month_counts: dict[int, int] = {}
 
         for indi in self.individuals.values():
@@ -887,7 +994,6 @@ class StatsCollector:
             result.birth_by_month = month_counts
 
     def _calculate_lifespan_by_century(self, result: StatsResult) -> None:
-        """Calculate average lifespan by birth century."""
         century_lifespans: dict[str, list[int]] = {}
 
         for indi in self.individuals.values():
@@ -907,7 +1013,6 @@ class StatsCollector:
                 result.lifespan_by_century[century] = stats
 
     def _calculate_date_precision(self, result: StatsResult) -> None:
-        """Calculate date precision statistics for birth dates."""
         if not self.individuals:
             return
 
@@ -933,7 +1038,6 @@ class StatsCollector:
             result.date_precision = stats
 
     def _calculate_occupation_coverage(self, result: StatsResult) -> None:
-        """Calculate percentage of individuals with occupation recorded."""
         if not self.individuals:
             return
 
@@ -949,7 +1053,6 @@ class StatsCollector:
         )
 
     def _calculate_source_depth(self, result: StatsResult) -> None:
-        """Calculate average sources per person."""
         if not self.individuals:
             return
 

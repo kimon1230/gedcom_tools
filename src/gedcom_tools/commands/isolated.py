@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 @dataclass
 class IsolatedIndividual:
-    """Minimal data about an isolated individual for display."""
 
     xref: str
     name: str = ""
@@ -33,7 +32,6 @@ class IsolatedIndividual:
 
 @dataclass
 class IsolatedResult:
-    """Result of isolated analysis."""
 
     file_path: str
     total_individuals: int
@@ -45,7 +43,6 @@ class IsolatedResult:
         return len(self.singletons) + 2 * len(self.pairs)
 
     def format_text(self, colors: Colors, quiet: bool = False) -> str:
-        """Format result as human-readable text."""
         if quiet:
             if self.isolated_count == 0:
                 return ""
@@ -101,7 +98,6 @@ class IsolatedResult:
         return "\n".join(lines)
 
     def format_json(self) -> str:
-        """Format result as JSON."""
         data = {
             "file": self.file_path,
             "summary": {
@@ -117,12 +113,10 @@ class IsolatedResult:
 
 
 def _header(colors: Colors, title: str) -> str:
-    """Format a section header with color."""
     return f"{colors.cyan}=== {title} ==={colors.reset}"
 
 
 def _format_individual(ind: IsolatedIndividual) -> str:
-    """Format an individual for text display."""
     parts = [f"{ind.name} ({ind.xref})"]
     if ind.sex:
         parts.append(ind.sex)
@@ -134,7 +128,6 @@ def _format_individual(ind: IsolatedIndividual) -> str:
 
 
 def _individual_to_dict(ind: IsolatedIndividual) -> dict[str, str | int | None]:
-    """Convert individual to JSON-serializable dict."""
     return {
         "xref": ind.xref,
         "name": ind.name,
@@ -237,7 +230,6 @@ def _collect_data(
 def register_subcommand(
     subparsers: _SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    """Register the isolated subcommand."""
     parser = subparsers.add_parser(
         "isolated",
         help="Find isolated individuals with no family connections",
@@ -254,7 +246,6 @@ def register_subcommand(
 
 
 def run(args: Namespace) -> int:
-    """Execute the isolated command."""
     file_path: Path = args.file
 
     if err := validate_input_file(file_path):

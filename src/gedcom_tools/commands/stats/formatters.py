@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 
 @dataclass
 class StatsResult:
-    """Complete statistics result."""
 
     file_path: str
     encoding_info: EncodingInfo | None
@@ -36,6 +35,7 @@ class StatsResult:
     families: int = 0
     sources: int = 0
     locations: int = 0
+    distinct_languages: int = 0
 
     # Timeline
     earliest_year: TimelineEntry | None = None
@@ -91,13 +91,13 @@ class StatsResult:
     source_depth: AggregateStats | None = None
 
     def format_text(self, colors: Colors, quiet: bool = False) -> str:
-        """Format as human-readable text."""
         if quiet:
             return (
                 f"{self.individuals:,} individuals, "
                 f"{self.families:,} families, "
                 f"{self.sources:,} sources, "
-                f"{self.locations:,} locations"
+                f"{self.locations:,} locations, "
+                f"{self.distinct_languages} language(s)"
             )
 
         lines: list[str] = []
@@ -114,6 +114,7 @@ class StatsResult:
         lines.append(f"  Families:         {self.families:>8,}")
         lines.append(f"  Sources:          {self.sources:>8,}")
         lines.append(f"  Locations:        {self.locations:>8,}")
+        lines.append(f"  Distinct Languages:{self.distinct_languages:>7,}")
         lines.append("")
 
         # Timeline
@@ -473,7 +474,6 @@ class StatsResult:
         return "\n".join(lines)
 
     def format_json(self) -> str:
-        """Format as JSON."""
         data: dict[str, Any] = {
             "file": self.file_path,
             "encoding": None,
@@ -482,6 +482,7 @@ class StatsResult:
                 "families": self.families,
                 "sources": self.sources,
                 "locations": self.locations,
+                "distinct_languages": self.distinct_languages,
             },
             "timeline": {
                 "earliest_year": None,

@@ -1,5 +1,3 @@
-"""Tests for the validation engine."""
-
 from pathlib import Path
 
 from gedcom_tools.validation import validate_file
@@ -140,7 +138,6 @@ class TestValidateFileInterface:
 
 
 class TestLineChecks:
-    """Tests for line-level validation checks."""
 
     def test_trailing_whitespace(self):
         result = validate_file(
@@ -174,7 +171,6 @@ class TestLineChecks:
 
 
 class TestStrictModeChecks:
-    """Tests for strict mode validation checks."""
 
     def test_missing_gedc_vers(self):
         result = validate_file(
@@ -218,7 +214,6 @@ class TestStrictModeChecks:
 
 
 class TestVerboseMode:
-    """Tests for verbose mode."""
 
     def test_verbose_mode_accepted(self):
         result = validate_file(
@@ -228,7 +223,6 @@ class TestVerboseMode:
 
 
 class TestExceptionPaths:
-    """Tests for parser exception handling paths."""
 
     def test_invalid_level_integrity_error(self):
         result = validate_file(FIXTURES / "invalid_level.ged", mode="full", quiet=True)
@@ -298,7 +292,6 @@ class TestOffsetToLine:
 
 
 class TestAnselSupport:
-    """Tests for ANSEL encoding support."""
 
     def test_ansel_file_validates_successfully(self, tmp_path):
         """ANSEL-declared file with ASCII content validates cleanly."""

@@ -1,5 +1,3 @@
-"""Tests for graph utilities (UnionFind, connected components)."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,7 +11,6 @@ from gedcom_tools.graph import (
 
 
 class TestUnionFind:
-    """Tests for the UnionFind data structure."""
 
     def test_singleton_element(self) -> None:
         uf = UnionFind(["a"])
@@ -57,7 +54,6 @@ class TestUnionFind:
 
 
 class TestFindConnectedComponents:
-    """Tests for find_connected_components."""
 
     def test_empty_inputs(self) -> None:
         result = find_connected_components(set(), {})
@@ -144,7 +140,6 @@ class _FakeFamily:
 
 
 class TestBuildFamilyMembers:
-    """Tests for build_family_members utility."""
 
     def test_basic_family(self) -> None:
         fam = _FakeFamily(husb_xref="@I1@", wife_xref="@I2@", chil_xrefs=["@I3@"])
@@ -175,7 +170,6 @@ class TestBuildFamilyMembers:
 
 
 class TestCountIsolated:
-    """Tests for count_isolated utility."""
 
     def test_all_singletons(self) -> None:
         components = {"@I1@": ["@I1@"], "@I2@": ["@I2@"]}

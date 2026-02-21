@@ -1,4 +1,4 @@
-"""Date handling utilities for GEDCOM files."""
+"""GEDCOM date parsing and precision classification."""
 
 from __future__ import annotations
 
@@ -13,18 +13,6 @@ except ImportError:
     DateValueTypes = None  # type: ignore[misc, assignment]
     HAS_DATE_VALUE_TYPES = False
 
-__all__ = [
-    "HAS_DATE_VALUE_TYPES",
-    "DateValueTypes",
-    "MONTH_TO_NUM",
-    "MONTH_PATTERN",
-    "APPROX_PREFIXES",
-    "is_phrase_date",
-    "get_century",
-    "extract_year_from_date",
-    "extract_month",
-    "classify_date_precision",
-]
 
 # Month name to number mapping
 MONTH_TO_NUM: dict[str, int] = {
@@ -64,11 +52,7 @@ APPROX_PREFIXES = (
 
 
 def is_phrase_date(date_val: object) -> bool:
-    """
-    Check if date value is a PHRASE type (no parseable date).
-
-    PHRASE dates like "(date unknown)" have NO .date, .date1, or .date2 attributes.
-    """
+    # PHRASE dates have NO .date/.date1/.date2 — must check before accessing them
     if not HAS_DATE_VALUE_TYPES:
         return False
     return hasattr(date_val, "kind") and date_val.kind == DateValueTypes.PHRASE
@@ -80,15 +64,7 @@ def get_century(year: int) -> str:
 
 
 def extract_year_from_date(date_val: object) -> int | None:
-    """
-    Extract year from a ged4py date value.
-
-    Handles ged4py date structures (verified against ged4py 1.x):
-    - DateValueSimple, About, Before, After: .date.year
-    - DateValueRange, Period: .date1.year (uses first date in range)
-    - DateValuePhrase: returns None (no parseable date)
-    - String fallback with regex for edge cases
-    """
+    """Extract year from a ged4py date value, with regex fallback."""
     if date_val is None:
         return None
 
@@ -96,7 +72,7 @@ def extract_year_from_date(date_val: object) -> int | None:
     if is_phrase_date(date_val):
         return None
 
-    # Forward compatibility: some future ged4py might add .year directly
+    # TODO: remove this once ged4py exposes .year directly on DateValue
     if hasattr(date_val, "year") and date_val.year:
         try:
             return int(date_val.year)
@@ -131,12 +107,7 @@ def extract_year_from_date(date_val: object) -> int | None:
 
 
 def extract_month(date_val: object) -> int | None:
-    """
-    Extract month number (1-12) from a date value.
-
-    Returns None if month cannot be determined or date is PHRASE type.
-    ged4py month values are STRING enums (e.g., "OCT", "JAN"), not integers.
-    """
+    # ged4py month values are STRING enums ("OCT", "JAN"), not ints
     if date_val is None:
         return None
 
@@ -166,19 +137,13 @@ def extract_month(date_val: object) -> int | None:
 
 
 def classify_date_precision(date_val: object) -> tuple[str, bool]:
-    """
-    Classify a GEDCOM date value into precision categories.
+    """Classify into (category, has_full_components).
 
-    Returns:
-        Tuple of (category, has_full_components) where:
-        - category: "full", "partial", "approximate", or "missing"
-        - has_full_components: True if date has day+month+year (even if approximate)
-
-    ged4py DateValue type attribute availability (verified):
-    - Simple, About, Before, After: has .date (with .year, .month, .day)
-    - Range, Period: has .date1, .date2 (NO .date)
-    - Phrase: has NONE of these - returns ("missing", False)
+    Category is "full", "partial", "approximate", or "missing".
+    has_full_components is True when day+month+year are all present.
     """
+    # ged4py date types: Simple/About/Before/After have .date,
+    # Range/Period have .date1/.date2, Phrase has none of these.
     if date_val is None:
         return ("missing", False)
 

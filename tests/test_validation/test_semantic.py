@@ -1,5 +1,3 @@
-"""Tests for semantic validation."""
-
 from gedcom_tools.validation.issues import (
     ErrorCode,
     FamilyInfo,

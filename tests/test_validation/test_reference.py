@@ -1,5 +1,3 @@
-"""Tests for reference validation."""
-
 from gedcom_tools.validation.issues import ErrorCode
 from gedcom_tools.validation.reference import ReferenceValidator
 

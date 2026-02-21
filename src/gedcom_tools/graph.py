@@ -1,4 +1,4 @@
-"""Graph utilities for GEDCOM family connectivity analysis."""
+"""Graph algorithms for GEDCOM family tree connectivity."""
 
 from __future__ import annotations
 
@@ -47,17 +47,7 @@ def find_connected_components(
     individual_xrefs: set[str],
     family_members: dict[str, list[str]],
 ) -> dict[str, list[str]]:
-    """Find connected components among individuals linked by families.
-
-    Args:
-        individual_xrefs: All known INDI xrefs.
-        family_members: Maps each FAM xref to a list of its member INDI xrefs
-            (HUSB + WIFE + CHIL, pre-filtered for None). Members not in
-            individual_xrefs are silently skipped.
-
-    Returns:
-        Components grouped by root xref: ``{root: [member_xrefs]}``.
-    """
+    # TODO: consider returning frozensets instead of lists for immutability
     uf = UnionFind(individual_xrefs)
 
     for members in family_members.values():
@@ -74,17 +64,7 @@ def find_connected_components(
 def build_family_members(
     families: Iterable[tuple[str, Any]],
 ) -> dict[str, list[str]]:
-    """Build family-members mapping from family objects.
-
-    Each family object must have ``husb_xref``, ``wife_xref`` (str | None),
-    and ``chil_xrefs`` (list[str]) attributes.
-
-    Args:
-        families: Iterable of (xref, family_object) pairs.
-
-    Returns:
-        Dict mapping FAM xref to list of member INDI xrefs.
-    """
+    # Expects objects with husb_xref, wife_xref, chil_xrefs attrs
     result: dict[str, list[str]] = {}
     for fam_xref, fam in families:
         members = [
@@ -95,12 +75,4 @@ def build_family_members(
 
 
 def count_isolated(components: dict[str, list[str]]) -> int:
-    """Count individuals in components of size 1 or 2.
-
-    Args:
-        components: Result from :func:`find_connected_components`.
-
-    Returns:
-        Total number of individuals in singleton and pair components.
-    """
     return sum(len(c) for c in components.values() if len(c) <= 2)
