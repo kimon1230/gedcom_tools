@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,20 @@ def extract_xref(value: Any) -> str | None:
     return None
 
 
+_XREF_RE = re.compile(r"@([A-Za-z]*)(\d+)@")
+
+
+def xref_sort_key(xref: str) -> tuple[str, int, str]:
+    """Sort key for GEDCOM XREFs that orders numerically within each prefix.
+
+    "@I2@" < "@I10@" and "@F1@" < "@I1@".
+    """
+    m = _XREF_RE.match(xref)
+    if m:
+        return (m.group(1), int(m.group(2)), "")
+    return ("", 0, xref)
+
+
 def validate_input_file(file_path: Path) -> int | None:
     """Validate input file exists and is readable. Returns error code or None."""
     if not file_path.exists():
@@ -124,3 +139,34 @@ def count_sources_recursive(record: Record, _visited: set[int] | None = None) ->
             count += 1
         count += count_sources_recursive(sub, _visited)
     return count
+
+
+def parse_name_record(name_record: Record | None) -> tuple[str, str]:
+    """Parse given name and surname from a ged4py NAME sub-record.
+
+    Handles NAME tuple extraction and GIVN/SURN sub-record overrides.
+    Returns (given_name, surname). Callers compose full_name or
+    extract first-token as needed.
+    """
+    if name_record is None:
+        return ("", "")
+
+    given = ""
+    surname = ""
+
+    val = name_record.value
+    if val is not None:
+        if isinstance(val, tuple) and len(val) >= 2:
+            given = val[0] or ""
+            surname = val[1] or ""
+        else:
+            given = str(val)
+
+    # GIVN/SURN sub-records override tuple values when present
+    for sub in name_record.sub_records:
+        if sub.tag == "GIVN" and sub.value:
+            given = str(sub.value)
+        elif sub.tag == "SURN" and sub.value:
+            surname = str(sub.value)
+
+    return (given, surname)

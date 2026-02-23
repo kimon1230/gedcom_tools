@@ -634,6 +634,98 @@ Encoding: UTF-8
 
 **Supported languages:** 26 languages via fast-langdetect, including Arabic, Chinese, English, French, German, Greek, and more. Also accepts "unknown" for unclassifiable texts.
 
+#### compare
+
+Compare two GEDCOM files to find matching individuals using probabilistic record linkage.
+
+```bash
+# Compare two GEDCOM files
+gedcom-tools compare tree_a.ged tree_b.ged
+
+# Only show certain matches
+gedcom-tools compare tree_a.ged tree_b.ged --show-matches certain
+
+# List individuals unique to each file
+gedcom-tools compare tree_a.ged tree_b.ged --list-unique
+
+# Adjust thresholds
+gedcom-tools compare tree_a.ged tree_b.ged --certain-threshold 0.90 --probable-threshold 0.70
+
+# JSON output
+gedcom-tools --format json compare tree_a.ged tree_b.ged
+
+# Reject sex mismatches
+gedcom-tools compare tree_a.ged tree_b.ged --reject-sex-mismatch
+
+# Quiet mode
+gedcom-tools -q compare tree_a.ged tree_b.ged
+
+# Verbose mode (per-field scores)
+gedcom-tools -v compare tree_a.ged tree_b.ged
+```
+
+<details>
+<summary><b>Sample: Compare two files</b> (tree_a.ged vs tree_b.ged)</summary>
+
+```
+$ gedcom-tools compare tree_a.ged tree_b.ged
+
+File A: tree_a.ged
+File B: tree_b.ged
+Encoding: UTF-8 / UTF-8
+
+=== Summary ===
+  Individuals in A:      100
+  Individuals in B:      120
+  Certain matches:        15
+  Probable matches:        8
+  Unique to A:            77
+  Unique to B:            97
+
+=== Certain Matches (15) ===
+  John Smith (1850-1920) [A:@I1@] ↔ John Smith (1850-1920) [B:@I10@]  score: 0.95
+    Birth Place: "London, England" (A) vs "London, Middlesex, England" (B)
+
+=== Probable Matches (8) ===
+  Mary Johnson (1872-1945) [A:@I2@] ↔ Maria Johnson (1873-1945) [B:@I11@]  score: 0.72
+    Given Name: "Mary" (A) vs "Maria" (B)
+    Birth Year: "1872" (A) vs "1873" (B)
+
+  Tip: use --list-unique to see names of unmatched individuals.
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Quiet mode</b> (tree_a.ged vs tree_b.ged)</summary>
+
+```
+$ gedcom-tools -q compare tree_a.ged tree_b.ged
+
+15 certain, 8 probable, 77 unique to tree_a.ged, 97 unique to tree_b.ged
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--certain-threshold F` | Minimum score for certain match (default: 0.85) |
+| `--probable-threshold F` | Minimum score for probable match (default: 0.65) |
+| `--show-matches {all,certain,probable}` | Which matches to show (default: all) |
+| `--list-unique` | List individuals unique to each file |
+| `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
+| `--reject-sex-mismatch` | Treat sex mismatches as hard reject |
+
+**How it works:**
+
+- Uses weighted Jaro-Winkler string similarity across 7 fields: surname, given name, birth year, death year, birth place, death place, and sex
+- Multi-pass blocking for efficient comparison of large files
+- Three-tier classification: certain, probable, non-match
+- Greedy one-to-one deduplication ensures each individual appears in at most one match
+- See [Compare Command](docs/compare.md) for full methodology details
+
 ## Documentation
 
 Detailed documentation for each command:
@@ -642,6 +734,7 @@ Detailed documentation for each command:
 - [Stats Command](docs/stats.md) - Statistics output and JSON schema
 - [Isolated Command](docs/isolated.md) - Detecting unconnected individuals
 - [Languages Command](docs/languages.md) - Language detection and filtering
+- [Compare Command](docs/compare.md) - Comparing individuals across files
 
 ## Sample Data
 

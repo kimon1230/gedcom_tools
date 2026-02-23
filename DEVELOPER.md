@@ -36,11 +36,20 @@ gedcom_tools/
 │       │   ├── __init__.py      # Commands package init
 │       │   ├── isolated.py      # Isolated individuals command
 │       │   ├── validate.py      # Validation command handler
-│       │   └── stats/           # Stats command package
-│       │       ├── __init__.py  # CLI registration, public API
-│       │       ├── models.py    # Data classes (IndividualData, etc.)
-│       │       ├── collector.py # StatsCollector class
-│       │       └── formatters.py# StatsResult with format methods
+│       │   ├── stats/           # Stats command package
+│       │   │   ├── __init__.py  # CLI registration, public API
+│       │   │   ├── models.py    # Data classes (IndividualData, etc.)
+│       │   │   ├── collector.py # StatsCollector class
+│       │   │   └── formatters.py# StatsResult with format methods
+│       │   └── compare/         # Compare command package
+│       │       ├── __init__.py  # CLI registration, orchestration
+│       │       ├── models.py    # Data classes (CompareIndividual, etc.)
+│       │       ├── collector.py # Individual extraction/normalization
+│       │       ├── phonetics.py # American Soundex encoding
+│       │       ├── blocker.py   # Multi-pass blocking
+│       │       ├── scorer.py    # Weighted Jaro-Winkler scoring
+│       │       ├── dedup.py     # Greedy one-to-one deduplication
+│       │       └── formatters.py# Text and JSON output formatting
 │       └── validation/
 │           ├── __init__.py      # Public API: validate_file()
 │           ├── engine.py        # 4-phase validation orchestrator
@@ -58,13 +67,15 @@ gedcom_tools/
 │   ├── test_progress.py         # Progress UI tests
 │   ├── test_stats.py            # Stats command tests
 │   ├── test_stats_schema.py     # JSON schema validation tests
+│   ├── test_compare_*.py        # Compare command tests (scorer, dedup, formatters, integration)
 │   ├── test_utils.py            # Shared utility tests
 │   └── test_validation/         # Validation engine tests
 ├── docs/
 │   ├── isolated.md              # Isolated command documentation
 │   ├── validate.md              # Validation error/warning codes
 │   ├── stats.md                 # Stats command documentation
-│   └── stats-schema.json        # JSON schema for stats output
+│   ├── stats-schema.json        # JSON schema for stats output
+│   └── compare.md               # Compare command documentation
 ├── pyproject.toml               # Project metadata and tool config
 ├── README.md                    # User documentation
 ├── DEVELOPER.md                 # This file
@@ -98,6 +109,7 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 - **validate** — 4-phase validation engine (see below)
 - **stats** — Collector/Models/Formatters pattern: `StatsCollector` gathers raw data into `IndividualData`/`FamilyData` models, then `StatsResult` computes aggregates and formats output
 - **isolated** — Builds family member sets from GEDCOM FAM records, runs `find_connected_components()` via UnionFind, reports singletons (size 1) and isolated pairs (size 2)
+- **compare** — Collector/Models/Phonetics/Blocker/Scorer/Dedup/Formatters pipeline: extracts individuals from two files, generates candidate pairs via multi-pass blocking, scores with weighted Jaro-Winkler, deduplicates greedily, and formats results
 
 ### Validation Engine (4-Phase Design)
 
@@ -283,6 +295,7 @@ pip-audit
 
 ### Runtime
 - `ged4py` - GEDCOM file parsing
+- `rapidfuzz` - Jaro-Winkler string similarity (used by compare command)
 
 ### Development
 - `pytest` - Testing framework

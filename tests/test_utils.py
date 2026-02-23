@@ -10,6 +10,7 @@ from gedcom_tools.utils import (
     count_sources_recursive,
     detect_encoding,
     extract_xref,
+    parse_name_record,
     validate_input_file,
 )
 
@@ -171,3 +172,70 @@ class TestCountSourcesRecursive:
         rec = MagicMock()
         rec.sub_records = [note]
         assert count_sources_recursive(rec) == 0
+
+
+def _make_name_rec(value, sub_records=None):
+    rec = MagicMock()
+    rec.value = value
+    rec.sub_records = sub_records or []
+    return rec
+
+
+class TestParseNameRecord:
+    def test_normal_tuple(self) -> None:
+        rec = _make_name_rec(("John William", "Smith", "Jr."))
+        given, surname = parse_name_record(rec)
+        assert given == "John William"
+        assert surname == "Smith"
+
+    def test_given_is_none(self) -> None:
+        rec = _make_name_rec((None, "Doe", ""))
+        assert parse_name_record(rec) == ("", "Doe")
+
+    def test_surname_is_none(self) -> None:
+        rec = _make_name_rec(("Maria", None, ""))
+        assert parse_name_record(rec) == ("Maria", "")
+
+    def test_both_none_in_tuple(self) -> None:
+        rec = _make_name_rec((None, None, None))
+        assert parse_name_record(rec) == ("", "")
+
+    def test_givn_overrides_tuple(self) -> None:
+        givn = MagicMock()
+        givn.tag = "GIVN"
+        givn.value = "Jonathan"
+        rec = _make_name_rec(("John", "Smith", ""), sub_records=[givn])
+        given, surname = parse_name_record(rec)
+        assert given == "Jonathan"
+        assert surname == "Smith"
+
+    def test_surn_overrides_tuple(self) -> None:
+        surn = MagicMock()
+        surn.tag = "SURN"
+        surn.value = "Smithson"
+        rec = _make_name_rec(("John", "Smith", ""), sub_records=[surn])
+        given, surname = parse_name_record(rec)
+        assert given == "John"
+        assert surname == "Smithson"
+
+    def test_both_givn_and_surn_override(self) -> None:
+        givn = MagicMock()
+        givn.tag = "GIVN"
+        givn.value = "Jonathan"
+        surn = MagicMock()
+        surn.tag = "SURN"
+        surn.value = "Smithson"
+        rec = _make_name_rec(("John", "Smith", ""), sub_records=[givn, surn])
+        assert parse_name_record(rec) == ("Jonathan", "Smithson")
+
+    def test_non_tuple_value_fallback(self) -> None:
+        # some GEDCOM writers put the raw "John /Smith/" string as value
+        rec = _make_name_rec("John /Smith/")
+        assert parse_name_record(rec) == ("John /Smith/", "")
+
+    def test_none_value(self) -> None:
+        rec = _make_name_rec(None)
+        assert parse_name_record(rec) == ("", "")
+
+    def test_none_record(self) -> None:
+        assert parse_name_record(None) == ("", "")

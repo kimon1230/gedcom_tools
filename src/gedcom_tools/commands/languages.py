@@ -20,7 +20,12 @@ from gedcom_tools.language_detect import (
     GedcomLanguageDetector,
 )
 from gedcom_tools.progress import Colors, PhaseTracker
-from gedcom_tools.utils import EncodingInfo, detect_encoding, validate_input_file
+from gedcom_tools.utils import (
+    EncodingInfo,
+    detect_encoding,
+    validate_input_file,
+    xref_sort_key,
+)
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -586,15 +591,15 @@ class LanguagesCollector:
             )
             result.person_xrefs = sorted(
                 [(x, self._indi_names.get(x, "")) for x in self._person_xrefs],
-                key=lambda t: t[0],
+                key=lambda t: xref_sort_key(t[0]),
             )
-            result.note_xrefs = sorted(self._note_xrefs)
+            result.note_xrefs = sorted(self._note_xrefs, key=xref_sort_key)
             result.event_matches = sorted(
                 [
                     EventMatch(px, et, self._indi_names.get(px))
                     for px, et in self._event_matches
                 ],
-                key=lambda t: (t[0], t[1] or ""),
+                key=lambda t: (xref_sort_key(t[0]), t[1] or ""),
             )
         else:
             rows: list[LanguageRow] = []

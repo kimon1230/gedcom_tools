@@ -324,14 +324,15 @@ class StatsCollector:
 
         # Fallback to CHR/BAPM for birth year only (not month/precision)
         if data.birth_year is None:
-            data.birth_year = self._extract_year(
-                record, "CHR/DATE"
-            ) or self._extract_year(record, "BAPM/DATE")
+            data.birth_year = self._extract_year(record, "CHR/DATE")
+            if data.birth_year is None:
+                data.birth_year = self._extract_year(record, "BAPM/DATE")
 
         # Death year with fallback: DEAT/DATE -> BURI/DATE
-        data.death_year = self._extract_year(record, "DEAT/DATE") or self._extract_year(
-            record, "BURI/DATE"
-        )
+        if data.death_year is None:
+            data.death_year = self._extract_year(record, "DEAT/DATE")
+            if data.death_year is None:
+                data.death_year = self._extract_year(record, "BURI/DATE")
 
         # Occupation (first one found)
         occu_rec = record.sub_tag("OCCU")

@@ -4,14 +4,22 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0]
+## [0.4.0]
 
 ### Added
+- `compare` command — compare two GEDCOM files to find matching individuals using probabilistic record linkage (weighted Jaro-Winkler scoring, multi-pass blocking, greedy one-to-one deduplication)
 - `languages` command — detects languages used in notes, stories, and event descriptions
 - `--language` filter mode — lists persons, notes, and events written in a specific language (accepts name or ISO 639-1 code)
 - `--min-length` option to set minimum text length threshold for language detection
 - Full language model (126MB) auto-downloaded on first run
 - New dependency: `fast-langdetect` for language detection
+- JSON output includes `_total` fields for all array sections (enables truncation-aware consumers)
+- Sex mismatch penalty visible in verbose text output and JSON (`sex_penalty` field)
+
+### Fixed
+- Year fallback logic: christening/baptism/burial dates no longer suppress year 0 via `or` short-circuit
+- Stats collector: death year fallback no longer unconditionally overwrites previously extracted value
+- Compare spec: corrected sex handling, blocking pass descriptions, and insufficient_data documentation
 
 ## [0.2.1]
 
