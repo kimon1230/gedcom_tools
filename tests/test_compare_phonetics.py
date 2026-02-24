@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from gedcom_tools.commands.compare.phonetics import soundex
+from gedcom_tools.phonetics import soundex
 
 
 class TestSoundex:

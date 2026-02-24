@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,6 +16,21 @@ from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 
 if TYPE_CHECKING:
     from ged4py.model import Record
+
+
+def normalize_display(text: str) -> str:
+    """NFC normalization for consistent display across encodings."""
+    return unicodedata.normalize("NFC", text) if text else ""
+
+
+def normalize_compare(text: str) -> str:
+    """Full normalization for matching: NFC, strip diacritics, lowercase."""
+    if not text:
+        return ""
+    nfc = unicodedata.normalize("NFC", text)
+    nfd = unicodedata.normalize("NFD", nfc)
+    stripped = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+    return stripped.lower()
 
 
 @dataclass

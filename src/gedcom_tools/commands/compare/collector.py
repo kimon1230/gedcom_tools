@@ -1,34 +1,22 @@
 from __future__ import annotations
 
-import unicodedata
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ged4py.parser import GedcomReader
 
 from gedcom_tools.commands.compare.models import CompareIndividual
-from gedcom_tools.commands.compare.phonetics import soundex
-from gedcom_tools.dates import extract_year_from_date
-from gedcom_tools.utils import extract_xref, parse_name_record
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from ged4py.model import Record
-
-
-def normalize_display(text: str) -> str:
-    """NFC normalization for consistent display across encodings."""
-    return unicodedata.normalize("NFC", text) if text else ""
-
-
-def normalize_compare(text: str) -> str:
-    """Full normalization for matching: NFC → strip diacritics → lowercase."""
-    if not text:
-        return ""
-    nfc = unicodedata.normalize("NFC", text)
-    nfd = unicodedata.normalize("NFD", nfc)
-    stripped = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
-    return stripped.lower()
+from gedcom_tools.dates import extract_year_from_date
+from gedcom_tools.phonetics import soundex
+from gedcom_tools.utils import (
+    extract_xref,
+    normalize_compare,
+    normalize_display,
+    parse_name_record,
+)
 
 
 def _decade_key(year: int | None) -> str:

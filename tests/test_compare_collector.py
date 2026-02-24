@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gedcom_tools.commands.compare.collector import (
-    collect_individuals,
-    normalize_compare,
-    normalize_display,
-)
+from gedcom_tools.commands.compare.collector import collect_individuals
+from gedcom_tools.utils import normalize_compare, normalize_display
 
 
 def _write_ged(tmp_path: Path, content: str, filename: str = "test.ged") -> Path:
