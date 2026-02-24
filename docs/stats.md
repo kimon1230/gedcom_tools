@@ -175,3 +175,11 @@ Extreme values are filtered to avoid data errors skewing statistics:
 
 Values outside these ranges are silently excluded from aggregates.
 These thresholds are defined in `src/gedcom_tools/constants.py`.
+
+## Related Commands
+
+- [`search`](search.md) -- find individuals using flexible query syntax
+- [`validate`](validate.md) -- check file structure and data issues
+- [`isolated`](isolated.md) -- detect unconnected individuals
+- [`languages`](languages.md) -- detect languages in notes and events
+- [`compare`](compare.md) -- cross-file individual matching

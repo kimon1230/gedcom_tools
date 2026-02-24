@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- `search` command — find individuals in GEDCOM files using flexible query syntax
+- Query operators: substring (`:`), exact (`=`), phonetic/Soundex (`~`), wildcard (`*`/`?`), regex (`--regex`)
+- 9 query fields: `name`, `given`, `surname`, `born`, `died`, `place`, `sex`, `ancestor`, `descendant`
+- Date range queries (`born:1800-1850`) with fuzzy matching for approximate dates (`--fuzzy-dates`)
+- Relationship traversal via BFS (`ancestor:@I1@`, `descendant:@I5@`)
+- Alternative name matching (ROMN/FONE transliterations)
+- `--count` flag for match count only, `--limit` for result truncation
+- Shared `phonetics.py` module — Soundex extracted from compare for reuse across commands
+
 ## [0.4.0]
 
 ### Added

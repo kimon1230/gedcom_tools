@@ -189,3 +189,11 @@ Strict mode (`--strict 5.5.1` or `--strict 5.5.5`) enables:
 - Version mismatch warnings
 - Strict line length enforcement (255 bytes)
 - ANSEL deprecation warning (5.5.5 only)
+
+## Related Commands
+
+- [`search`](search.md) -- find individuals using flexible query syntax
+- [`stats`](stats.md) -- summary statistics for a GEDCOM file
+- [`isolated`](isolated.md) -- detect unconnected individuals
+- [`languages`](languages.md) -- detect languages in notes and events
+- [`compare`](compare.md) -- cross-file individual matching

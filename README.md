@@ -634,6 +634,93 @@ Encoding: UTF-8
 
 **Supported languages:** 26 languages via fast-langdetect, including Arabic, Chinese, English, French, German, Greek, and more. Also accepts "unknown" for unclassifiable texts.
 
+#### search
+
+Search for individuals matching flexible query criteria including name, dates, places, sex, and family relationships.
+
+```bash
+# Search by name (substring match)
+gedcom-tools search family.ged 'Smith'
+
+# Phonetic matching (Soundex)
+gedcom-tools search family.ged 'surname~Schmidt'
+
+# Multiple criteria (AND logic)
+gedcom-tools search family.ged 'surname:Smith born:1800-1850 place:London'
+
+# Exact match
+gedcom-tools search family.ged 'surname=Smith sex=F'
+
+# Wildcard patterns
+gedcom-tools search family.ged 'surname:Sm*th'
+
+# Regex patterns
+gedcom-tools search --regex family.ged 'surname:Sm[a-i]th'
+
+# Relationship traversal (find all descendants of @I1@)
+gedcom-tools search family.ged 'ancestor:@I1@'
+
+# Fuzzy date matching (approximate dates ±2 years)
+gedcom-tools search family.ged 'born:1850' --fuzzy-dates 2
+
+# Count matches only
+gedcom-tools search family.ged 'surname:Smith' --count
+
+# Limit results
+gedcom-tools search family.ged 'Smith' --limit 10
+
+# JSON output
+gedcom-tools --format json search family.ged 'surname:Smith'
+
+# Quiet mode (names and xrefs only)
+gedcom-tools -q search family.ged 'Smith'
+```
+
+<details>
+<summary><b>Sample: Search results</b></summary>
+
+```
+$ gedcom-tools search family.ged 'surname:Smith born:1800-1850'
+
+File: family.ged
+Query: surname:Smith born:1800-1850
+
+=== Search Results (3 of 1,000 individuals) ===
+
+  John Smith (1820-1895) [@I42@]
+    Born: 1820, London, England
+    Died: 1895
+    Matched: surname contains "Smith", born in 1800-1850
+
+  Mary Smith (1835-1910) [@I67@]
+    Born: 1835, Manchester, England
+    Died: 1910, London, England
+    Matched: surname contains "Smith", born in 1800-1850
+
+  William Smith (1848-?) [@I103@]
+    Born: 1848
+    Matched: surname contains "Smith", born in 1800-1850
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--regex` | Treat `:` operator values as regex patterns |
+| `--fuzzy-dates N` | Expand approximate dates ±N years |
+| `--limit N` | Maximum number of results (default: unlimited) |
+| `--count` | Show match count only |
+
+**Query syntax:**
+
+- **Fields**: `name`, `given`, `surname`, `born`, `died`, `place`, `sex`, `ancestor`, `descendant`
+- **Operators**: `:` (substring), `=` (exact), `~` (phonetic/Soundex)
+- Bare terms (no field prefix) search the `name` field
+- Name fields also search alternative name records (ROMN/FONE transliterations)
+- See [Search Command](docs/search.md) for full query syntax and examples
+
 #### compare
 
 Compare two GEDCOM files to find matching individuals using probabilistic record linkage.
@@ -734,6 +821,7 @@ Detailed documentation for each command:
 - [Stats Command](docs/stats.md) - Statistics output and JSON schema
 - [Isolated Command](docs/isolated.md) - Detecting unconnected individuals
 - [Languages Command](docs/languages.md) - Language detection and filtering
+- [Search Command](docs/search.md) - Finding individuals with flexible query syntax
 - [Compare Command](docs/compare.md) - Comparing individuals across files
 
 ## Sample Data

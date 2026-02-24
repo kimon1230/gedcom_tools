@@ -128,3 +128,11 @@ This uses the same algorithm and counts individuals in components of size 1
 
 The `isolated` command provides detailed output (names, xrefs, birth years) while
 the `stats` command only shows the count and percentage.
+
+## Related Commands
+
+- [`search`](search.md) -- find individuals using flexible query syntax
+- [`validate`](validate.md) -- check file structure and data issues
+- [`stats`](stats.md) -- summary statistics (includes isolated count)
+- [`languages`](languages.md) -- detect languages in notes and events
+- [`compare`](compare.md) -- cross-file individual matching

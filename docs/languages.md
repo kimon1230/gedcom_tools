@@ -192,3 +192,11 @@ Returns empty output when there are no results.
 - `--min-length` and `--language` can be combined
 - Passing an unrecognized language name prints supported languages to stderr
   and exits with code 2
+
+## Related Commands
+
+- [`search`](search.md) -- find individuals using flexible query syntax
+- [`validate`](validate.md) -- check file structure and data issues
+- [`stats`](stats.md) -- summary statistics for a GEDCOM file
+- [`isolated`](isolated.md) -- detect unconnected individuals
+- [`compare`](compare.md) -- cross-file individual matching

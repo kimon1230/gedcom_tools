@@ -275,5 +275,6 @@ Winkler, W. E. (1990). String comparator metrics and enhanced decision rules
 
 ## Related Commands
 
+- [`search`](search.md) -- find individuals using flexible query syntax
 - [`stats`](stats.md) -- summary statistics for a single GEDCOM file
 - [`isolated`](isolated.md) -- find unconnected individuals within a single file

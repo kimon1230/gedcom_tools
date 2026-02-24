@@ -386,7 +386,8 @@ shell. Quote the query to prevent this.
 
 ## Related Commands
 
-- [`compare`](compare.md) -- cross-file individual matching (uses similar name
-  normalization)
+- [`validate`](validate.md) -- check file structure and data issues
 - [`stats`](stats.md) -- summary statistics for a GEDCOM file
 - [`isolated`](isolated.md) -- find unconnected individuals using graph analysis
+- [`languages`](languages.md) -- detect languages in notes and events
+- [`compare`](compare.md) -- cross-file individual matching

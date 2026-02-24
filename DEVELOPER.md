@@ -31,6 +31,7 @@ gedcom_tools/
 │       ├── dates.py             # Shared date parsing utilities
 │       ├── graph.py             # Graph algorithms (UnionFind, components)
 │       ├── progress.py          # Terminal UI (Colors, PhaseTracker)
+│       ├── phonetics.py         # Shared phonetics (American Soundex)
 │       ├── utils.py             # Shared utilities (encoding, xref, validation)
 │       ├── commands/
 │       │   ├── __init__.py      # Commands package init
@@ -41,6 +42,14 @@ gedcom_tools/
 │       │   │   ├── models.py    # Data classes (IndividualData, etc.)
 │       │   │   ├── collector.py # StatsCollector class
 │       │   │   └── formatters.py# StatsResult with format methods
+│       │   ├── search/          # Search command package
+│       │   │   ├── __init__.py  # CLI registration, orchestration
+│       │   │   ├── models.py    # Data classes (SearchIndividual, etc.)
+│       │   │   ├── query.py     # Query parsing and validation
+│       │   │   ├── collector.py # Individual extraction/normalization
+│       │   │   ├── matcher.py   # Term matching (text, phonetic, wildcard, regex)
+│       │   │   ├── relationships.py # BFS ancestor/descendant traversal
+│       │   │   └── formatter.py # Text and JSON output formatting
 │       │   └── compare/         # Compare command package
 │       │       ├── __init__.py  # CLI registration, orchestration
 │       │       ├── models.py    # Data classes (CompareIndividual, etc.)
@@ -67,6 +76,7 @@ gedcom_tools/
 │   ├── test_progress.py         # Progress UI tests
 │   ├── test_stats.py            # Stats command tests
 │   ├── test_stats_schema.py     # JSON schema validation tests
+│   ├── test_search_*.py         # Search command tests (query, collector, matcher, relationships, formatter, integration)
 │   ├── test_compare_*.py        # Compare command tests (scorer, dedup, formatters, integration)
 │   ├── test_utils.py            # Shared utility tests
 │   └── test_validation/         # Validation engine tests
@@ -75,6 +85,7 @@ gedcom_tools/
 │   ├── validate.md              # Validation error/warning codes
 │   ├── stats.md                 # Stats command documentation
 │   ├── stats-schema.json        # JSON schema for stats output
+│   ├── search.md                # Search command documentation
 │   └── compare.md               # Compare command documentation
 ├── pyproject.toml               # Project metadata and tool config
 ├── README.md                    # User documentation
@@ -109,6 +120,7 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 - **validate** — 4-phase validation engine (see below)
 - **stats** — Collector/Models/Formatters pattern: `StatsCollector` gathers raw data into `IndividualData`/`FamilyData` models, then `StatsResult` computes aggregates and formats output
 - **isolated** — Builds family member sets from GEDCOM FAM records, runs `find_connected_components()` via UnionFind, reports singletons (size 1) and isolated pairs (size 2)
+- **search** — Query/Collector/Matcher/Relationships/Formatter pipeline: parses query syntax into terms, collects individuals with pre-computed Soundex codes, matches via substring/exact/phonetic/wildcard/regex, optionally traverses parent-child graph for ancestor/descendant queries
 - **compare** — Collector/Models/Phonetics/Blocker/Scorer/Dedup/Formatters pipeline: extracts individuals from two files, generates candidate pairs via multi-pass blocking, scores with weighted Jaro-Winkler, deduplicates greedily, and formats results
 
 ### Validation Engine (4-Phase Design)
@@ -275,6 +287,7 @@ pip-audit
        "validate": validate.run,
        "stats": stats.run,
        "isolated": isolated.run,
+       "search": search.run,
        "mycommand": mycommand.run,
    }
    ```
