@@ -557,6 +557,9 @@ gedcom-tools languages family.ged --language Greek
 # Filter using ISO code + JSON output
 gedcom-tools --format json languages family.ged --language el
 
+# Show detected text for each match (audit what was classified)
+gedcom-tools languages family.ged --language Spanish --show-text
+
 # Set minimum text length for detection
 gedcom-tools languages family.ged --min-length 30
 
@@ -624,6 +627,7 @@ Encoding: UTF-8
 | Option | Description |
 |--------|-------------|
 | `--language LANG` | Filter for a specific language (name or ISO 639-1 code) |
+| `--show-text` | Show detected text for each match (requires `--language`) |
 | `--min-length N` | Minimum text length for detection (default: 10) |
 
 **Categories:**

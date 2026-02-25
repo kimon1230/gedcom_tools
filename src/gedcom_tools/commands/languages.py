@@ -122,13 +122,20 @@ class LanguagesResult:
     note_xrefs: list[str] = field(default_factory=list)
     event_matches: list[EventMatch] = field(default_factory=list)
 
+    # Text content for --show-text (populated only when show_text=True)
+    person_texts: dict[str, list[str]] = field(default_factory=dict)
+    note_texts: dict[str, list[str]] = field(default_factory=dict)
+    event_texts: dict[str, list[str]] = field(default_factory=dict)
+
     @property
     def distinct_languages(self) -> int:
         return sum(1 for r in self.rows if r.code != "unknown")
 
-    def format_text(self, colors: Colors, quiet: bool = False) -> str:
+    def format_text(
+        self, colors: Colors, quiet: bool = False, show_text: bool = False
+    ) -> str:
         if self.language_filter:
-            return self._format_filter_text(colors, quiet)
+            return self._format_filter_text(colors, quiet, show_text)
 
         if quiet:
             if self.total_texts == 0 and self.skipped_short == 0:
@@ -218,7 +225,7 @@ class LanguagesResult:
 
         return "\n".join(lines)
 
-    def _format_filter_text(self, colors: Colors, quiet: bool) -> str:
+    def _format_filter_text(self, colors: Colors, quiet: bool, show_text: bool) -> str:
         display = f"{self.language_filter_name} ({self.language_filter})"
         n_persons = len(self.person_xrefs)
         n_notes = len(self.note_xrefs)
@@ -277,6 +284,10 @@ class LanguagesResult:
                     lines.append(f"    {name} ({xref})")
                 else:
                     lines.append(f"    ({xref})")
+                if show_text:
+                    for txt in self.person_texts.get(xref, []):
+                        collapsed = " ".join(txt.split())
+                        lines.append(f"      {collapsed}")
 
         # Note matches
         if n_notes > 0:
@@ -284,6 +295,10 @@ class LanguagesResult:
             lines.append(f"  Standalone notes ({n_notes}):")
             for xref in self.note_xrefs:
                 lines.append(f"    {xref}")
+                if show_text:
+                    for txt in self.note_texts.get(xref, []):
+                        collapsed = " ".join(txt.split())
+                        lines.append(f"      {collapsed}")
 
         # Event matches
         if n_events > 0:
@@ -297,13 +312,18 @@ class LanguagesResult:
                 else:
                     label = f"    {em.parent_xref}  {em.event_tag}"
                 lines.append(label)
+                if show_text:
+                    key = f"{em.parent_xref}:{em.event_tag or ''}"
+                    for txt in self.event_texts.get(key, []):
+                        collapsed = " ".join(txt.split())
+                        lines.append(f"      {collapsed}")
 
         lines.append("")
         return "\n".join(lines)
 
-    def format_json(self) -> str:
+    def format_json(self, show_text: bool = False) -> str:
         if self.language_filter:
-            return self._format_filter_json()
+            return self._format_filter_json(show_text)
 
         data: dict[str, Any] = {
             "file": self.file_path,
@@ -347,10 +367,36 @@ class LanguagesResult:
 
         return json.dumps(data, indent=2)
 
-    def _format_filter_json(self) -> str:
+    def _format_filter_json(self, show_text: bool) -> str:
         n_persons = len(self.person_xrefs)
         n_notes = len(self.note_xrefs)
         n_events = len(self.event_matches)
+
+        persons = []
+        for x, n in self.person_xrefs:
+            obj: dict[str, Any] = {"xref": x, "name": n}
+            if show_text:
+                obj["texts"] = self.person_texts.get(x, [])
+            persons.append(obj)
+
+        notes = []
+        for x in self.note_xrefs:
+            obj = {"xref": x}
+            if show_text:
+                obj["texts"] = self.note_texts.get(x, [])
+            notes.append(obj)
+
+        events = []
+        for e in self.event_matches:
+            obj = {
+                "parent_xref": e.parent_xref,
+                "event_tag": e.event_tag,
+                "name": e.name,
+            }
+            if show_text:
+                key = f"{e.parent_xref}:{e.event_tag or ''}"
+                obj["texts"] = self.event_texts.get(key, [])
+            events.append(obj)
 
         data: dict[str, Any] = {
             "file": self.file_path,
@@ -358,9 +404,9 @@ class LanguagesResult:
             "encoding": None,
             "language": self.language_filter_name,
             "code": self.language_filter,
-            "persons": [{"xref": x, "name": n} for x, n in self.person_xrefs],
-            "notes": list(self.note_xrefs),
-            "events": [e._asdict() for e in self.event_matches],
+            "persons": persons,
+            "notes": notes,
+            "events": events,
             "summary": {
                 "person_count": n_persons,
                 "note_count": n_notes,
@@ -392,6 +438,7 @@ class LanguagesCollector:
         verbose: bool = False,
         no_color: bool = False,
         language_filter: str | None = None,
+        show_text: bool = False,
     ) -> None:
         self.file_path = file_path
         self.min_length = min_length
@@ -412,6 +459,12 @@ class LanguagesCollector:
         self._indi_names: dict[str, str] = {}
         self._note_xrefs: set[str] = set()
         self._event_matches: set[tuple[str, str | None]] = set()
+
+        # Text tracking (only when --show-text is active)
+        self._show_text = show_text
+        self._person_texts: dict[str, list[str]] = defaultdict(list)
+        self._note_texts: dict[str, list[str]] = defaultdict(list)
+        self._event_texts: dict[str, list[str]] = defaultdict(list)
 
     def _detect_and_count(
         self,
@@ -444,10 +497,17 @@ class LanguagesCollector:
         if self._language_filter and lang == self._language_filter:
             if category == "stories" and parent_xref:
                 self._person_xrefs.add(parent_xref)
+                if self._show_text:
+                    self._person_texts[parent_xref].append(text)
             elif category == "events" and parent_xref:
                 self._event_matches.add((parent_xref, event_tag))
+                if self._show_text:
+                    key = f"{parent_xref}:{event_tag or ''}"
+                    self._event_texts[key].append(text)
             elif category == "notes" and xref:
                 self._note_xrefs.add(xref)
+                if self._show_text:
+                    self._note_texts[xref].append(text)
 
     def _get_note_text(
         self, sub: Any, note_lookup: dict[str, str]
@@ -601,6 +661,10 @@ class LanguagesCollector:
                 ],
                 key=lambda t: (xref_sort_key(t[0]), t[1] or ""),
             )
+            if self._show_text:
+                result.person_texts = dict(self._person_texts)
+                result.note_texts = dict(self._note_texts)
+                result.event_texts = dict(self._event_texts)
         else:
             rows: list[LanguageRow] = []
             for code, counts in self.lang_counts.items():
@@ -659,21 +723,32 @@ def register_subcommand(
             ' Use "--language unknown" for unclassifiable texts.'
         ),
     )
+    parser.add_argument(
+        "--show-text",
+        action="store_true",
+        default=False,
+        help=(
+            "Show the detected text for each match (requires --language)."
+            " Useful for auditing language detection accuracy."
+        ),
+    )
 
 
 def run(args: Namespace) -> int:
     file_path: Path = args.file
-
-    if err := validate_input_file(file_path):
-        return err
-
     output_format = getattr(args, "format", "text")
     quiet = getattr(args, "quiet", False)
     verbose = getattr(args, "verbose", False)
     no_color = getattr(args, "no_color", False)
     min_length = getattr(args, "min_length", MIN_TEXT_LENGTH_DEFAULT)
-
     language_arg = getattr(args, "language", None)
+    show_text = getattr(args, "show_text", False)
+
+    # Argument validation before file validation
+    if show_text and not language_arg:
+        print("--show-text requires --language", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
     language_filter = None
     if language_arg:
         resolved = _resolve_language(language_arg)
@@ -691,10 +766,14 @@ def run(args: Namespace) -> int:
             return EXIT_USAGE_ERROR
         language_filter = resolved[1]
 
+    if err := validate_input_file(file_path):
+        return err
+
     try:
         collector = LanguagesCollector(
             file_path,
             language_filter=language_filter,
+            show_text=show_text,
             min_length=min_length,
             quiet=quiet,
             verbose=verbose,
@@ -703,10 +782,10 @@ def run(args: Namespace) -> int:
         result = collector.collect()
 
         if output_format == "json":
-            print(result.format_json())
+            print(result.format_json(show_text=show_text))
         else:
             colors = Colors(sys.stdout, force_disable=no_color)
-            output = result.format_text(colors, quiet=quiet)
+            output = result.format_text(colors, quiet=quiet, show_text=show_text)
             if output:
                 print(output)
 

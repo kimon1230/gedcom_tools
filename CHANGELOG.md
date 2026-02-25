@@ -7,6 +7,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `--show-text` option for `languages` command — displays the detected text for each match when using `--language`, useful for auditing language detection accuracy
 - `search` command — find individuals in GEDCOM files using flexible query syntax
 - Query operators: substring (`:`), exact (`=`), phonetic/Soundex (`~`), wildcard (`*`/`?`), regex (`--regex`)
 - 9 query fields: `name`, `given`, `surname`, `born`, `died`, `place`, `sex`, `ancestor`, `descendant`
@@ -15,6 +16,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Alternative name matching (ROMN/FONE transliterations)
 - `--count` flag for match count only, `--limit` for result truncation
 - Shared `phonetics.py` module — Soundex extracted from compare for reuse across commands
+
+### Changed
+- `languages` JSON filter output: `notes` field changed from `["@N1@"]` (list of strings) to `[{"xref": "@N1@"}]` (list of objects) for consistency with `persons` and `events`
 
 ## [0.4.0]
 

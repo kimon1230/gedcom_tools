@@ -18,6 +18,7 @@ gedcom-tools languages <file> [options]
 | `-q, --quiet` | One-line summary |
 | `--min-length N` | Minimum text length for detection (default: 10). Shorter texts are skipped as unreliable |
 | `--language LANG` | Show records in a specific language (name or ISO 639-1 code) |
+| `--show-text` | Show the detected text for each match (requires `--language`) |
 
 ## Modes
 
@@ -113,6 +114,29 @@ Encoding: UTF-8
 FAM-level notes that aren't under an event sub-record show as "(family note)"
 with a null event tag.
 
+### Text Output (Filter with `--show-text`)
+
+When `--show-text` is used, the detected text is shown indented below each match.
+Newlines in the original text are collapsed to spaces.
+
+```
+File: tree.ged
+Encoding: UTF-8
+
+=== Greek (el) ===
+  Texts analyzed: 42 (5 skipped, too short)
+
+  Persons with biographical notes (2):
+    Eleni Papadopoulos (@I5@)
+      Γεννήθηκε στην Αθήνα και μεγάλωσε στη Θεσσαλονίκη
+    Nikolaos Andreou (@I12@)
+      Σπούδασε ιατρική στο Πανεπιστήμιο Αθηνών
+
+  Events with notes (1):
+    @I5@  BIRT  — Eleni Papadopoulos
+      Γεννήθηκε στο νοσοκομείο της Αθήνας τον Ιούνιο
+```
+
 ### JSON Output (Aggregate)
 
 ```json
@@ -147,7 +171,9 @@ with a null event tag.
     { "xref": "@I12@", "name": "Nikolaos Andreou" },
     { "xref": "@I44@", "name": "Maria Konstantinou" }
   ],
-  "notes": ["@N7@"],
+  "notes": [
+    { "xref": "@N7@" }
+  ],
   "events": [
     { "parent_xref": "@I5@", "event_tag": "BIRT", "name": "Eleni Papadopoulos" },
     { "parent_xref": "@F3@", "event_tag": "MARR", "name": null },
@@ -162,6 +188,25 @@ with a null event tag.
     "skipped_short": 5,
     "min_length": 20
   }
+}
+```
+
+### JSON Output (Filter with `--show-text`)
+
+When `--show-text` is used, each person, note, and event object includes a
+`"texts"` array with the full detected text (newlines preserved).
+
+```json
+{
+  "persons": [
+    { "xref": "@I5@", "name": "Eleni Papadopoulos", "texts": ["Γεννήθηκε στην Αθήνα..."] }
+  ],
+  "notes": [
+    { "xref": "@N7@", "texts": ["Σημείωση για την οικογένεια..."] }
+  ],
+  "events": [
+    { "parent_xref": "@I5@", "event_tag": "BIRT", "name": "Eleni Papadopoulos", "texts": ["Γεννήθηκε στο νοσοκομείο..."] }
+  ]
 }
 ```
 
@@ -190,8 +235,12 @@ Returns empty output when there are no results.
 - Pointer notes are resolved and their text is analyzed once; the result is
   cached to avoid duplicate detection
 - `--min-length` and `--language` can be combined
+- `--show-text` requires `--language` -- using it without `--language` exits
+  with code 2
 - Passing an unrecognized language name prints supported languages to stderr
   and exits with code 2
+- In quiet text mode, `--show-text` is silently ignored (the one-line summary
+  is unchanged). In quiet JSON mode, `texts` arrays are still included
 
 ## Related Commands
 

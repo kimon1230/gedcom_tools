@@ -1656,6 +1656,330 @@ class TestLanguageFilterIntegration:
 
 
 # ---------------------------------------------------------------------------
+# --show-text tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("_fast_lingua")
+class TestShowText:
+    def _collect(self, tmp_path, body, **kwargs):
+        f = _ged(tmp_path, "test.ged", body)
+        defaults = {"quiet": True, "no_color": True}
+        defaults.update(kwargs)
+        collector = LanguagesCollector(f, **defaults)
+        return collector.collect()
+
+    def test_show_text_without_language_exits_error(self, tmp_path):
+        f = _ged(tmp_path, "t.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n")
+        rc = main(["languages", "--show-text", str(f)])
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_show_text_error_before_file_validation(self, capsys):
+        rc = main(["languages", "--show-text", "/nonexistent/path.ged"])
+        assert rc == EXIT_USAGE_ERROR
+        assert "--show-text requires --language" in capsys.readouterr().err
+
+    def test_person_texts_in_text_output(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        assert "John Doe (@I1@)" in output
+        assert "      This is a biographical note about John Doe person" in output
+
+    def test_note_texts_in_text_output(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @N1@ NOTE This standalone note has enough text for detection\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n",
+            language_filter="en",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        assert "@N1@" in output
+        assert "      This standalone note has enough text for detection" in output
+
+    def test_event_texts_in_text_output(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 BIRT\n"
+            "2 NOTE Born in the early morning at the family estate here\n",
+            language_filter="en",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        assert "@I1@  BIRT" in output
+        assert "      Born in the early morning at the family estate here" in output
+
+    def test_json_persons_with_texts(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+            show_text=True,
+        )
+        data = json.loads(result.format_json(show_text=True))
+        assert len(data["persons"]) == 1
+        person = data["persons"][0]
+        assert person["xref"] == "@I1@"
+        assert "texts" in person
+        assert "This is a biographical note about John Doe person" in person["texts"]
+
+    def test_json_notes_object_form(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @N1@ NOTE This standalone note has enough text for detection\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n",
+            language_filter="en",
+            show_text=True,
+        )
+        data = json.loads(result.format_json(show_text=True))
+        assert len(data["notes"]) == 1
+        note = data["notes"][0]
+        assert note["xref"] == "@N1@"
+        assert "texts" in note
+        assert "This standalone note has enough text for detection" in note["texts"]
+
+    def test_json_events_with_texts(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 BIRT\n"
+            "2 NOTE Born in the early morning at the family estate here\n",
+            language_filter="en",
+            show_text=True,
+        )
+        data = json.loads(result.format_json(show_text=True))
+        assert len(data["events"]) == 1
+        event = data["events"][0]
+        assert event["parent_xref"] == "@I1@"
+        assert "texts" in event
+
+    def test_no_texts_key_without_show_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+        )
+        data = json.loads(result.format_json(show_text=False))
+        if data["persons"]:
+            assert "texts" not in data["persons"][0]
+        if data["notes"]:
+            assert "texts" not in data["notes"][0]
+
+    def test_no_text_lines_without_show_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=False)
+        six_space_lines = [ln for ln in output.splitlines() if ln.startswith("      ")]
+        assert six_space_lines == []
+
+    def test_notes_json_object_form_without_show_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @N1@ NOTE This standalone note has enough text for detection\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n",
+            language_filter="en",
+        )
+        data = json.loads(result.format_json(show_text=False))
+        assert len(data["notes"]) == 1
+        assert isinstance(data["notes"][0], dict)
+        assert data["notes"][0]["xref"] == "@N1@"
+        assert "texts" not in data["notes"][0]
+
+    def test_multi_text_per_person(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE First biographical note about this person John Doe\n"
+            "1 NOTE Second biographical note about this person John Doe\n",
+            language_filter="en",
+            show_text=True,
+        )
+        assert len(result.person_texts.get("@I1@", [])) == 2
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        assert "First biographical note" in output
+        assert "Second biographical note" in output
+
+    def test_pointer_note_shared_by_two_individuals(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @N1@ NOTE This shared note is referenced from both persons here\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE @N1@\n"
+            "0 @I2@ INDI\n"
+            "1 NAME Jane /Doe/\n"
+            "1 NOTE @N1@\n",
+            language_filter="en",
+            show_text=True,
+        )
+        assert len(result.person_xrefs) == 2
+        assert "This shared note is referenced" in str(
+            result.person_texts.get("@I1@", [])
+        )
+        assert "This shared note is referenced" in str(
+            result.person_texts.get("@I2@", [])
+        )
+
+    def test_same_note_in_story_and_event(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @N1@ NOTE This note is used in both story and event contexts\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE @N1@\n"
+            "1 BIRT\n"
+            "2 NOTE @N1@\n",
+            language_filter="en",
+            show_text=True,
+        )
+        assert len(result.person_xrefs) == 1
+        assert len(result.event_matches) == 1
+        assert len(result.person_texts.get("@I1@", [])) >= 1
+        assert len(result.event_texts.get("@I1@:BIRT", [])) >= 1
+
+    def test_fam_event_note_with_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @F1@ FAM\n"
+            "1 MARR\n"
+            "2 NOTE The marriage took place at the local church building\n",
+            language_filter="en",
+            show_text=True,
+        )
+        assert len(result.event_matches) == 1
+        key = "@F1@:MARR"
+        assert "The marriage took place" in str(result.event_texts.get(key, []))
+
+    def test_multiline_collapsed_in_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is the first line of a biographical note\n"
+            "2 CONT and this is the second line continued here now\n",
+            language_filter="en",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        text_lines = [ln for ln in output.splitlines() if ln.startswith("      ")]
+        assert len(text_lines) == 1
+        assert "first line" in text_lines[0]
+        assert "second line" in text_lines[0]
+
+    def test_multiline_preserved_in_json(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE First line of note\n"
+            "2 CONT Second line of note\n",
+            language_filter="en",
+            show_text=True,
+        )
+        data = json.loads(result.format_json(show_text=True))
+        person_texts = data["persons"][0]["texts"]
+        assert any("\n" in t for t in person_texts)
+
+    def test_quiet_text_suppresses_show_text(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, quiet=True, show_text=True)
+        assert "\n" not in output
+        assert "biographical" not in output
+
+    def test_quiet_json_includes_texts(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="en",
+            show_text=True,
+        )
+        data = json.loads(result.format_json(show_text=True))
+        assert "texts" in data["persons"][0]
+
+    def test_zero_matches_no_artifacts(self, tmp_path):
+        result = self._collect(
+            tmp_path,
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+            language_filter="el",
+            show_text=True,
+        )
+        colors = Colors(None, force_disable=True)
+        output = result.format_text(colors, show_text=True)
+        assert "No matches found" in output
+        six_space_lines = [ln for ln in output.splitlines() if ln.startswith("      ")]
+        assert six_space_lines == []
+
+    def test_cli_show_text_with_language(self, tmp_path, capsys):
+        f = _ged(
+            tmp_path,
+            "t.ged",
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+        )
+        rc = main(["languages", "--language", "English", "--show-text", str(f)])
+        assert rc == EXIT_SUCCESS
+        out = capsys.readouterr().out
+        assert "biographical note" in out
+
+    def test_cli_show_text_json(self, tmp_path, capsys):
+        f = _ged(
+            tmp_path,
+            "t.ged",
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 NOTE This is a biographical note about John Doe person\n",
+        )
+        rc = main(
+            ["--format", "json", "languages", "--language", "en", "--show-text", str(f)]
+        )
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert "texts" in data["persons"][0]
+
+
+# ---------------------------------------------------------------------------
 # Non-event tag set tests
 # ---------------------------------------------------------------------------
 
