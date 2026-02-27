@@ -7,6 +7,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `relationship` command — determine the genealogical relationship between two individuals using Lowest Common Ancestor algorithm
+- Half-relationship detection (full vs half siblings, uncles, cousins) via shared-parent counting and spouse-pairing heuristic
+- Multi-key sort for relationship paths: shortest path, blood over half, male line preference
+- `--paths N` option to show multiple relationship paths (default: 1)
+- `--type {blood,all}` option to control half-relationship prefix display
+- `--generations N` option to limit ancestor search depth (default: 30)
+- Moved `ParentChildGraph`, `build_parent_child_graph`, `find_ancestors`, `find_descendants` from `commands/search/relationships.py` to shared `graph.py` module (backward-compatible re-export shim)
 - `--show-text` option for `languages` command — displays the detected text for each match when using `--language`, useful for auditing language detection accuracy
 - `search` command — find individuals in GEDCOM files using flexible query syntax
 - Query operators: substring (`:`), exact (`=`), phonetic/Soundex (`~`), wildcard (`*`/`?`), regex (`--regex`)

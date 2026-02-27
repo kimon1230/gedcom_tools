@@ -7,7 +7,15 @@ import sys
 from typing import TYPE_CHECKING
 
 from gedcom_tools import __version__
-from gedcom_tools.commands import compare, isolated, languages, search, stats, validate
+from gedcom_tools.commands import (
+    compare,
+    isolated,
+    languages,
+    relationship,
+    search,
+    stats,
+    validate,
+)
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 
 if TYPE_CHECKING:
@@ -60,6 +68,7 @@ def create_parser() -> argparse.ArgumentParser:
     languages.register_subcommand(subparsers)
     compare.register_subcommand(subparsers)
     search.register_subcommand(subparsers)
+    relationship.register_subcommand(subparsers)
 
     return parser
 
@@ -86,6 +95,7 @@ def _run_command(args: Namespace) -> int:
         "languages": languages.run,
         "compare": compare.run,
         "search": search.run,
+        "relationship": relationship.run,
     }
 
     try:

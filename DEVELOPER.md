@@ -29,7 +29,7 @@ gedcom_tools/
 │       ├── cli.py               # Main entry point, argument parsing
 │       ├── constants.py         # Shared constants (exit codes, thresholds)
 │       ├── dates.py             # Shared date parsing utilities
-│       ├── graph.py             # Graph algorithms (UnionFind, components)
+│       ├── graph.py             # Graph algorithms (UnionFind, components, ParentChildGraph, BFS traversal)
 │       ├── progress.py          # Terminal UI (Colors, PhaseTracker)
 │       ├── phonetics.py         # Shared phonetics (American Soundex)
 │       ├── utils.py             # Shared utilities (encoding, xref, validation)
@@ -50,15 +50,21 @@ gedcom_tools/
 │       │   │   ├── matcher.py   # Term matching (text, phonetic, wildcard, regex)
 │       │   │   ├── relationships.py # BFS ancestor/descendant traversal
 │       │   │   └── formatter.py # Text and JSON output formatting
-│       │   └── compare/         # Compare command package
-│       │       ├── __init__.py  # CLI registration, orchestration
-│       │       ├── models.py    # Data classes (CompareIndividual, etc.)
-│       │       ├── collector.py # Individual extraction/normalization
-│       │       ├── phonetics.py # American Soundex encoding
-│       │       ├── blocker.py   # Multi-pass blocking
-│       │       ├── scorer.py    # Weighted Jaro-Winkler scoring
-│       │       ├── dedup.py     # Greedy one-to-one deduplication
-│       │       └── formatters.py# Text and JSON output formatting
+│       │   ├── compare/         # Compare command package
+│       │   │   ├── __init__.py  # CLI registration, orchestration
+│       │   │   ├── models.py    # Data classes (CompareIndividual, etc.)
+│       │   │   ├── collector.py # Individual extraction/normalization
+│       │   │   ├── phonetics.py # American Soundex encoding
+│       │   │   ├── blocker.py   # Multi-pass blocking
+│       │   │   ├── scorer.py    # Weighted Jaro-Winkler scoring
+│       │   │   ├── dedup.py     # Greedy one-to-one deduplication
+│       │   │   └── formatters.py# Text and JSON output formatting
+│       │   └── relationship/    # Relationship command package
+│       │       ├── __init__.py  # CLI registration, xref validation, orchestration
+│       │       ├── models.py    # Data classes (RelIndividual, RelationshipPath, RelationshipResult)
+│       │       ├── classifier.py# Relationship classification and description building
+│       │       ├── algorithm.py # LCA algorithm, half-detection, sorting
+│       │       └── formatter.py # Text and JSON output formatting
 │       └── validation/
 │           ├── __init__.py      # Public API: validate_file()
 │           ├── engine.py        # 4-phase validation orchestrator
@@ -78,6 +84,7 @@ gedcom_tools/
 │   ├── test_stats_schema.py     # JSON schema validation tests
 │   ├── test_search_*.py         # Search command tests (query, collector, matcher, relationships, formatter, integration)
 │   ├── test_compare_*.py        # Compare command tests (scorer, dedup, formatters, integration)
+│   ├── test_relationship.py    # Relationship command tests
 │   ├── test_utils.py            # Shared utility tests
 │   └── test_validation/         # Validation engine tests
 ├── docs/
@@ -86,7 +93,8 @@ gedcom_tools/
 │   ├── stats.md                 # Stats command documentation
 │   ├── stats-schema.json        # JSON schema for stats output
 │   ├── search.md                # Search command documentation
-│   └── compare.md               # Compare command documentation
+│   ├── compare.md               # Compare command documentation
+│   └── relationship.md          # Relationship command documentation
 ├── pyproject.toml               # Project metadata and tool config
 ├── README.md                    # User documentation
 ├── DEVELOPER.md                 # This file
@@ -112,6 +120,10 @@ gedcom_tools/
 **`graph.py`** — Graph algorithms for family connectivity:
 - `UnionFind` — union-find data structure with path compression and union by rank
 - `find_connected_components()` — identify connected components from family member sets
+- `ParentChildGraph` — directed parent-child graph with spouse pairings
+- `build_parent_child_graph()` — construct graph from GEDCOM FAM records
+- `find_ancestors()`, `find_descendants()` — BFS traversal with depth limit
+- `find_ancestors_with_depth()` — BFS returning ancestor-to-depth map with truncation flag
 
 ### Command Architecture
 
@@ -122,6 +134,7 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 - **isolated** — Builds family member sets from GEDCOM FAM records, runs `find_connected_components()` via UnionFind, reports singletons (size 1) and isolated pairs (size 2)
 - **search** — Query/Collector/Matcher/Relationships/Formatter pipeline: parses query syntax into terms, collects individuals with pre-computed Soundex codes, matches via substring/exact/phonetic/wildcard/regex, optionally traverses parent-child graph for ancestor/descendant queries
 - **compare** — Collector/Models/Phonetics/Blocker/Scorer/Dedup/Formatters pipeline: extracts individuals from two files, generates candidate pairs via multi-pass blocking, scores with weighted Jaro-Winkler, deduplicates greedily, and formats results
+- **relationship** — LCA-based relationship classification with half-detection and multi-key sort: loads individuals and parent-child graph, BFS from both endpoints, classifies via generation-pair table, detects half-blood via spouse pairing
 
 ### Validation Engine (4-Phase Design)
 

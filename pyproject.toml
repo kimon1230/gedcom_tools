@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gedcom-tools"
-version = "0.5.1"
+version = "0.6.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}

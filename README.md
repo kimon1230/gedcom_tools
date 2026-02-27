@@ -817,6 +817,93 @@ $ gedcom-tools -q compare tree_a.ged tree_b.ged
 - Greedy one-to-one deduplication ensures each individual appears in at most one match
 - See [Compare Command](docs/compare.md) for full methodology details
 
+#### relationship
+
+Determine the genealogical relationship between two individuals using Lowest Common Ancestor analysis.
+
+```bash
+# Find relationship between two individuals
+gedcom-tools relationship family.ged @I1@ @I2@
+
+# Show half-relationship prefix
+gedcom-tools relationship family.ged @I1@ @I2@ --type all
+
+# Show multiple relationship paths
+gedcom-tools relationship family.ged @I1@ @I2@ --paths 5
+
+# JSON output
+gedcom-tools --format json relationship family.ged @I1@ @I2@
+
+# Quiet mode (description only)
+gedcom-tools -q relationship family.ged @I1@ @I2@
+
+# Limit search depth
+gedcom-tools relationship family.ged @I1@ @I2@ --generations 50
+```
+
+<details>
+<summary><b>Sample: Relationship query</b></summary>
+
+```
+$ gedcom-tools relationship family.ged @I1@ @I3@
+
+File: family.ged
+
+=== Relationship ===
+
+  John Smith (1850-1920) [@I1@]
+  James Smith (1880-1945) [@I3@]
+
+  James Smith is the son of John Smith.
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Multiple paths</b></summary>
+
+```
+$ gedcom-tools relationship family.ged @I1@ @I3@ --paths 3
+
+File: family.ged
+
+=== Relationships (2 found) ===
+
+  John Smith (1850-1920) [@I1@]
+  James Smith (1880-1945) [@I3@]
+
+  1. James Smith is the son of John Smith.
+  2. James Smith is a 1st cousin of John Smith.
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Quiet mode</b></summary>
+
+```
+$ gedcom-tools -q relationship family.ged @I1@ @I3@
+
+James Smith is the son of John Smith.
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--type {blood,all}` | Relationship display: `blood` (default) suppresses half-prefix; `all` shows it |
+| `--paths N` | Number of relationship paths to show (default: 1) |
+| `--generations N` | Maximum ancestor search depth (default: 30) |
+
+**How it works:**
+
+- BFS upward from both individuals to find common ancestors, then classifies each `(gen_primary, gen_target)` pair into a relationship type (parent, sibling, cousin, etc.)
+- Detects half-relationships via shared-parent counting and spouse-pairing analysis
+- Results sorted by shortest path, blood over half, male line preference
+- See [Relationship Command](docs/relationship.md) for full algorithm details
+
 ## Documentation
 
 Detailed documentation for each command:
@@ -827,6 +914,7 @@ Detailed documentation for each command:
 - [Languages Command](docs/languages.md) - Language detection and filtering
 - [Search Command](docs/search.md) - Finding individuals with flexible query syntax
 - [Compare Command](docs/compare.md) - Comparing individuals across files
+- [Relationship Command](docs/relationship.md) - Finding relationships between individuals
 
 ## Sample Data
 
