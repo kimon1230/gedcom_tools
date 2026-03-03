@@ -5,7 +5,7 @@ CLI utility for GEDCOM file validation, analysis, and search.
 ## Installation
 
 ```bash
-pip install gedcom-tools
+pip install kimon-gedcom-tools
 ```
 
 Or for development:

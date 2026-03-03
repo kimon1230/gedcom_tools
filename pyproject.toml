@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gedcom-tools"
+name = "kimon-gedcom-tools"
 version = "1.0.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
