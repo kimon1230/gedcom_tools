@@ -17,8 +17,10 @@ def _ind(
     birth_place_normalized: str = "",
     death_place_normalized: str = "",
     sex: str = "",
-    surname_soundex: str = "",
-    given_name_soundex: str = "",
+    surname_phonetic: str = "",
+    surname_phonetic_alt: str = "",
+    given_phonetic: str = "",
+    given_phonetic_alt: str = "",
     alt_surnames_normalized: list[str] | None = None,
     alt_given_names_normalized: list[str] | None = None,
     **kwargs: object,
@@ -33,8 +35,10 @@ def _ind(
         birth_place_normalized=birth_place_normalized,
         death_place_normalized=death_place_normalized,
         sex=sex,
-        surname_soundex=surname_soundex,
-        given_name_soundex=given_name_soundex,
+        surname_phonetic=surname_phonetic,
+        surname_phonetic_alt=surname_phonetic_alt,
+        given_phonetic=given_phonetic,
+        given_phonetic_alt=given_phonetic_alt,
         alt_surnames_normalized=alt_surnames_normalized or [],
         alt_given_names_normalized=alt_given_names_normalized or [],
         **kwargs,
@@ -48,7 +52,7 @@ class TestYearProximity:
             source="A",
             surname_normalized="smith",
             given_name_normalized="john",
-            surname_soundex="S530",
+            surname_phonetic="S530",
             sex="M",
             birth_year=year_a,
         )
@@ -57,7 +61,7 @@ class TestYearProximity:
             source="B",
             surname_normalized="smith",
             given_name_normalized="john",
-            surname_soundex="S530",
+            surname_phonetic="S530",
             sex="M",
             birth_year=year_b,
         )
@@ -232,7 +236,7 @@ class TestMultiNameCartesian:
         assert result.field_scores["Surname"] == pytest.approx(expected_jw, abs=0.001)
 
 
-class TestSoundexBonus:
+class TestPhoneticBonus:
     def test_bonus_applied_in_range(self) -> None:
         # becker vs baker: JW ~0.765, in [0.50, 0.85] range
         base_jw = JaroWinkler.similarity("becker", "baker")
@@ -241,7 +245,7 @@ class TestSoundexBonus:
         a = _ind(
             surname_normalized="becker",
             given_name_normalized="john",
-            surname_soundex="B260",
+            surname_phonetic="B260",
             birth_year=1850,
         )
         b = _ind(
@@ -249,7 +253,7 @@ class TestSoundexBonus:
             source="B",
             surname_normalized="baker",
             given_name_normalized="john",
-            surname_soundex="B260",
+            surname_phonetic="B260",
             birth_year=1850,
         )
         result = score_pair(a, b)
@@ -265,7 +269,7 @@ class TestSoundexBonus:
         a = _ind(
             surname_normalized="johnson",
             given_name_normalized="john",
-            surname_soundex="J525",
+            surname_phonetic="J525",
             birth_year=1850,
         )
         b = _ind(
@@ -273,7 +277,7 @@ class TestSoundexBonus:
             source="B",
             surname_normalized="jonson",
             given_name_normalized="john",
-            surname_soundex="J525",
+            surname_phonetic="J525",
             birth_year=1850,
         )
         result = score_pair(a, b)
@@ -288,7 +292,7 @@ class TestSoundexBonus:
         a = _ind(
             surname_normalized="baker",
             given_name_normalized="john",
-            surname_soundex="B260",
+            surname_phonetic="B260",
             birth_year=1850,
         )
         b = _ind(
@@ -296,7 +300,7 @@ class TestSoundexBonus:
             source="B",
             surname_normalized="stone",
             given_name_normalized="john",
-            surname_soundex="B260",
+            surname_phonetic="B260",
             birth_year=1850,
         )
         result = score_pair(a, b)
@@ -310,7 +314,7 @@ class TestSoundexBonus:
         a = _ind(
             surname_normalized="becker",
             given_name_normalized="john",
-            surname_soundex="B260",
+            surname_phonetic="B260",
             birth_year=1850,
         )
         b = _ind(
@@ -318,11 +322,85 @@ class TestSoundexBonus:
             source="B",
             surname_normalized="baker",
             given_name_normalized="john",
-            surname_soundex="B460",
+            surname_phonetic="B460",
             birth_year=1850,
         )
         result = score_pair(a, b)
         # No bonus — Soundex codes differ
+        assert result.field_scores["Surname"] == pytest.approx(base_jw, abs=0.001)
+
+    def test_metaphone_cross_code_bonus(self) -> None:
+        # Primary codes differ, but A's alt matches B's primary → bonus applies
+        base_jw = JaroWinkler.similarity("becker", "baker")
+        assert 0.50 <= base_jw <= 0.85
+
+        a = _ind(
+            surname_normalized="becker",
+            given_name_normalized="john",
+            surname_phonetic="PKR",
+            surname_phonetic_alt="PKR",
+            birth_year=1850,
+        )
+        b = _ind(
+            xref="@I2@",
+            source="B",
+            surname_normalized="baker",
+            given_name_normalized="john",
+            surname_phonetic="PKR",
+            surname_phonetic_alt="",
+            birth_year=1850,
+        )
+        result = score_pair(a, b)
+        assert result.field_scores["Surname"] == pytest.approx(
+            base_jw + 0.05, abs=0.001
+        )
+
+    def test_metaphone_no_bonus_no_overlap(self) -> None:
+        # No codes overlap → no bonus even with metaphone
+        base_jw = JaroWinkler.similarity("becker", "baker")
+        assert 0.50 <= base_jw <= 0.85
+
+        a = _ind(
+            surname_normalized="becker",
+            given_name_normalized="john",
+            surname_phonetic="AAA",
+            surname_phonetic_alt="BBB",
+            birth_year=1850,
+        )
+        b = _ind(
+            xref="@I2@",
+            source="B",
+            surname_normalized="baker",
+            given_name_normalized="john",
+            surname_phonetic="CCC",
+            surname_phonetic_alt="DDD",
+            birth_year=1850,
+        )
+        result = score_pair(a, b)
+        assert result.field_scores["Surname"] == pytest.approx(base_jw, abs=0.001)
+
+    def test_empty_codes_no_bonus(self) -> None:
+        # Both sides have empty phonetic codes → no bonus
+        base_jw = JaroWinkler.similarity("becker", "baker")
+        assert 0.50 <= base_jw <= 0.85
+
+        a = _ind(
+            surname_normalized="becker",
+            given_name_normalized="john",
+            surname_phonetic="",
+            surname_phonetic_alt="",
+            birth_year=1850,
+        )
+        b = _ind(
+            xref="@I2@",
+            source="B",
+            surname_normalized="baker",
+            given_name_normalized="john",
+            surname_phonetic="",
+            surname_phonetic_alt="",
+            birth_year=1850,
+        )
+        result = score_pair(a, b)
         assert result.field_scores["Surname"] == pytest.approx(base_jw, abs=0.001)
 
 

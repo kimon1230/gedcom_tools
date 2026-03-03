@@ -10,7 +10,6 @@ from gedcom_tools.commands.compare.models import CompareIndividual
 if TYPE_CHECKING:
     from ged4py.model import Record
 from gedcom_tools.dates import extract_year_from_date
-from gedcom_tools.phonetics import soundex
 from gedcom_tools.utils import (
     extract_xref,
     normalize_compare,
@@ -42,7 +41,9 @@ def _extract_year(record: Record, path: str) -> int | None:
     return extract_year_from_date(date_rec.value)
 
 
-def collect_individuals(file_path: Path, source_label: str) -> list[CompareIndividual]:
+def collect_individuals(
+    file_path: Path, source_label: str, algorithm: str = "soundex"
+) -> list[CompareIndividual]:
     """Extract CompareIndividual records from a GEDCOM file."""
     individuals: list[CompareIndividual] = []
 
@@ -51,14 +52,16 @@ def collect_individuals(file_path: Path, source_label: str) -> list[CompareIndiv
             xref = record.xref_id
             if not xref:
                 continue
-            individuals.append(_build_individual(record, xref, source_label))
+            individuals.append(_build_individual(record, xref, source_label, algorithm))
 
     return individuals
 
 
 def _build_individual(
-    record: Record, xref: str, source_label: str
+    record: Record, xref: str, source_label: str, algorithm: str = "soundex"
 ) -> CompareIndividual:
+    from gedcom_tools.phonetics import phonetic_encode
+
     name_records = [sub for sub in record.sub_records if sub.tag == "NAME"]
 
     given = ""
@@ -119,6 +122,9 @@ def _build_individual(
     alt_givens_display = [normalize_display(g) for g in alt_givens]
     alt_surnames_display = [normalize_display(s) for s in alt_surnames]
 
+    s_p, s_a = phonetic_encode(surname_norm, algorithm)
+    g_p, g_a = phonetic_encode(given_norm, algorithm)
+
     return CompareIndividual(
         xref=xref,
         source_file=source_label,
@@ -140,8 +146,10 @@ def _build_individual(
         death_place_normalized=normalize_compare(death_place),
         alt_surnames_normalized=[normalize_compare(s) for s in alt_surnames_display],
         alt_given_names_normalized=[normalize_compare(g) for g in alt_givens_display],
-        surname_soundex=soundex(surname_norm),
-        given_name_soundex=soundex(given_norm),
+        surname_phonetic=s_p,
+        surname_phonetic_alt=s_a,
+        given_phonetic=g_p,
+        given_phonetic_alt=g_a,
         birth_decade=_decade_key(birth_year),
         death_decade=_decade_key(death_year),
     )

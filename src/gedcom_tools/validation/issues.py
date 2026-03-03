@@ -53,6 +53,8 @@ class ErrorCode(Enum):
     W013_ORPHANED_REPO = "W013"
     W014_ISOLATED_INDI = "W014"
     W015_EMPTY_FAM = "W015"
+    W016_ASYMMETRIC_CHILD_LINK = "W016"
+    W017_ASYMMETRIC_SPOUSE_LINK = "W017"
 
     # Warnings: Semantic
     W020_PARENT_TOO_YOUNG = "W020"
@@ -61,11 +63,17 @@ class ErrorCode(Enum):
     W023_AGE_AT_DEATH_IMPLAUSIBLE = "W023"
     W024_MARRIAGE_BEFORE_BIRTH = "W024"
     W025_CHILD_BEFORE_MARRIAGE = "W025"
+    W026_SIBLING_TOO_CLOSE = "W026"
+    W027_MULTIPLE_SEX = "W027"
+    W028_INVALID_SEX = "W028"
+    W029_SEX_ROLE_MISMATCH = "W029"
 
     # Warnings: Version compliance (strict mode)
     W030_ANSEL_DEPRECATED = "W030"
     W031_VERSION_MISMATCH = "W031"
     W032_LINE_TOO_LONG_STRICT = "W032"
+    W033_OBJE_MISSING_FILE = "W033"
+    W034_FILE_MISSING_FORM = "W034"
 
     @property
     def severity(self) -> Severity:
@@ -103,15 +111,23 @@ class ErrorCode(Enum):
             "W013": "Orphaned REPO record",
             "W014": "Individual with no family connections",
             "W015": "Family with no members",
+            "W016": "Family-child cross-reference exists on only one side",
+            "W017": "Family-spouse cross-reference exists on only one side",
             "W020": "Parent too young at child's birth",
             "W021": "Mother too old at child's birth",
             "W022": "Father too old at child's birth",
             "W023": "Implausible age at death",
             "W024": "Marriage before birth",
             "W025": "Child born before parents' marriage",
+            "W026": "Siblings born less than 9 months apart",
+            "W027": "Individual has multiple SEX records",
+            "W028": "Invalid SEX value",
+            "W029": "SEX conflicts with spousal role",
             "W030": "ANSEL encoding deprecated in GEDCOM 5.5.5",
             "W031": "Declared version does not match --strict version",
             "W032": "Line exceeds 255 byte limit (strict)",
+            "W033": "OBJE record has no FILE subtag",
+            "W034": "FILE subtag has no FORM",
         }
         return descriptions.get(self.value, "Unknown issue")
 
@@ -149,6 +165,7 @@ class IndividualInfo:
     xref: str
     line: int
     birth_year: int | None = None
+    birth_month: int | None = None
     death_year: int | None = None
     sex: str | None = None
     famc_xrefs: list[str] = field(default_factory=list)

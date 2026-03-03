@@ -173,6 +173,7 @@ def parse_query(
     fuzzy_dates: int | None = None,
     limit: int | None = None,
     count_only: bool = False,
+    phonetic_algo: str = "soundex",
 ) -> SearchQuery:
     stripped = query_string.strip() if query_string else ""
     if not stripped:
@@ -232,4 +233,5 @@ def parse_query(
         fuzzy_dates=fuzzy_dates,
         limit=limit,
         count_only=count_only,
+        phonetic_algo=phonetic_algo,
     )

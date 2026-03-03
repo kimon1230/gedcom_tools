@@ -22,6 +22,7 @@ gedcom-tools compare <file_a> <file_b> [options]
 | `--list-unique` | List individuals unique to each file |
 | `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
 | `--reject-sex-mismatch` | Treat sex mismatches as hard reject (score 0.0) |
+| `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
 
 ## How It Works
 
@@ -64,11 +65,15 @@ library. Handles typos, transcription errors, and naming variants.
 For names with multiple alternatives (e.g., NAME + ROMN + FONE), the best
 score across the cartesian product of name pairs is used.
 
-### Soundex Bonus
+### Phonetic Bonus
 
 When surname Jaro-Winkler is between 0.50 and 0.85, a +0.05 bonus is applied
-if both surnames share the same Soundex code (Russell, 1918). This helps bridge
-transliteration differences.
+if both surnames share a phonetic code. With the default Soundex algorithm
+(Russell, 1918), this requires identical codes. With `--phonetic metaphone`,
+both primary and secondary Double Metaphone codes are checked — a bonus is
+applied if any code from one side matches any code from the other. This helps
+bridge transliteration differences, especially for European name variants
+(Schmidt/Smith, Müller/Miller).
 
 ### Year Proximity
 
@@ -106,13 +111,18 @@ In verbose mode, sex mismatch penalties are shown in the score breakdown.
 To avoid O(N*M) comparisons, 5 blocking passes generate candidate pairs
 (Christen, 2012):
 
-1. Surname Soundex + birth decade
-2. Surname Soundex + death decade
-3. Given name Soundex + birth decade
+1. Surname phonetic + birth decade
+2. Surname phonetic + death decade
+3. Given name phonetic + birth decade
 4. Exact birth year + exact death year
-5. Surname Soundex + given name Soundex
+5. Surname phonetic + given name phonetic
 
 Only pairs that share at least one blocking key are scored.
+
+With `--phonetic metaphone`, two additional multi-key passes run after the
+standard passes. Each individual is indexed under both its primary and secondary
+Double Metaphone codes, so cross-code matches (e.g., Smith's secondary code
+matching Schmidt's primary code) become candidates that Soundex would miss.
 
 ### Three-Tier Classification
 
@@ -260,6 +270,9 @@ Fellegi, I. P., & Sunter, A. B. (1969). A theory for record linkage.
 Jaro, M. A. (1989). Advances in record-linkage methodology as applied to
     matching the 1985 census of Tampa, Florida. *Journal of the American
     Statistical Association*, *84*(406), 414-420.
+
+Phillips, L. (2000). The Double Metaphone search algorithm. *C/C++ Users
+    Journal*, *18*(6).
 
 Papadakis, G., Efthymiou, V., Thanos, E., Hassanzadeh, O., & Christen, P.
     (2023). An analysis of one-to-one matching algorithms for entity

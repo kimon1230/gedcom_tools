@@ -71,6 +71,12 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         action="store_true",
         help="Treat sex mismatches as hard reject",
     )
+    parser.add_argument(
+        "--phonetic",
+        choices=["soundex", "metaphone"],
+        default="soundex",
+        help="Phonetic algorithm for blocking/scoring (default: soundex)",
+    )
 
 
 def run(args: Namespace) -> int:
@@ -86,6 +92,7 @@ def run(args: Namespace) -> int:
     show_matches: str = args.show_matches
     list_unique: bool = args.list_unique
     reject_sex_mismatch: bool = args.reject_sex_mismatch
+    phonetic: str = getattr(args, "phonetic", "soundex")
     limit: int | None = args.limit
 
     # Default limit: unlimited for JSON, 50 for text
@@ -131,13 +138,15 @@ def run(args: Namespace) -> int:
             encoding_b = detect_encoding(file_b)
 
         with tracker.phase(f"Reading {file_a.name}"):
-            individuals_a = collect_individuals(file_a, "A")
+            individuals_a = collect_individuals(file_a, "A", algorithm=phonetic)
 
         with tracker.phase(f"Reading {file_b.name}"):
-            individuals_b = collect_individuals(file_b, "B")
+            individuals_b = collect_individuals(file_b, "B", algorithm=phonetic)
 
         with tracker.phase("Finding matches"):
-            candidates = generate_candidates(individuals_a, individuals_b)
+            candidates = generate_candidates(
+                individuals_a, individuals_b, algorithm=phonetic
+            )
 
             map_a = {ind.xref: ind for ind in individuals_a}
             map_b = {ind.xref: ind for ind in individuals_b}

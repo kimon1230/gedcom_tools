@@ -66,6 +66,7 @@ def _make_args(
     list_unique: bool = False,
     limit: int | None = None,
     reject_sex_mismatch: bool = False,
+    phonetic: str = "soundex",
 ) -> argparse.Namespace:
     return argparse.Namespace(
         file_a=file_a,
@@ -80,6 +81,7 @@ def _make_args(
         list_unique=list_unique,
         limit=limit,
         reject_sex_mismatch=reject_sex_mismatch,
+        phonetic=phonetic,
     )
 
 
@@ -429,3 +431,87 @@ class TestEdgeCases:
         assert pair["individual_a"]["xref"] == "@I1@"
         assert pair["individual_b"]["xref"] == "@I99@"
         assert pair["score"] >= 0.85
+
+
+class TestMetaphoneIntegration:
+    def test_metaphone_option_accepted(self, tmp_path: Path, capsys) -> None:
+        fa = _write_gedcom(
+            tmp_path / "a.ged",
+            [
+                _indi_block(
+                    "@I1@",
+                    "John",
+                    "Smith",
+                    "M",
+                    birth_year=1850,
+                    death_year=1920,
+                    birth_place="London, England",
+                ),
+            ],
+        )
+        fb = _write_gedcom(
+            tmp_path / "b.ged",
+            [
+                _indi_block(
+                    "@I2@",
+                    "John",
+                    "Smith",
+                    "M",
+                    birth_year=1850,
+                    death_year=1920,
+                    birth_place="London, England",
+                ),
+            ],
+        )
+        args = _make_args(fa, fb, fmt="json", phonetic="metaphone")
+        rc = run(args)
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["certain_matches"]) == 1
+
+    def test_metaphone_cross_code_blocking(self, tmp_path: Path, capsys) -> None:
+        # Use surnames with different soundex first letters but shared metaphone.
+        # Only blocking key is surname+birth — no given names, different death years,
+        # no exact year combo.
+        fa = _write_gedcom(
+            tmp_path / "a.ged",
+            [
+                _indi_block(
+                    "@I1@",
+                    "John",
+                    "Catherine",
+                    "M",
+                    birth_year=1850,
+                    birth_place="London",
+                ),
+            ],
+        )
+        fb = _write_gedcom(
+            tmp_path / "b.ged",
+            [
+                _indi_block(
+                    "@I2@",
+                    "James",
+                    "Katherine",
+                    "M",
+                    birth_year=1853,
+                    birth_place="London",
+                ),
+            ],
+        )
+        # Soundex: surname Catherine(C365) vs Katherine(K365) — different.
+        # Given names differ too (J500 vs J520). No death year combo.
+        # Only possible blocking pass: surname+birth decade.
+        # Soundex surname codes differ → no candidates → no match.
+        args_sx = _make_args(fa, fb, fmt="json", phonetic="soundex")
+        run(args_sx)
+        data_sx = json.loads(capsys.readouterr().out)
+        assert data_sx["certain_matches"] + data_sx["probable_matches"] == []
+
+        # Metaphone: Catherine and Katherine produce same codes.
+        # Multi-key blocking catches them via shared code + birth decade.
+        args_mp = _make_args(fa, fb, fmt="json", phonetic="metaphone")
+        run(args_mp)
+        data_mp = json.loads(capsys.readouterr().out)
+        mp_matches = data_mp["certain_matches"] + data_mp["probable_matches"]
+        assert len(mp_matches) >= 1

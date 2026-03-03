@@ -21,6 +21,7 @@ class SearchQuery:
     fuzzy_dates: int | None  # ±N years, or None
     limit: int | None
     count_only: bool
+    phonetic_algo: str = "soundex"
 
 
 @dataclass
@@ -52,10 +53,13 @@ class SearchIndividual:
     birth_place_norm: str = ""
     death_place_norm: str = ""
     alt_names_norm: list[tuple[str, str]] = field(default_factory=list)
-    # Pre-computed Soundex codes
-    surname_soundex: str = ""
-    given_name_soundex: str = ""
-    alt_soundex: list[tuple[str, str]] = field(default_factory=list)
+    # Pre-computed phonetic codes
+    surname_phonetic: str = ""
+    surname_phonetic_alt: str = ""
+    given_phonetic: str = ""
+    given_phonetic_alt: str = ""
+    alt_phonetic: list[tuple[str, str]] = field(default_factory=list)
+    alt_phonetic_alt: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass

@@ -98,6 +98,8 @@ def score_pair(
     sex_penalty = False
 
     # Surname
+    from gedcom_tools.phonetics import phonetic_codes_match
+
     candidates_a = [s for s in [a.surname_normalized] + a.alt_surnames_normalized if s]
     candidates_b = [s for s in [b.surname_normalized] + b.alt_surnames_normalized if s]
     if candidates_a and candidates_b:
@@ -108,9 +110,12 @@ def score_pair(
             b.alt_surnames_normalized,
         )
         if (
-            a.surname_soundex
-            and b.surname_soundex
-            and a.surname_soundex == b.surname_soundex
+            phonetic_codes_match(
+                a.surname_phonetic,
+                a.surname_phonetic_alt,
+                b.surname_phonetic,
+                b.surname_phonetic_alt,
+            )
             and 0.50 <= jw <= 0.85
         ):
             jw = min(jw + 0.05, 1.0)

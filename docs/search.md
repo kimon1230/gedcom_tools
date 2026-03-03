@@ -14,11 +14,12 @@ gedcom-tools search <file> <query> [options]
 | Option | Description |
 |--------|-------------|
 | `--regex` | Treat `:` operator values as regex patterns |
+| `--phonetic {soundex,metaphone}` | Phonetic algorithm for `~` operator (default: soundex) |
 | `--fuzzy-dates N` | Expand approximate dates ±N years |
 | `--limit N` | Maximum number of results (default: unlimited) |
 | `--count` | Show match count only (ignores `--limit`) |
 | `--format {text,json}` | Output format (default: text) |
-| `-v, --verbose` | Show phase timing and Soundex codes |
+| `-v, --verbose` | Show phase timing and phonetic codes |
 | `-q, --quiet` | Minimal output (names and xrefs only) |
 | `--no-color` | Disable colored output |
 
@@ -27,7 +28,7 @@ gedcom-tools search <file> <query> [options]
 The command runs in 3-4 phases:
 
 1. Collect individuals (names, dates, places, sex, alt names, pre-computed
-   Soundex codes)
+   phonetic codes)
 2. Build relationship graph (only when `ancestor:` or `descendant:` terms
    are present)
 3. Match each individual against all query terms (AND logic)
@@ -74,7 +75,7 @@ match an individual whose only recorded date is a christening in 1850.
 |----------|------|-------------|
 | `:` | Substring | Value appears anywhere in the field (default) |
 | `=` | Exact | Value matches the entire field |
-| `~` | Phonetic | Soundex match (name fields only) |
+| `~` | Phonetic | Phonetic match (name fields only; algorithm configurable via `--phonetic`) |
 
 The `~` operator is restricted to name fields (`name`, `given`, `surname`).
 Using it on date or place fields produces an error.
@@ -89,6 +90,16 @@ A term without a field prefix searches the `name` field:
 ```bash
 gedcom-tools search tree.ged 'Smith'        # same as name:Smith
 gedcom-tools search tree.ged '~Schmidt'     # same as name~Schmidt
+```
+
+### Phonetic Algorithm
+
+By default, the `~` operator uses American Soundex. Use `--phonetic metaphone`
+to switch to Double Metaphone, which handles European name variants
+(Schmidt/Smith, Müller/Miller) better than Soundex:
+
+```bash
+gedcom-tools search tree.ged 'surname~Schmidt' --phonetic metaphone
 ```
 
 ### Date Ranges
@@ -259,7 +270,7 @@ When the file contains no individuals:
 No individuals found in file.
 ```
 
-In verbose mode, phonetic match details include the Soundex code:
+In verbose mode, phonetic match details include the phonetic code:
 
 ```
     Matched: surname "Smythe" sounds like "Smith" (S530)
@@ -376,8 +387,8 @@ shell. Quote the query to prevent this.
 
 ## Known Limitations
 
-- Soundex is designed for English names and may not work well for names from
-  other languages
+- Soundex is designed for English names; use `--phonetic metaphone` for better
+  matching of European name variants (Schmidt/Smith, Müller/Miller)
 - Place matching is string-based; no geocoding or geographic lookup
 - Wildcard patterns require at least 3 non-wildcard characters
 - Relationship traversal is capped at 50 generations

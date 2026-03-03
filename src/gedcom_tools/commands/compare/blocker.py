@@ -9,20 +9,20 @@ if TYPE_CHECKING:
 
 
 def _key_surname_birth(ind: CompareIndividual) -> str | None:
-    if ind.surname_soundex and ind.birth_decade:
-        return f"{ind.surname_soundex}|{ind.birth_decade}"
+    if ind.surname_phonetic and ind.birth_decade:
+        return f"{ind.surname_phonetic}|{ind.birth_decade}"
     return None
 
 
 def _key_surname_death(ind: CompareIndividual) -> str | None:
-    if ind.surname_soundex and ind.death_decade:
-        return f"{ind.surname_soundex}|{ind.death_decade}"
+    if ind.surname_phonetic and ind.death_decade:
+        return f"{ind.surname_phonetic}|{ind.death_decade}"
     return None
 
 
 def _key_given_birth(ind: CompareIndividual) -> str | None:
-    if ind.given_name_soundex and ind.birth_decade:
-        return f"{ind.given_name_soundex}|{ind.birth_decade}"
+    if ind.given_phonetic and ind.birth_decade:
+        return f"{ind.given_phonetic}|{ind.birth_decade}"
     return None
 
 
@@ -33,8 +33,8 @@ def _key_exact_years(ind: CompareIndividual) -> str | None:
 
 
 def _key_surname_given(ind: CompareIndividual) -> str | None:
-    if ind.surname_soundex and ind.given_name_soundex:
-        return f"{ind.surname_soundex}|{ind.given_name_soundex}"
+    if ind.surname_phonetic and ind.given_phonetic:
+        return f"{ind.surname_phonetic}|{ind.given_phonetic}"
     return None
 
 
@@ -44,6 +44,40 @@ _PASS_KEY_FNS: list[Callable[[CompareIndividual], str | None]] = [
     _key_given_birth,
     _key_exact_years,
     _key_surname_given,
+]
+
+
+def _multi_key_surname_birth(ind: CompareIndividual) -> list[str]:
+    """Keys for both primary and alt surname codes paired with birth decade."""
+    keys: list[str] = []
+    if ind.surname_phonetic and ind.birth_decade:
+        keys.append(f"{ind.surname_phonetic}|{ind.birth_decade}")
+    if (
+        ind.surname_phonetic_alt
+        and ind.birth_decade
+        and ind.surname_phonetic_alt != ind.surname_phonetic
+    ):
+        keys.append(f"{ind.surname_phonetic_alt}|{ind.birth_decade}")
+    return keys
+
+
+def _multi_key_surname_given(ind: CompareIndividual) -> list[str]:
+    """Keys for both primary and alt surname codes paired with given phonetic."""
+    keys: list[str] = []
+    if ind.surname_phonetic and ind.given_phonetic:
+        keys.append(f"{ind.surname_phonetic}|{ind.given_phonetic}")
+    if (
+        ind.surname_phonetic_alt
+        and ind.given_phonetic
+        and ind.surname_phonetic_alt != ind.surname_phonetic
+    ):
+        keys.append(f"{ind.surname_phonetic_alt}|{ind.given_phonetic}")
+    return keys
+
+
+_METAPHONE_MULTI_KEY_FNS: list[Callable[[CompareIndividual], list[str]]] = [
+    _multi_key_surname_birth,
+    _multi_key_surname_given,
 ]
 
 
@@ -74,13 +108,41 @@ def _run_pass(
             candidates.add((xref_a, xref_b))
 
 
+def _run_multi_key_pass(
+    individuals_a: list[CompareIndividual],
+    individuals_b: list[CompareIndividual],
+    key_fn: Callable[[CompareIndividual], list[str]],
+    max_block_size: int,
+    candidates: set[tuple[str, str]],
+) -> None:
+    blocks: dict[str, list[str]] = defaultdict(list)
+    for ind in individuals_b:
+        for key in key_fn(ind):
+            blocks[key].append(ind.xref)
+
+    for ind in individuals_a:
+        xref_a = ind.xref
+        for key in key_fn(ind):
+            block = blocks.get(key)
+            if block is None or len(block) > max_block_size:
+                continue
+            for xref_b in block:
+                candidates.add((xref_a, xref_b))
+
+
 def generate_candidates(
     individuals_a: list[CompareIndividual],
     individuals_b: list[CompareIndividual],
     max_block_size: int = 500,
+    algorithm: str = "soundex",
 ) -> set[tuple[str, str]]:
     """Return set of (xref_a, xref_b) candidate pairs."""
     candidates: set[tuple[str, str]] = set()
     for key_fn in _PASS_KEY_FNS:
         _run_pass(individuals_a, individuals_b, key_fn, max_block_size, candidates)
+    if algorithm == "metaphone":
+        for mk_fn in _METAPHONE_MULTI_KEY_FNS:
+            _run_multi_key_pass(
+                individuals_a, individuals_b, mk_fn, max_block_size, candidates
+            )
     return candidates

@@ -40,7 +40,7 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
 
               field:value     substring match (default)
               field=value     exact match
-              field~value     phonetic match (Soundex)
+              field~value     phonetic match (Soundex or Metaphone, see --phonetic)
 
               A bare term (no field prefix) searches all name fields.
 
@@ -89,6 +89,12 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         default=False,
         help="Show match count only",
     )
+    parser.add_argument(
+        "--phonetic",
+        choices=["soundex", "metaphone"],
+        default="soundex",
+        help="Phonetic algorithm for ~ operator (default: soundex)",
+    )
 
 
 def run(args: Namespace) -> int:
@@ -102,6 +108,7 @@ def run(args: Namespace) -> int:
     fuzzy_dates: int | None = args.fuzzy_dates
     limit: int | None = args.limit
     count_only: bool = args.count
+    phonetic: str = getattr(args, "phonetic", "soundex")
 
     if err := validate_input_file(file_path):
         return err
@@ -113,6 +120,7 @@ def run(args: Namespace) -> int:
             fuzzy_dates=fuzzy_dates,
             limit=limit,
             count_only=count_only,
+            phonetic_algo=phonetic,
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -135,7 +143,9 @@ def run(args: Namespace) -> int:
         )
 
         with tracker.phase("Collecting individuals"):
-            individuals, encoding_info = collect_individuals(file_path)
+            individuals, encoding_info = collect_individuals(
+                file_path, algorithm=phonetic
+            )
 
         # Build relationship pre-filter if needed
         relationship_xrefs: set[str] | None = None
@@ -198,7 +208,13 @@ def run(args: Namespace) -> int:
                 output = format_json(result)
             else:
                 colors = Colors(sys.stdout, force_disable=no_color)
-                output = format_text(result, colors, quiet=quiet, verbose=verbose)
+                output = format_text(
+                    result,
+                    colors,
+                    quiet=quiet,
+                    verbose=verbose,
+                    phonetic_algo=query.phonetic_algo,
+                )
 
         if output:
             print(output)

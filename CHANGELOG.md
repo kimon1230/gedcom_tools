@@ -7,6 +7,55 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `filter` command — transform GEDCOM files by stripping tags, removing records, or extracting subtrees centered on an individual
+- Strip operations: `--strip-custom-tags`, `--strip-notes`, `--strip-sources`, `--strip-multimedia`, `--strip-tag TAG` (repeatable, both record-level and line-level)
+- Subtree extraction: `--subtree @I1@` with `--ancestors N`, `--descendants N`, `--include-spouses` for extracting family branches
+- Automatic cross-reference cleanup: dangling pointer removal and empty family cascade after filtering
+- Line-level GEDCOM parser for lossless round-trip processing (preserves encoding, BOM, line endings)
+- `--dry-run` for previewing filter results without writing output
+- Shared byte-I/O utilities extracted from convert: `strip_bom()`, `resolve_source_codec()`, `check_output_safety()` moved to `utils.py` for reuse across filter and convert
+- `convert` command — transcode GEDCOM files between character encodings (UTF-8, ANSEL, ASCII, UNICODE) with automatic CHAR header update
+- Auto-detection of source encoding from CHAR header and BOM, with `--from` override for non-standard files (any Python codec: latin-1, cp1252, iso-8859-7, etc.)
+- NFC normalization for ANSEL sources (ANSEL combining diacritics produce NFD; NFC composes to precomposed characters)
+- `--bom` flag for adding byte order mark to UTF-8 or UTF-16 output
+- `--dry-run` for previewing conversion without writing output
+- `--no-normalize` to skip NFC normalization when preserving decomposed form is needed
+- Line length warnings when transcoding causes lines to exceed the GEDCOM 255-byte limit
+- Same-file protection via `os.path.samefile()` (detects symlinks and hardlinks)
+- Overwrite protection (`--force` to override)
+
+## [1.0.0]
+
+### Added
+- `export` command — extract all individuals and families from a GEDCOM file into CSV or JSON format for spreadsheets, databases, and downstream tools
+- CSV export with 17 individual columns and 10 family columns, UTF-8 BOM for Excel file output
+- JSON export with `meta` section, `alt_names` objects, `notes` arrays, and `null` for missing years
+- `--table {individuals,families}` for CSV table selection (JSON always includes both)
+- `-o, --output` for file output with overwrite protection (`--force` to override)
+- `--no-bom` to suppress UTF-8 BOM in CSV file output
+- `--redact-living` privacy flag — replaces names and dates of estimated-living individuals with placeholders
+- `--max-age N` to customize living estimation threshold (default: 110 years)
+- Living estimation algorithm: requires birth year + no death record to classify as living (conservative — no birth year = not redacted)
+- Family spouse name redaction when referenced individual is estimated living
+- `--phonetic {soundex,metaphone}` option for `search`, `compare`, and `duplicates` commands — select between American Soundex and Double Metaphone phonetic algorithms
+- Double Metaphone support via `DoubleMetaphone` library — handles European name variants (Schmidt/Smith, Müller/Miller) far better than Soundex
+- `phonetic_encode()` and `phonetic_codes_match()` shared functions in `phonetics.py` for algorithm-agnostic phonetic operations
+- Secondary-code blocking passes for `compare` and `duplicates` — when using metaphone, individuals are indexed under both primary and secondary codes for improved candidate recall
+- 8 new validation warning codes:
+  - W016/W017: Asymmetric family-individual link detection (FAM↔INDI bidirectional cross-reference integrity)
+  - W026: Sibling spacing check — flags siblings born less than 9 months apart (twins excluded)
+  - W027: Multiple SEX records on a single individual
+  - W028: Invalid SEX value (not M, F, U, or X)
+  - W029: Sex-role mismatch (HUSB with SEX F, or WIFE with SEX M)
+  - W033: OBJE record missing FILE sub-record
+  - W034: FILE sub-record missing FORM (media type)
+- `MIN_SIBLING_SPACING_MONTHS` and `VALID_SEX_VALUES` constants
+- `birth_month` field in validation `IndividualInfo` for sibling spacing checks
+- Role-aware reference tracking (`indi_as_child`, `indi_as_spouse`, `fam_children`, `fam_spouses`) replacing generic connection dicts
+- `duplicates` command — scan a single GEDCOM file for potential duplicate individuals using the same probabilistic scoring engine as `compare` (multi-pass blocking, weighted Jaro-Winkler, greedy one-to-one deduplication)
+- `--show-matches {all,certain,probable}` filter for `duplicates` command
+- `--limit N` for `duplicates` result truncation (text default: 50, JSON default: unlimited)
+- `--reject-sex-mismatch` flag for `duplicates` command
 - `relationship` command — determine the genealogical relationship between two individuals using Lowest Common Ancestor algorithm
 - Half-relationship detection (full vs half siblings, uncles, cousins) via shared-parent counting and spouse-pairing heuristic
 - Multi-key sort for relationship paths: shortest path, blood over half, male line preference
@@ -25,6 +74,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Shared `phonetics.py` module — Soundex extracted from compare for reuse across commands
 
 ### Changed
+- Internal field renames: `surname_soundex` → `surname_phonetic`, `given_name_soundex` → `given_phonetic` (no JSON API change — these fields are never exposed in output)
 - `languages` JSON filter output: `notes` field changed from `["@N1@"]` (list of strings) to `[{"xref": "@N1@"}]` (list of objects) for consistency with `persons` and `events`
 
 ## [0.4.0]

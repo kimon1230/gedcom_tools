@@ -6,7 +6,6 @@ from gedcom_tools.commands.search.models import (
     SearchQuery,
     SearchTerm,
 )
-from gedcom_tools.phonetics import soundex
 from gedcom_tools.utils import normalize_compare, normalize_display
 
 
@@ -22,7 +21,10 @@ def _make_individual(
     death_approx: bool = False,
     death_place: str = "Manchester",
     alt_names: list[tuple[str, str]] | None = None,
+    algorithm: str = "soundex",
 ) -> SearchIndividual:
+    from gedcom_tools.phonetics import phonetic_encode
+
     given_disp = normalize_display(given)
     surname_disp = normalize_display(surname)
     full_name = f"{given_disp} {surname_disp}".strip()
@@ -38,7 +40,16 @@ def _make_individual(
     alts = alt_names or []
     alt_disp = [(normalize_display(g), normalize_display(s)) for g, s in alts]
     alt_norm = [(normalize_compare(g), normalize_compare(s)) for g, s in alt_disp]
-    alt_sx = [(soundex(g_n), soundex(s_n)) for g_n, s_n in alt_norm]
+
+    s_p, s_a = phonetic_encode(surname_norm, algorithm)
+    g_p, g_a = phonetic_encode(given_norm, algorithm)
+    alt_primary: list[tuple[str, str]] = []
+    alt_secondary: list[tuple[str, str]] = []
+    for g_n, s_n in alt_norm:
+        gp, ga = phonetic_encode(g_n, algorithm)
+        sp, sa = phonetic_encode(s_n, algorithm)
+        alt_primary.append((gp, sp))
+        alt_secondary.append((ga, sa))
 
     return SearchIndividual(
         xref=xref,
@@ -59,9 +70,12 @@ def _make_individual(
         birth_place_norm=birth_place_norm,
         death_place_norm=death_place_norm,
         alt_names_norm=alt_norm,
-        surname_soundex=soundex(surname_norm),
-        given_name_soundex=soundex(given_norm),
-        alt_soundex=alt_sx,
+        surname_phonetic=s_p,
+        surname_phonetic_alt=s_a,
+        given_phonetic=g_p,
+        given_phonetic_alt=g_a,
+        alt_phonetic=alt_primary,
+        alt_phonetic_alt=alt_secondary,
     )
 
 
@@ -85,6 +99,7 @@ def _query(
     terms: list[SearchTerm],
     regex_mode: bool = False,
     fuzzy_dates: int | None = None,
+    phonetic_algo: str = "soundex",
 ) -> SearchQuery:
     return SearchQuery(
         terms=terms,
@@ -92,6 +107,7 @@ def _query(
         fuzzy_dates=fuzzy_dates,
         limit=None,
         count_only=False,
+        phonetic_algo=phonetic_algo,
     )
 
 
@@ -826,3 +842,70 @@ class TestEdgeCases:
         r2 = match_individual(ind2, q)
         assert r1 is not None
         assert r2 is not None
+
+
+# ---------------------------------------------------------------------------
+# Metaphone matching
+# ---------------------------------------------------------------------------
+
+
+class TestMetaphoneMatch:
+    def test_metaphone_surname_match(self) -> None:
+        # Catherine/Katherine differ in soundex but share metaphone
+        ind = _make_individual(surname="Katherine", algorithm="metaphone")
+        q = _query(
+            [_term(field="surname", operator="~", value="Catherine")],
+            phonetic_algo="metaphone",
+        )
+        result = match_individual(ind, q)
+        assert result is not None
+        assert result.details[0].matched_value == "Katherine"
+
+    def test_metaphone_given_match(self) -> None:
+        ind = _make_individual(given="Katherine", algorithm="metaphone")
+        q = _query(
+            [_term(field="given", operator="~", value="Catherine")],
+            phonetic_algo="metaphone",
+        )
+        result = match_individual(ind, q)
+        assert result is not None
+
+    def test_metaphone_name_match(self) -> None:
+        ind = _make_individual(
+            given="Katherine", surname="Williams", algorithm="metaphone"
+        )
+        q = _query(
+            [_term(field="name", operator="~", value="Catherine")],
+            phonetic_algo="metaphone",
+        )
+        result = match_individual(ind, q)
+        assert result is not None
+
+    def test_metaphone_alt_name_match(self) -> None:
+        ind = _make_individual(
+            surname="Williams",
+            alt_names=[("", "Katherine")],
+            algorithm="metaphone",
+        )
+        q = _query(
+            [_term(field="surname", operator="~", value="Catherine")],
+            phonetic_algo="metaphone",
+        )
+        result = match_individual(ind, q)
+        assert result is not None
+
+    def test_metaphone_no_false_match(self) -> None:
+        ind = _make_individual(surname="Williams", algorithm="metaphone")
+        q = _query(
+            [_term(field="surname", operator="~", value="Johnson")],
+            phonetic_algo="metaphone",
+        )
+        result = match_individual(ind, q)
+        assert result is None
+
+    def test_soundex_default_unchanged(self) -> None:
+        # Default algorithm is soundex — Catherine/Katherine should NOT match
+        ind = _make_individual(surname="Katherine")
+        q = _query([_term(field="surname", operator="~", value="Catherine")])
+        result = match_individual(ind, q)
+        assert result is None

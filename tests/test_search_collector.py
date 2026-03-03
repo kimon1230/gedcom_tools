@@ -410,42 +410,40 @@ class TestApproximateDates:
 # ---------------------------------------------------------------------------
 
 
-class TestSoundexPrecomputation:
-    def test_surname_and_given_soundex_populated(self, tmp_path: Path) -> None:
+class TestPhoneticPrecomputation:
+    def test_surname_and_given_phonetic_populated(self, tmp_path: Path) -> None:
         ind = _collect_one(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
-        assert ind.surname_soundex == "S530"
-        assert ind.given_name_soundex == "J500"
+        assert ind.surname_phonetic == "S530"
+        assert ind.given_phonetic == "J500"
 
-    def test_empty_name_empty_soundex(self, tmp_path: Path) -> None:
+    def test_empty_name_empty_phonetic(self, tmp_path: Path) -> None:
         ind = _collect_one(tmp_path, "0 @I1@ INDI\n1 SEX M\n")
-        assert ind.surname_soundex == ""
-        assert ind.given_name_soundex == ""
+        assert ind.surname_phonetic == ""
+        assert ind.given_phonetic == ""
 
-    def test_alt_names_have_alt_soundex(self, tmp_path: Path) -> None:
+    def test_alt_names_have_alt_phonetic(self, tmp_path: Path) -> None:
         ind = _collect_one(
             tmp_path,
             "0 @I1@ INDI\n" "1 NAME John /Smith/\n" "1 NAME Jack /Smythe/\n",
         )
-        assert len(ind.alt_soundex) == 1
-        # alt_soundex entries are (given_soundex, surname_soundex) tuples
-        given_sx, surname_sx = ind.alt_soundex[0]
-        assert given_sx != ""
-        assert surname_sx != ""
+        assert len(ind.alt_phonetic) == 1
+        # alt_phonetic entries are (given_phonetic, surname_phonetic) tuples
+        given_ph, surname_ph = ind.alt_phonetic[0]
+        assert given_ph != ""
+        assert surname_ph != ""
 
-    def test_soundex_computed_from_normalized(self, tmp_path: Path) -> None:
-        # Diacritics stripped before soundex computation
+    def test_phonetic_computed_from_normalized(self, tmp_path: Path) -> None:
+
         ind = _collect_one(
             tmp_path,
             "0 @I1@ INDI\n1 NAME Fran\u00e7ois /Gar\u00e7on/\n",
         )
-        # "Fran\u00e7ois" normalizes to "francois", "Gar\u00e7on" to "garcon"
-        # soundex is computed from those normalized forms
         expected_surname = soundex("garcon")
         expected_given = soundex("francois")
-        assert ind.surname_soundex == expected_surname
-        assert ind.given_name_soundex == expected_given
+        assert ind.surname_phonetic == expected_surname
+        assert ind.given_phonetic == expected_given
 
-    def test_multiple_alt_soundex_entries(self, tmp_path: Path) -> None:
+    def test_multiple_alt_phonetic_entries(self, tmp_path: Path) -> None:
         ind = _collect_one(
             tmp_path,
             "0 @I1@ INDI\n"
@@ -453,21 +451,32 @@ class TestSoundexPrecomputation:
             "1 NAME Jack /Smythe/\n"
             "1 NAME Johann /Schmidt/\n",
         )
-        assert len(ind.alt_soundex) == 2
-        # Each tuple has (given_soundex, surname_soundex)
-        for g_sx, s_sx in ind.alt_soundex:
-            assert isinstance(g_sx, str)
-            assert isinstance(s_sx, str)
+        assert len(ind.alt_phonetic) == 2
+        for g_ph, s_ph in ind.alt_phonetic:
+            assert isinstance(g_ph, str)
+            assert isinstance(s_ph, str)
 
-    def test_only_given_name_has_soundex(self, tmp_path: Path) -> None:
+    def test_only_given_name_has_phonetic(self, tmp_path: Path) -> None:
         ind = _collect_one(tmp_path, "0 @I1@ INDI\n1 NAME John //\n")
-        assert ind.given_name_soundex != ""
-        assert ind.surname_soundex == ""
+        assert ind.given_phonetic != ""
+        assert ind.surname_phonetic == ""
 
-    def test_only_surname_has_soundex(self, tmp_path: Path) -> None:
+    def test_only_surname_has_phonetic(self, tmp_path: Path) -> None:
         ind = _collect_one(tmp_path, "0 @I1@ INDI\n1 NAME /Smith/\n")
-        assert ind.surname_soundex != ""
-        assert ind.given_name_soundex == ""
+        assert ind.surname_phonetic != ""
+        assert ind.given_phonetic == ""
+
+    def test_soundex_alt_is_empty(self, tmp_path: Path) -> None:
+        ind = _collect_one(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
+        assert ind.surname_phonetic_alt == ""
+        assert ind.given_phonetic_alt == ""
+
+    def test_alt_phonetic_alt_parallel(self, tmp_path: Path) -> None:
+        ind = _collect_one(
+            tmp_path,
+            "0 @I1@ INDI\n" "1 NAME John /Smith/\n" "1 NAME Jack /Smythe/\n",
+        )
+        assert len(ind.alt_phonetic) == len(ind.alt_phonetic_alt)
 
 
 # ---------------------------------------------------------------------------

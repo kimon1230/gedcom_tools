@@ -646,8 +646,11 @@ Search for individuals matching flexible query criteria including name, dates, p
 # Search by name (substring match)
 gedcom-tools search family.ged 'Smith'
 
-# Phonetic matching (Soundex)
+# Phonetic matching (Soundex by default)
 gedcom-tools search family.ged 'surname~Schmidt'
+
+# Double Metaphone (better for European name variants)
+gedcom-tools search family.ged 'surname~Schmidt' --phonetic metaphone
 
 # Multiple criteria (AND logic)
 gedcom-tools search family.ged 'surname:Smith born:1800-1850 place:London'
@@ -713,6 +716,7 @@ Query: surname:Smith born:1800-1850
 | Option | Description |
 |--------|-------------|
 | `--regex` | Treat `:` operator values as regex patterns |
+| `--phonetic {soundex,metaphone}` | Phonetic algorithm for `~` operator (default: soundex) |
 | `--fuzzy-dates N` | Expand approximate dates ±N years |
 | `--limit N` | Maximum number of results (default: unlimited) |
 | `--count` | Show match count only |
@@ -720,7 +724,7 @@ Query: surname:Smith born:1800-1850
 **Query syntax:**
 
 - **Fields**: `name`, `given`, `surname`, `born`, `died`, `place`, `sex`, `ancestor`, `descendant`
-- **Operators**: `:` (substring), `=` (exact), `~` (phonetic/Soundex)
+- **Operators**: `:` (substring), `=` (exact), `~` (phonetic — Soundex or Double Metaphone via `--phonetic`)
 - Bare terms (no field prefix) search the `name` field
 - Name fields also search alternative name records (ROMN/FONE transliterations)
 - See [Search Command](docs/search.md) for full query syntax and examples
@@ -808,6 +812,7 @@ $ gedcom-tools -q compare tree_a.ged tree_b.ged
 | `--list-unique` | List individuals unique to each file |
 | `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
 | `--reject-sex-mismatch` | Treat sex mismatches as hard reject |
+| `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
 
 **How it works:**
 
@@ -816,6 +821,89 @@ $ gedcom-tools -q compare tree_a.ged tree_b.ged
 - Three-tier classification: certain, probable, non-match
 - Greedy one-to-one deduplication ensures each individual appears in at most one match
 - See [Compare Command](docs/compare.md) for full methodology details
+
+#### duplicates
+
+Scan a single GEDCOM file for potential duplicate individuals using the same scoring engine as compare.
+
+```bash
+# Find duplicates in a file
+gedcom-tools duplicates family.ged
+
+# Only show certain matches
+gedcom-tools duplicates family.ged --show-matches certain
+
+# Adjust thresholds
+gedcom-tools duplicates family.ged --certain-threshold 0.90 --probable-threshold 0.70
+
+# JSON output
+gedcom-tools --format json duplicates family.ged
+
+# Reject sex mismatches
+gedcom-tools duplicates family.ged --reject-sex-mismatch
+
+# Quiet mode
+gedcom-tools -q duplicates family.ged
+
+# Verbose mode (per-field scores)
+gedcom-tools -v duplicates family.ged
+```
+
+<details>
+<summary><b>Sample: Find duplicates</b> (family.ged)</summary>
+
+```
+$ gedcom-tools duplicates family.ged
+
+File: family.ged
+
+=== Duplicate Scan Summary ===
+  Individuals scanned:   500
+  Certain duplicates:      3
+  Probable duplicates:     5
+
+=== Certain Duplicates (3) ===
+  John Smith (1850-1920) [@I1@] ↔ John Smith (1850-1920) [@I42@]  score: 0.95
+    Birth Place: "London, England" vs "London, Middlesex, England"
+
+  Mary Jones (1872-1945) [@I3@] ↔ Maria Jones (1873-1945) [@I88@]  score: 0.91
+    Given Name: "Mary" vs "Maria"
+    Birth Year: "1872" vs "1873"
+
+=== Probable Duplicates (5) ===
+  ...
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Quiet mode</b> (family.ged)</summary>
+
+```
+$ gedcom-tools -q duplicates family.ged
+
+3 certain, 5 probable
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--certain-threshold F` | Minimum score for certain duplicate (default: 0.85) |
+| `--probable-threshold F` | Minimum score for probable duplicate (default: 0.65) |
+| `--show-matches {all,certain,probable}` | Which matches to show (default: all) |
+| `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
+| `--reject-sex-mismatch` | Treat sex mismatches as hard reject |
+| `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
+
+**How it works:**
+
+- Reuses the compare command's scoring engine (weighted Jaro-Winkler, multi-pass blocking, three-tier classification) on a single file
+- Self-pairs and symmetric duplicates are filtered out before scoring
+- Greedy one-to-one deduplication ensures each individual appears in at most one match
+- See [Duplicates Command](docs/duplicates.md) for full details
 
 #### relationship
 
@@ -904,6 +992,325 @@ James Smith is the son of John Smith.
 - Results sorted by shortest path, blood over half, male line preference
 - See [Relationship Command](docs/relationship.md) for full algorithm details
 
+#### export
+
+Export all individuals and families from a GEDCOM file to CSV or JSON for use in
+spreadsheets, databases, and downstream tools.
+
+```bash
+# Export individuals as CSV to stdout
+gedcom-tools export family.ged
+
+# Export families table
+gedcom-tools export family.ged --table families
+
+# Export as JSON (always includes both individuals and families)
+gedcom-tools export family.ged --format json
+
+# Write CSV to file (includes UTF-8 BOM for Excel compatibility)
+gedcom-tools export family.ged -o individuals.csv
+
+# Write CSV without BOM
+gedcom-tools export family.ged -o individuals.csv --no-bom
+
+# JSON to file
+gedcom-tools export family.ged --format json -o tree.json
+
+# Redact living individuals (names/dates replaced)
+gedcom-tools export family.ged --redact-living
+
+# Custom living threshold
+gedcom-tools export family.ged --redact-living --max-age 90
+```
+
+<details>
+<summary><b>Sample: CSV individuals</b></summary>
+
+```
+$ gedcom-tools export family.ged
+
+xref,given_name,surname,suffix,sex,birth_date,birth_year,birth_place,death_date,death_year,death_place,burial_date,burial_place,occupations,source_count,famc_xref,fams_xrefs
+@I1@,John,Smith,,M,15 JAN 1850,1850,"London, England",ABT 1920,1920,"New York, USA",,,,3,@F5@,@F1@;@F7@
+```
+
+</details>
+
+<details>
+<summary><b>Sample: JSON export</b></summary>
+
+```json
+$ gedcom-tools export family.ged --format json
+
+{
+  "meta": {
+    "file": "family.ged",
+    "encoding": "UTF-8",
+    "gedcom_tools_version": "1.0.0",
+    "individual_count": 150,
+    "family_count": 45,
+    "redacted_living": false
+  },
+  "individuals": [
+    {
+      "xref": "@I1@",
+      "given_name": "John",
+      "surname": "Smith",
+      "birth_year": 1850,
+      "death_year": 1920,
+      "occupations": ["Blacksmith"],
+      "alt_names": [{"given": "Johann", "surname": "Schmidt"}],
+      "notes": ["Immigrated to New York circa 1880."]
+    }
+  ],
+  "families": [...]
+}
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--format {csv,json}` | Export format (default: csv) |
+| `--table {individuals,families}` | Table to export in CSV mode (default: individuals; ignored for JSON) |
+| `--no-bom` | Omit UTF-8 BOM when writing CSV to a file |
+| `-o, --output FILE` | Write to file instead of stdout |
+| `--force` | Overwrite output file if it already exists |
+| `--redact-living` | Replace names and dates of estimated-living individuals |
+| `--max-age N` | Maximum age for living estimation (default: 110) |
+
+**Note on `--format`:** For most commands, `--format json` means "format
+command results as JSON." For `export`, `--format json` means "export data as
+JSON." This is intentional — export has no text result mode; it produces data
+in a specific format. See [Export Command](docs/export.md) for full details.
+
+**CSV output:**
+- UTF-8 BOM included only when writing to a file (`-o`), for Excel compatibility. Use `--no-bom` to suppress.
+- Multi-valued fields (family xrefs, children) are semicolon-delimited within cells.
+- See [Export Command](docs/export.md) for full column reference.
+
+**Living estimation:**
+- Uses birth year and death records to estimate whether someone is living
+- Only individuals with a birth year within `--max-age` years and no death record are redacted
+- Individuals with no birth year are not redacted (conservative default)
+
+#### convert
+
+Convert a GEDCOM file between character encodings with automatic CHAR header
+update, BOM handling, and NFC normalization.
+
+```bash
+# Convert ANSEL to UTF-8
+gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged
+
+# Override source encoding for non-standard files
+gedcom-tools convert weird.ged --from latin-1 --to utf-8 -o fixed.ged
+
+# Preview without writing
+gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged --dry-run
+
+# Add BOM for Windows tools
+gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged --bom
+
+# Convert to UTF-16
+gedcom-tools convert tree.ged --to unicode -o tree_utf16.ged
+```
+
+<details>
+<summary><b>Sample: Convert ANSEL to UTF-8</b> (royal92.ged)</summary>
+
+```
+$ gedcom-tools convert royal92.ged --to utf-8 -o royal92_utf8.ged
+
+✓ [1/2] Detecting encoding
+✓ [2/2] Transcoding
+File: royal92.ged
+
+=== Conversion ===
+  Source encoding: ANSEL
+  Target encoding: UTF-8
+  Lines:           30,682
+  NFC normalized:  yes
+  BOM:             none
+  Output:          royal92_utf8.ged
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Dry run</b></summary>
+
+```
+$ gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged --dry-run
+
+✓ [1/2] Detecting encoding
+✓ [2/2] Transcoding
+File: old_tree.ged
+
+=== Conversion ===
+  Source encoding: ANSEL
+  Target encoding: UTF-8
+  Lines:           3,432
+  NFC normalized:  yes
+  BOM:             none
+  Output:          tree_utf8.ged
+
+  (dry run — no file written)
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Quiet mode</b></summary>
+
+```
+$ gedcom-tools -q convert old_tree.ged --to utf-8 -o tree_utf8.ged
+
+Converted old_tree.ged (ANSEL → UTF-8) → tree_utf8.ged
+```
+
+</details>
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--to {utf-8,ansel,ascii,unicode}` | Target encoding (required) |
+| `--from CODEC` | Override source encoding detection (any Python codec name) |
+| `-o, --output FILE` | Output file path (required) |
+| `--force` | Overwrite existing output file |
+| `--bom` | Add byte order mark to output |
+| `--no-normalize` | Skip NFC Unicode normalization |
+| `--dry-run` | Preview conversion without writing output |
+
+**How it works:**
+
+- Reads the file as raw bytes, decodes using the detected (or overridden) source codec, applies NFC normalization for ANSEL sources, updates the CHAR header, re-encodes in the target codec, and writes the output
+- Source encoding is auto-detected from the CHAR header. Use `--from` with any Python codec name for non-standard files (latin-1, cp1252, iso-8859-7, etc.)
+- Target is restricted to the four GEDCOM-standard character sets to ensure a valid CHAR header
+- Warns if any lines exceed the GEDCOM 255-byte limit in the target encoding
+- See [Convert Command](docs/convert.md) for full details
+
+#### filter
+
+Filter and transform GEDCOM files by stripping tags, removing record types, or
+extracting subtrees centered on a specific individual.
+
+```bash
+# Remove all custom (underscore-prefixed) tags
+gedcom-tools filter tree.ged -o clean.ged --strip-custom-tags
+
+# Remove notes and sources
+gedcom-tools filter tree.ged -o minimal.ged --strip-notes --strip-sources
+
+# Remove specific tags (repeatable)
+gedcom-tools filter tree.ged -o clean.ged --strip-tag OCCU --strip-tag RESI
+
+# Extract an individual with all ancestors
+gedcom-tools filter tree.ged -o subtree.ged --subtree @I1@
+
+# Extract subtree with limited depth, descendants, and spouses
+gedcom-tools filter tree.ged -o subtree.ged --subtree @I1@ --ancestors 3 --descendants 2 --include-spouses
+```
+
+<details>
+<summary><b>Sample: Strip custom tags</b></summary>
+
+```
+$ gedcom-tools filter tree.ged -o clean.ged --strip-custom-tags
+
+✓ [1/4] Reading input
+✓ [2/4] Parsing GEDCOM
+✓ [3/4] Filtering
+✓ [4/4] Writing output
+File: tree.ged
+
+=== Filter Results ===
+
+  Record Type       Source   Output  Removed
+  --------------- -------- -------- --------
+  Individuals          500      500        0
+  Families             200      200        0
+  --------------- -------- -------- --------
+  Total                703      703        0
+
+  Output: clean.ged
+```
+
+Custom tag lines are removed from within records (line-level), so record counts
+may not change — but the output file will be smaller.
+
+</details>
+
+<details>
+<summary><b>Sample: Subtree extraction</b></summary>
+
+```
+$ gedcom-tools filter tree.ged -o subtree.ged --subtree @I1@ --ancestors 3 --descendants 1 --include-spouses
+
+✓ [1/4] Reading input
+✓ [2/4] Parsing GEDCOM
+✓ [3/4] Filtering
+✓ [4/4] Writing output
+File: tree.ged
+
+=== Filter Results ===
+
+  Record Type       Source   Output  Removed
+  --------------- -------- -------- --------
+  Individuals          500       18      482
+  Families             200        8      192
+  Sources               30        5       25
+  --------------- -------- -------- --------
+  Total                732       33      699
+
+  Dangling references cleaned: 12
+
+  Output: subtree.ged
+```
+
+</details>
+
+<details>
+<summary><b>Sample: Quiet mode</b></summary>
+
+```
+$ gedcom-tools -q filter tree.ged -o clean.ged --strip-notes
+
+Filtered tree.ged (780 → 730 records) → clean.ged
+```
+
+</details>
+
+**Strip options:**
+
+| Option | Description |
+|--------|-------------|
+| `--strip-custom-tags` | Remove all custom (`_`-prefixed) tags |
+| `--strip-notes` | Remove NOTE records and references |
+| `--strip-sources` | Remove SOUR records and citations |
+| `--strip-multimedia` | Remove OBJE records and references |
+| `--strip-tag TAG` | Remove a specific tag (repeatable) |
+
+**Subtree options:**
+
+| Option | Description |
+|--------|-------------|
+| `--subtree XREF` | Extract subtree rooted at individual (e.g., `@I1@`) |
+| `--ancestors N` | Max ancestor generations (default: unlimited) |
+| `--descendants N` | Max descendant generations (default: 0) |
+| `--include-spouses` | Include spouses of extracted individuals |
+
+**How it works:**
+
+- Parses GEDCOM at the line level (no ged4py reinterpretation) for lossless round-trip output
+- Strip operations remove whole records and/or inline sub-lines, with automatic child-line cascading
+- Subtree extraction uses BFS traversal on a directed parent-child graph, then transitively collects referenced SOUR/NOTE/OBJE/REPO records
+- After filtering, dangling pointer references are cleaned and empty families are cascade-removed
+- Encoding, BOM, and line endings are preserved from the input
+- See [Filter Command](docs/filter.md) for full algorithm details
+
 ## Documentation
 
 Detailed documentation for each command:
@@ -914,7 +1321,11 @@ Detailed documentation for each command:
 - [Languages Command](docs/languages.md) - Language detection and filtering
 - [Search Command](docs/search.md) - Finding individuals with flexible query syntax
 - [Compare Command](docs/compare.md) - Comparing individuals across files
+- [Duplicates Command](docs/duplicates.md) - Finding duplicate individuals within a file
 - [Relationship Command](docs/relationship.md) - Finding relationships between individuals
+- [Export Command](docs/export.md) - Exporting individuals and families to CSV or JSON
+- [Convert Command](docs/convert.md) - Converting between character encodings
+- [Filter Command](docs/filter.md) - Filtering and transforming GEDCOM files
 
 ## Sample Data
 

@@ -10,6 +10,8 @@ EXIT_USAGE_ERROR = 2
 MAX_LIFESPAN = 120  # W023: Age at death implausible if > 120
 MIN_PARENT_AGE = 12
 MAX_PARENT_AGE_AT_BIRTH = 80
+MIN_SIBLING_SPACING_MONTHS = 9
+VALID_SEX_VALUES = frozenset({"M", "F", "U", "X"})
 
 # Stats-specific thresholds
 MIN_MARRIAGE_AGE = 12

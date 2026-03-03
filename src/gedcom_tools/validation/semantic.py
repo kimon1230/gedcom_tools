@@ -8,6 +8,7 @@ from gedcom_tools.constants import (
     MAX_LIFESPAN,
     MAX_PARENT_AGE_AT_BIRTH,
     MIN_PARENT_AGE,
+    MIN_SIBLING_SPACING_MONTHS,
 )
 from gedcom_tools.validation.issues import (
     ErrorCode,
@@ -21,7 +22,8 @@ from gedcom_tools.validation.issues import (
 class SemanticValidator:
     """Validates genealogical logic and plausibility.
 
-    Checks for ancestry cycles, date logic, and age plausibility.
+    Checks for ancestry cycles, date logic, age plausibility,
+    sibling spacing, and sex-role consistency.
     """
 
     individuals: dict[str, IndividualInfo] = field(default_factory=dict)
@@ -43,6 +45,8 @@ class SemanticValidator:
         issues.extend(self._check_ancestry_cycles())
         issues.extend(self._check_date_logic())
         issues.extend(self._check_age_plausibility())
+        issues.extend(self._check_sibling_spacing())
+        issues.extend(self._check_sex_role_mismatch())
 
         return issues
 
@@ -276,5 +280,77 @@ class SemanticValidator:
                                     xref=child_xref,
                                 )
                             )
+
+        return issues
+
+    def _check_sibling_spacing(self) -> list[ValidationIssue]:
+        """Check for siblings born too close together (< 9 months apart)."""
+        issues: list[ValidationIssue] = []
+
+        for fam_xref, fam in self.families.items():
+            # Collect children with both birth_year and birth_month
+            dated_children: list[tuple[int, int, str]] = []
+            for child_xref in fam.chil_xrefs:
+                child = self.individuals.get(child_xref)
+                if (
+                    child
+                    and child.birth_year is not None
+                    and child.birth_month is not None
+                ):
+                    dated_children.append(
+                        (child.birth_year, child.birth_month, child_xref)
+                    )
+
+            if len(dated_children) < 2:
+                continue
+
+            dated_children.sort()
+
+            for i in range(len(dated_children) - 1):
+                y1, m1, xref1 = dated_children[i]
+                y2, m2, xref2 = dated_children[i + 1]
+                months_apart = (y2 - y1) * 12 + (m2 - m1)
+                if months_apart == 0:
+                    continue  # twins
+                if 0 < months_apart < MIN_SIBLING_SPACING_MONTHS:
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W026_SIBLING_TOO_CLOSE,
+                            message=f"Siblings {xref1} and {xref2} born "
+                            f"{months_apart} months apart in {fam_xref}",
+                            xref=fam_xref,
+                        )
+                    )
+
+        return issues
+
+    def _check_sex_role_mismatch(self) -> list[ValidationIssue]:
+        """Check for HUSB with SEX=F or WIFE with SEX=M."""
+        issues: list[ValidationIssue] = []
+
+        for fam_xref, fam in self.families.items():
+            if fam.husb_xref:
+                husb = self.individuals.get(fam.husb_xref)
+                if husb and husb.sex == "F":
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W029_SEX_ROLE_MISMATCH,
+                            message=f"HUSB {fam.husb_xref} in {fam_xref} has SEX=F",
+                            line=fam.line,
+                            xref=fam_xref,
+                        )
+                    )
+
+            if fam.wife_xref:
+                wife = self.individuals.get(fam.wife_xref)
+                if wife and wife.sex == "M":
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W029_SEX_ROLE_MISMATCH,
+                            message=f"WIFE {fam.wife_xref} in {fam_xref} has SEX=M",
+                            line=fam.line,
+                            xref=fam_xref,
+                        )
+                    )
 
         return issues

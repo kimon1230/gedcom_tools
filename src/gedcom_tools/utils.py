@@ -17,6 +17,99 @@ from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 if TYPE_CHECKING:
     from ged4py.model import Record
 
+# --- Shared byte-I/O constants ---
+
+GEDCOM_CHARSETS: dict[str, str] = {
+    "utf-8": "utf-8",
+    "ansel": "gedcom",
+    "ascii": "ascii",
+    "unicode": "utf-16-le",
+}
+
+SOURCE_ENCODING_MAP: dict[str, str] = {
+    "UTF-8": "utf-8",
+    "ANSEL": "gedcom",
+    "ASCII": "ascii",
+    "UNICODE": "utf-16-le",
+    "UTF-16-LE": "utf-16-le",
+    "UTF-16-BE": "utf-16-be",
+}
+
+BOMS: dict[str, bytes] = {
+    "utf-8": b"\xef\xbb\xbf",
+    "utf-16-le": b"\xff\xfe",
+    "utf-16-be": b"\xfe\xff",
+}
+
+BOM_ENCODINGS: set[str] = {"utf-8", "utf-16-le", "utf-16-be"}
+
+
+def strip_bom(data: bytes) -> tuple[bytes, str | None]:
+    """Strip BOM from raw bytes, returning data and BOM encoding label."""
+    if data[:3] == b"\xef\xbb\xbf":
+        return data[3:], "utf-8"
+    if data[:2] == b"\xff\xfe":
+        return data[2:], "utf-16-le"
+    if data[:2] == b"\xfe\xff":
+        return data[2:], "utf-16-be"
+    return data, None
+
+
+def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
+    """Resolve the source codec name from encoding info or user override."""
+    import codecs
+
+    if from_override is not None:
+        key = from_override.lower()
+        if key in GEDCOM_CHARSETS:
+            return GEDCOM_CHARSETS[key]
+        try:
+            return codecs.lookup(from_override).name
+        except LookupError:
+            pass
+        msg = f"Unknown source encoding: {from_override}"
+        raise ValueError(msg)
+
+    enc = encoding_info.encoding
+    if enc in SOURCE_ENCODING_MAP:
+        return SOURCE_ENCODING_MAP[enc]
+    key = enc.lower()
+    if key in GEDCOM_CHARSETS:
+        return GEDCOM_CHARSETS[key]
+    try:
+        return codecs.lookup(enc).name
+    except LookupError:
+        pass
+    msg = f"Cannot determine source encoding from '{enc}'. Use --from to specify."
+    raise ValueError(msg)
+
+
+def check_output_safety(
+    input_path: Path, output_path: Path, *, force: bool, dry_run: bool
+) -> str | None:
+    """Return error message if output path is unsafe, or None if OK."""
+    parent = output_path.parent
+    if not parent.exists():
+        return f"Error: Directory {parent} does not exist"
+
+    try:
+        if os.path.samefile(input_path, output_path):
+            return (
+                "Error: Output path resolves to the input file. "
+                "Filter always produces a new file."
+            )
+    except OSError:
+        if output_path.resolve() == input_path.resolve():
+            return (
+                "Error: Output path resolves to the input file. "
+                "Filter always produces a new file."
+            )
+
+    if not dry_run and output_path.exists() and not force:
+        return f"Error: {output_path} already exists. Use --force to overwrite."
+
+    return None
+
 
 def normalize_display(text: str) -> str:
     """NFC normalization for consistent display across encodings."""

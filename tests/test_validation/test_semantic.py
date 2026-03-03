@@ -375,3 +375,187 @@ class TestAncestryEdgeCases:
         issues = validator.validate()
         cycle_issues = [i for i in issues if i.code == ErrorCode.E010_ANCESTRY_CYCLE]
         assert len(cycle_issues) >= 1, "Multi-generation cycle should be detected"
+
+
+class TestSiblingSpacing:
+    def test_siblings_5_months_apart_w026(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=3)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=8)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 1
+        assert "5 months" in w026[0].message
+
+    def test_siblings_9_months_apart_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=1)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=10)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 0
+
+    def test_twins_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=6)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=6)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 0
+
+    def test_year_only_dates_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=None)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=None)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 0
+
+    def test_reverse_chronological_order_still_fires(self):
+        validator = SemanticValidator()
+        # I2 is older but listed second in GEDCOM
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=8)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 1
+
+    def test_three_siblings_one_pair_violating(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1978, birth_month=1)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+        )
+        # I3 is only 4 months after I2
+        validator.collect_individual(
+            IndividualInfo(xref="@I3@", line=20, birth_year=1980, birth_month=7)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=30, chil_xrefs=["@I1@", "@I2@", "@I3@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 1
+
+    def test_cross_year_boundary(self):
+        validator = SemanticValidator()
+        validator.collect_individual(
+            IndividualInfo(xref="@I1@", line=1, birth_year=1979, birth_month=10)
+        )
+        validator.collect_individual(
+            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+        )
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
+        )
+
+        issues = validator.validate()
+        w026 = [i for i in issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 1
+        assert "5 months" in w026[0].message
+
+
+class TestSexRoleMismatch:
+    def test_husb_with_sex_f_w029(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex="F"))
+        validator.collect_family(FamilyInfo(xref="@F1@", line=10, husb_xref="@I1@"))
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 1
+        assert "HUSB" in w029[0].message
+        assert "SEX=F" in w029[0].message
+
+    def test_wife_with_sex_m_w029(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex="M"))
+        validator.collect_family(FamilyInfo(xref="@F1@", line=10, wife_xref="@I1@"))
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 1
+        assert "WIFE" in w029[0].message
+        assert "SEX=M" in w029[0].message
+
+    def test_both_mismatched_in_same_fam(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex="F"))
+        validator.collect_individual(IndividualInfo(xref="@I2@", line=10, sex="M"))
+        validator.collect_family(
+            FamilyInfo(xref="@F1@", line=20, husb_xref="@I1@", wife_xref="@I2@")
+        )
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 2
+
+    def test_husb_with_sex_m_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex="M"))
+        validator.collect_family(FamilyInfo(xref="@F1@", line=10, husb_xref="@I1@"))
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 0
+
+    def test_sex_u_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex="U"))
+        validator.collect_family(FamilyInfo(xref="@F1@", line=10, husb_xref="@I1@"))
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 0
+
+    def test_missing_sex_no_warning(self):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, sex=None))
+        validator.collect_family(FamilyInfo(xref="@F1@", line=10, husb_xref="@I1@"))
+
+        issues = validator.validate()
+        w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 0

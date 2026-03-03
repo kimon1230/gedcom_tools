@@ -7,7 +7,12 @@ from typing import IO, TYPE_CHECKING, Any, Literal
 
 from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
-from gedcom_tools.dates import extract_year_from_date
+from gedcom_tools.constants import VALID_SEX_VALUES
+from gedcom_tools.dates import (
+    classify_date_precision,
+    extract_month,
+    extract_year_from_date,
+)
 from gedcom_tools.progress import PhaseTracker
 from gedcom_tools.utils import EncodingInfo, detect_encoding, extract_xref
 from gedcom_tools.validation.issues import (
@@ -338,21 +343,41 @@ class ValidationEngine:
         offset = record.offset if record.offset else 0
         line = self._offset_to_line(offset)
 
-        # Extract birth/death years
-        birth_year = self._extract_year(record, "BIRT/DATE")
+        # Extract birth year and month (month only for non-approximate dates)
+        birt_date_rec = record.sub_tag("BIRT/DATE")
+        birth_year: int | None = None
+        birth_month: int | None = None
+        if birt_date_rec and birt_date_rec.value:
+            birth_year = extract_year_from_date(birt_date_rec.value)
+            precision, _ = classify_date_precision(birt_date_rec.value)
+            if precision in ("full", "partial"):
+                birth_month = extract_month(birt_date_rec.value)
+
         death_year = self._extract_year(record, "DEAT/DATE")
 
-        # Extract sex
-        sex_rec = record.sub_tag("SEX")
-        sex = str(sex_rec.value) if sex_rec and sex_rec.value else None
-
-        # Extract family links
+        # Extract sex and family links via single-pass sub_records iteration
+        sex_value: str | None = None
+        sex_count = 0
         famc_xrefs: list[str] = []
         fams_xrefs: list[str] = []
 
         for sub in record.sub_records:
             sub_offset = sub.offset if sub.offset else 0
-            if sub.tag == "FAMC" and sub.value:
+
+            if sub.tag == "SEX":
+                sex_count += 1
+                raw = str(sub.value).upper().strip() if sub.value else ""
+                if raw and raw not in VALID_SEX_VALUES:
+                    self._add_issue(
+                        ErrorCode.W028_INVALID_SEX,
+                        f"SEX value '{raw}' not recognized " f"(expected M/F/U/X)",
+                        line=self._offset_to_line(sub_offset),
+                        xref=xref,
+                    )
+                elif raw and sex_value is None:
+                    sex_value = raw
+
+            elif sub.tag == "FAMC" and sub.value:
                 fam_xref = self._extract_xref(sub.value)
                 if fam_xref:
                     famc_xrefs.append(fam_xref)
@@ -361,7 +386,7 @@ class ValidationEngine:
                         self._offset_to_line(sub_offset),
                         f"FAMC reference in {xref}",
                     )
-                    self._ref_validator.collect_indi_family_link(xref, fam_xref)
+                    self._ref_validator.collect_indi_as_child(xref, fam_xref)
 
             elif sub.tag == "FAMS" and sub.value:
                 fam_xref = self._extract_xref(sub.value)
@@ -372,7 +397,7 @@ class ValidationEngine:
                         self._offset_to_line(sub_offset),
                         f"FAMS reference in {xref}",
                     )
-                    self._ref_validator.collect_indi_family_link(xref, fam_xref)
+                    self._ref_validator.collect_indi_as_spouse(xref, fam_xref)
 
             # Check for direct pointer references (SOUR, NOTE, OBJE, REPO)
             elif sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
@@ -387,14 +412,23 @@ class ValidationEngine:
             # Check for nested pointer references
             self._collect_sub_xrefs(sub, xref)
 
+        if sex_count > 1:
+            self._add_issue(
+                ErrorCode.W027_MULTIPLE_SEX,
+                f"Individual has {sex_count} SEX records " f"(expected at most 1)",
+                line=line,
+                xref=xref,
+            )
+
         # Store for semantic validation
         self._sem_validator.collect_individual(
             IndividualInfo(
                 xref=xref,
                 line=line,
                 birth_year=birth_year,
+                birth_month=birth_month,
                 death_year=death_year,
-                sex=sex,
+                sex=sex_value,
                 famc_xrefs=famc_xrefs,
                 fams_xrefs=fams_xrefs,
             )
@@ -424,7 +458,7 @@ class ValidationEngine:
                         self._offset_to_line(sub_offset),
                         f"HUSB in {xref}",
                     )
-                    self._ref_validator.collect_fam_member(xref, husb_xref)
+                    self._ref_validator.collect_fam_spouse(xref, husb_xref)
 
             elif sub.tag == "WIFE" and sub.value:
                 wife_xref = self._extract_xref(sub.value)
@@ -434,7 +468,7 @@ class ValidationEngine:
                         self._offset_to_line(sub_offset),
                         f"WIFE in {xref}",
                     )
-                    self._ref_validator.collect_fam_member(xref, wife_xref)
+                    self._ref_validator.collect_fam_spouse(xref, wife_xref)
 
             elif sub.tag == "CHIL" and sub.value:
                 chil_xref = self._extract_xref(sub.value)
@@ -445,7 +479,7 @@ class ValidationEngine:
                         self._offset_to_line(sub_offset),
                         f"CHIL in {xref}",
                     )
-                    self._ref_validator.collect_fam_member(xref, chil_xref)
+                    self._ref_validator.collect_fam_child(xref, chil_xref)
 
             # Check for direct pointer references (SOUR, NOTE, OBJE, REPO)
             elif sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
@@ -477,6 +511,31 @@ class ValidationEngine:
         xref = record.xref_id
         if not xref:
             return
+
+        # OBJE structural checks (W033, W034)
+        if record.tag == "OBJE":
+            offset = record.offset if record.offset else 0
+            rec_line = self._offset_to_line(offset)
+            has_file = False
+            for sub in record.sub_records:
+                if sub.tag == "FILE":
+                    has_file = True
+                    has_form = any(s.tag == "FORM" for s in sub.sub_records)
+                    if not has_form:
+                        sub_offset = sub.offset if sub.offset else 0
+                        self._add_issue(
+                            ErrorCode.W034_FILE_MISSING_FORM,
+                            f"FILE in {xref} has no FORM subtag",
+                            line=self._offset_to_line(sub_offset),
+                            xref=xref,
+                        )
+            if not has_file:
+                self._add_issue(
+                    ErrorCode.W033_OBJE_MISSING_FILE,
+                    f"OBJE {xref} has no FILE subtag",
+                    line=rec_line,
+                    xref=xref,
+                )
 
         # Recursively collect xref usages
         self._collect_sub_xrefs_recursive(record, xref)

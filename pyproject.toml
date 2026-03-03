@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gedcom-tools"
-version = "0.6.0"
+version = "1.0.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
@@ -13,6 +13,7 @@ dependencies = [
     "ged4py>=0.4.4",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
+    "DoubleMetaphone>=1.1",
 ]
 
 [project.optional-dependencies]

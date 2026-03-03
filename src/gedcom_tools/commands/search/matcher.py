@@ -9,7 +9,6 @@ from gedcom_tools.commands.search.models import (
     SearchQuery,
     SearchTerm,
 )
-from gedcom_tools.phonetics import soundex
 from gedcom_tools.utils import normalize_compare
 
 _RELATIONSHIP_FIELDS = frozenset({"ancestor", "descendant"})
@@ -72,10 +71,6 @@ def _text_match(
     return query_norm in value_norm
 
 
-def _soundex_match(value_sx: str, query_sx: str) -> bool:
-    return bool(value_sx and query_sx and value_sx == query_sx)
-
-
 def _date_match(
     year: int | None,
     term: SearchTerm,
@@ -114,16 +109,26 @@ def _match_name_text(
     return None
 
 
-def _match_name_soundex(ind: SearchIndividual, query_sx: str) -> str | None:
-    if _soundex_match(ind.surname_soundex, query_sx):
+def _match_name_phonetic(
+    ind: SearchIndividual, query_primary: str, query_alt: str
+) -> str | None:
+    from gedcom_tools.phonetics import phonetic_codes_match
+
+    if phonetic_codes_match(
+        ind.surname_phonetic, ind.surname_phonetic_alt, query_primary, query_alt
+    ):
         return ind.surname
-    if _soundex_match(ind.given_name_soundex, query_sx):
+    if phonetic_codes_match(
+        ind.given_phonetic, ind.given_phonetic_alt, query_primary, query_alt
+    ):
         return ind.given_name
-    for i, (g_sx, s_sx) in enumerate(ind.alt_soundex):
-        if _soundex_match(s_sx, query_sx):
-            return ind.alt_names[i][1]
-        if _soundex_match(g_sx, query_sx):
-            return ind.alt_names[i][0]
+    for idx, ((g_p, s_p), (g_a, s_a)) in enumerate(
+        zip(ind.alt_phonetic, ind.alt_phonetic_alt, strict=True)
+    ):
+        if phonetic_codes_match(s_p, s_a, query_primary, query_alt):
+            return ind.alt_names[idx][1]
+        if phonetic_codes_match(g_p, g_a, query_primary, query_alt):
+            return ind.alt_names[idx][0]
     return None
 
 
@@ -141,12 +146,20 @@ def _match_given_text(
     return None
 
 
-def _match_given_soundex(ind: SearchIndividual, query_sx: str) -> str | None:
-    if _soundex_match(ind.given_name_soundex, query_sx):
+def _match_given_phonetic(
+    ind: SearchIndividual, query_primary: str, query_alt: str
+) -> str | None:
+    from gedcom_tools.phonetics import phonetic_codes_match
+
+    if phonetic_codes_match(
+        ind.given_phonetic, ind.given_phonetic_alt, query_primary, query_alt
+    ):
         return ind.given_name
-    for i, (g_sx, _) in enumerate(ind.alt_soundex):
-        if _soundex_match(g_sx, query_sx):
-            return ind.alt_names[i][0]
+    for idx, ((g_p, _), (g_a, _sa)) in enumerate(
+        zip(ind.alt_phonetic, ind.alt_phonetic_alt, strict=True)
+    ):
+        if phonetic_codes_match(g_p, g_a, query_primary, query_alt):
+            return ind.alt_names[idx][0]
     return None
 
 
@@ -161,12 +174,20 @@ def _match_surname_text(
     return None
 
 
-def _match_surname_soundex(ind: SearchIndividual, query_sx: str) -> str | None:
-    if _soundex_match(ind.surname_soundex, query_sx):
+def _match_surname_phonetic(
+    ind: SearchIndividual, query_primary: str, query_alt: str
+) -> str | None:
+    from gedcom_tools.phonetics import phonetic_codes_match
+
+    if phonetic_codes_match(
+        ind.surname_phonetic, ind.surname_phonetic_alt, query_primary, query_alt
+    ):
         return ind.surname
-    for i, (_, s_sx) in enumerate(ind.alt_soundex):
-        if _soundex_match(s_sx, query_sx):
-            return ind.alt_names[i][1]
+    for idx, ((_, s_p), (_, s_a)) in enumerate(
+        zip(ind.alt_phonetic, ind.alt_phonetic_alt, strict=True)
+    ):
+        if phonetic_codes_match(s_p, s_a, query_primary, query_alt):
+            return ind.alt_names[idx][1]
     return None
 
 
@@ -219,16 +240,18 @@ def _match_term(
             return MatchDetail("sex", ind.sex, term.value, match_type)
         return None
 
-    # Soundex matching (name fields only — validated by query parser)
+    # Phonetic matching (name fields only — validated by query parser)
     if term.operator == "~":
-        query_sx = soundex(query_norm)
+        from gedcom_tools.phonetics import phonetic_encode
+
+        query_primary, query_alt = phonetic_encode(query_norm, query.phonetic_algo)
         matched: str | None = None
         if field == "name":
-            matched = _match_name_soundex(ind, query_sx)
+            matched = _match_name_phonetic(ind, query_primary, query_alt)
         elif field == "given":
-            matched = _match_given_soundex(ind, query_sx)
+            matched = _match_given_phonetic(ind, query_primary, query_alt)
         elif field == "surname":
-            matched = _match_surname_soundex(ind, query_sx)
+            matched = _match_surname_phonetic(ind, query_primary, query_alt)
         if matched is not None:
             return MatchDetail(field, matched, term.value, "sounds_like")
         return None

@@ -239,3 +239,79 @@ class TestParseNameRecord:
 
     def test_none_record(self) -> None:
         assert parse_name_record(None) == ("", "")
+
+
+class TestCheckOutputSafety:
+    def _check(
+        self,
+        input_path: Path,
+        output_path: Path,
+        *,
+        force: bool = False,
+        dry_run: bool = False,
+    ) -> str | None:
+        from gedcom_tools.utils import check_output_safety
+
+        return check_output_safety(
+            input_path, output_path, force=force, dry_run=dry_run
+        )
+
+    def test_safe_path_returns_none(self, tmp_path: Path) -> None:
+        inp = tmp_path / "input.ged"
+        inp.write_text("data")
+        out = tmp_path / "output.ged"
+        assert self._check(inp, out) is None
+
+    def test_nonexistent_parent_dir(self, tmp_path: Path) -> None:
+        inp = tmp_path / "input.ged"
+        inp.write_text("data")
+        out = tmp_path / "nosuchdir" / "output.ged"
+        result = self._check(inp, out)
+        assert result is not None
+        assert "does not exist" in result
+
+    def test_same_file_blocked(self, tmp_path: Path) -> None:
+        inp = tmp_path / "file.ged"
+        inp.write_text("data")
+        result = self._check(inp, inp)
+        assert result is not None
+        assert "resolves to the input" in result
+
+    def test_same_file_via_symlink(self, tmp_path: Path) -> None:
+        inp = tmp_path / "file.ged"
+        inp.write_text("data")
+        link = tmp_path / "link.ged"
+        link.symlink_to(inp)
+        result = self._check(inp, link)
+        assert result is not None
+        assert "resolves to the input" in result
+
+    def test_existing_output_without_force(self, tmp_path: Path) -> None:
+        inp = tmp_path / "input.ged"
+        inp.write_text("data")
+        out = tmp_path / "output.ged"
+        out.write_text("existing")
+        result = self._check(inp, out)
+        assert result is not None
+        assert "already exists" in result
+
+    def test_existing_output_with_force(self, tmp_path: Path) -> None:
+        inp = tmp_path / "input.ged"
+        inp.write_text("data")
+        out = tmp_path / "output.ged"
+        out.write_text("existing")
+        assert self._check(inp, out, force=True) is None
+
+    def test_dry_run_skips_overwrite_check(self, tmp_path: Path) -> None:
+        inp = tmp_path / "input.ged"
+        inp.write_text("data")
+        out = tmp_path / "output.ged"
+        out.write_text("existing")
+        assert self._check(inp, out, dry_run=True) is None
+
+    def test_same_file_still_blocked_during_dry_run(self, tmp_path: Path) -> None:
+        inp = tmp_path / "file.ged"
+        inp.write_text("data")
+        result = self._check(inp, inp, dry_run=True)
+        assert result is not None
+        assert "resolves to the input" in result

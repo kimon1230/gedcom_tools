@@ -368,6 +368,272 @@ class TestAnselSupport:
         assert ErrorCode.E008_DECODE_FAILURE in error_codes
 
 
+class TestSexValidation:
+    def test_multiple_sex_records_w027(self, tmp_path):
+        ged = tmp_path / "multi_sex.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Smith/\n"
+            "1 SEX M\n"
+            "1 SEX F\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w027 = [i for i in result.issues if i.code == ErrorCode.W027_MULTIPLE_SEX]
+        assert len(w027) == 1
+        assert "2 SEX records" in w027[0].message
+
+    def test_invalid_sex_value_w028(self, tmp_path):
+        ged = tmp_path / "bad_sex.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Smith/\n"
+            "1 SEX Z\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w028 = [i for i in result.issues if i.code == ErrorCode.W028_INVALID_SEX]
+        assert len(w028) == 1
+        assert "Z" in w028[0].message
+
+    def test_valid_sex_no_warning(self, tmp_path):
+        ged = tmp_path / "valid_sex.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME Jane /Smith/\n"
+            "1 SEX F\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w027 = [i for i in result.issues if i.code == ErrorCode.W027_MULTIPLE_SEX]
+        w028 = [i for i in result.issues if i.code == ErrorCode.W028_INVALID_SEX]
+        assert len(w027) == 0
+        assert len(w028) == 0
+
+    def test_sex_u_and_x_are_valid(self, tmp_path):
+        ged = tmp_path / "sex_u.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME Pat /Smith/\n"
+            "1 SEX U\n"
+            "0 @I2@ INDI\n"
+            "1 NAME Alex /Jones/\n"
+            "1 SEX X\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w028 = [i for i in result.issues if i.code == ErrorCode.W028_INVALID_SEX]
+        assert len(w028) == 0
+
+
+class TestObjeValidation:
+    def test_obje_missing_file_w033(self, tmp_path):
+        ged = tmp_path / "obje_no_file.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @O1@ OBJE\n"
+            "1 TITL Photo\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w033 = [i for i in result.issues if i.code == ErrorCode.W033_OBJE_MISSING_FILE]
+        assert len(w033) == 1
+        assert "@O1@" in w033[0].message
+
+    def test_file_missing_form_w034(self, tmp_path):
+        ged = tmp_path / "file_no_form.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @O1@ OBJE\n"
+            "1 FILE photo.jpg\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
+        assert len(w034) == 1
+        assert "@O1@" in w034[0].message
+
+    def test_obje_with_file_and_form_no_warning(self, tmp_path):
+        ged = tmp_path / "obje_ok.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @O1@ OBJE\n"
+            "1 FILE photo.jpg\n"
+            "2 FORM JPEG\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w033 = [i for i in result.issues if i.code == ErrorCode.W033_OBJE_MISSING_FILE]
+        w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
+        assert len(w033) == 0
+        assert len(w034) == 0
+
+    def test_two_files_one_without_form(self, tmp_path):
+        ged = tmp_path / "two_files.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @O1@ OBJE\n"
+            "1 FILE photo.jpg\n"
+            "2 FORM JPEG\n"
+            "1 FILE doc.pdf\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
+        assert len(w034) == 1
+
+    def test_two_files_both_missing_form(self, tmp_path):
+        ged = tmp_path / "two_no_form.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @O1@ OBJE\n"
+            "1 FILE photo.jpg\n"
+            "1 FILE doc.pdf\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
+        assert len(w034) == 2
+
+
+class TestAsymmetricLinkIntegration:
+    def test_one_sided_chil_link_w016(self, tmp_path):
+        ged = tmp_path / "asym_child.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Smith/\n"
+            "0 @F1@ FAM\n"
+            "1 CHIL @I1@\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w016 = [
+            i for i in result.issues if i.code == ErrorCode.W016_ASYMMETRIC_CHILD_LINK
+        ]
+        assert len(w016) == 1
+        assert "@I1@" in w016[0].message
+
+    def test_one_sided_fams_link_w017(self, tmp_path):
+        ged = tmp_path / "asym_spouse.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Smith/\n"
+            "1 FAMS @F1@\n"
+            "0 @F1@ FAM\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w017 = [
+            i for i in result.issues if i.code == ErrorCode.W017_ASYMMETRIC_SPOUSE_LINK
+        ]
+        assert len(w017) == 1
+        assert "@I1@" in w017[0].message
+
+
+class TestSiblingSpacingIntegration:
+    def test_siblings_4_months_apart_w026(self, tmp_path):
+        ged = tmp_path / "close_siblings.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME Child1 /Smith/\n"
+            "1 BIRT\n"
+            "2 DATE 15 JAN 1980\n"
+            "1 FAMC @F1@\n"
+            "0 @I2@ INDI\n"
+            "1 NAME Child2 /Smith/\n"
+            "1 BIRT\n"
+            "2 DATE 20 MAY 1980\n"
+            "1 FAMC @F1@\n"
+            "0 @F1@ FAM\n"
+            "1 CHIL @I1@\n"
+            "1 CHIL @I2@\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w026 = [i for i in result.issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
+        assert len(w026) == 1
+        assert "4 months" in w026[0].message
+
+
+class TestSexRoleMismatchIntegration:
+    def test_husb_with_sex_f_w029(self, tmp_path):
+        ged = tmp_path / "sex_role.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME Jane /Smith/\n"
+            "1 SEX F\n"
+            "1 FAMS @F1@\n"
+            "0 @F1@ FAM\n"
+            "1 HUSB @I1@\n"
+            "0 TRLR\n"
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        w029 = [i for i in result.issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
+        assert len(w029) == 1
+        assert "HUSB" in w029[0].message
+        assert "SEX=F" in w029[0].message
+
+
 class TestEncodingErrors:
     def test_invalid_encoding_reports_error(self):
         result = validate_file(

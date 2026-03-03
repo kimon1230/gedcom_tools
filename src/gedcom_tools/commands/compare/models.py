@@ -36,9 +36,11 @@ class CompareIndividual:
     alt_surnames_normalized: list[str] = field(default_factory=list)
     alt_given_names_normalized: list[str] = field(default_factory=list)
 
-    # Precomputed blocking keys
-    surname_soundex: str = ""
-    given_name_soundex: str = ""
+    # Precomputed phonetic keys
+    surname_phonetic: str = ""
+    surname_phonetic_alt: str = ""
+    given_phonetic: str = ""
+    given_phonetic_alt: str = ""
     birth_decade: str = ""  # e.g. "1850s"
     death_decade: str = ""  # e.g. "1920s"
 

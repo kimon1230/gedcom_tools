@@ -22,7 +22,9 @@ _MATCH_TEXT_TEMPLATES: dict[str, str] = {
 }
 
 
-def _format_match_detail(detail: MatchDetail, verbose: bool = False) -> str:
+def _format_match_detail(
+    detail: MatchDetail, verbose: bool = False, phonetic_algo: str = "soundex"
+) -> str:
     template = _MATCH_TEXT_TEMPLATES.get(detail.match_type, "")
     text = template.format(
         field=detail.field,
@@ -30,11 +32,14 @@ def _format_match_detail(detail: MatchDetail, verbose: bool = False) -> str:
         query=detail.query_term,
     )
     if verbose and detail.match_type == "sounds_like":
-        from gedcom_tools.phonetics import soundex
+        from gedcom_tools.phonetics import phonetic_encode
         from gedcom_tools.utils import normalize_compare
 
-        code = soundex(normalize_compare(detail.query_term))
-        text += f" ({code})"
+        primary, alt = phonetic_encode(
+            normalize_compare(detail.query_term), phonetic_algo
+        )
+        codes = "/".join(c for c in (primary, alt) if c)
+        text += f" ({codes})"
     return text
 
 
@@ -84,6 +89,7 @@ def format_text(
     colors: Colors,
     quiet: bool = False,
     verbose: bool = False,
+    phonetic_algo: str = "soundex",
 ) -> str:
     if result.total_individuals == 0:
         return "No individuals found in file."
@@ -128,7 +134,9 @@ def format_text(
             lines.append(died_line)
 
         if match.details:
-            detail_texts = [_format_match_detail(d, verbose) for d in match.details]
+            detail_texts = [
+                _format_match_detail(d, verbose, phonetic_algo) for d in match.details
+            ]
             lines.append(f"    Matched: {', '.join(detail_texts)}")
 
         lines.append("")

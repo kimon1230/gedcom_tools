@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING
 from gedcom_tools import __version__
 from gedcom_tools.commands import (
     compare,
+    convert,
+    duplicates,
+    export,
+    filter,
     isolated,
     languages,
     relationship,
@@ -69,6 +73,10 @@ def create_parser() -> argparse.ArgumentParser:
     compare.register_subcommand(subparsers)
     search.register_subcommand(subparsers)
     relationship.register_subcommand(subparsers)
+    duplicates.register_subcommand(subparsers)
+    export.register_subcommand(subparsers)
+    convert.register_subcommand(subparsers)
+    filter.register_subcommand(subparsers)
 
     return parser
 
@@ -96,6 +104,10 @@ def _run_command(args: Namespace) -> int:
         "compare": compare.run,
         "search": search.run,
         "relationship": relationship.run,
+        "duplicates": duplicates.run,
+        "export": export.run,
+        "convert": convert.run,
+        "filter": filter.run,
     }
 
     try:

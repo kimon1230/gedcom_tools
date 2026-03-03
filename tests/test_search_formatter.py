@@ -486,6 +486,20 @@ class TestFormatTextVerbose:
         output = format_text(result, _colors(), verbose=False)
         assert "S530" not in output
 
+    def test_verbose_metaphone_shows_both_codes(self) -> None:
+        detail = _make_detail(
+            field="surname",
+            matched_value="Schmidt",
+            query_term="Smith",
+            match_type="sounds_like",
+        )
+        ind = _make_individual()
+        match = SearchMatch(individual=ind, details=[detail])
+        result = _make_result(matches=[match])
+        output = format_text(result, _colors(), verbose=True, phonetic_algo="metaphone")
+        # Metaphone returns two codes separated by /
+        assert "/" in output
+
     def test_verbose_no_effect_on_contains(self) -> None:
         detail = _make_detail(
             field="surname", query_term="Smith", match_type="contains"
@@ -754,11 +768,11 @@ class TestFormatJsonFields:
                 "_norm"
             ), f"Unexpected normalized field in JSON: {key}"
 
-    def test_soundex_fields_not_in_json(self) -> None:
+    def test_phonetic_fields_not_in_json(self) -> None:
         ind = _make_individual()
         entry = self._single_match_data(ind)
         for key in entry:
-            assert "soundex" not in key, f"Unexpected soundex field in JSON: {key}"
+            assert "phonetic" not in key, f"Unexpected phonetic field in JSON: {key}"
 
     def test_match_details_key_mapping(self) -> None:
         detail = MatchDetail(

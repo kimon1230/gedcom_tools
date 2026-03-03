@@ -25,10 +25,10 @@ class ReferenceValidator:
     usages: dict[str, list[UsageInfo]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    indi_connections: dict[str, set[str]] = field(
-        default_factory=lambda: defaultdict(set)
-    )
-    fam_members: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    indi_as_child: dict[str, set[str]] = field(default_factory=dict)
+    indi_as_spouse: dict[str, set[str]] = field(default_factory=dict)
+    fam_children: dict[str, set[str]] = field(default_factory=dict)
+    fam_spouses: dict[str, set[str]] = field(default_factory=dict)
 
     def collect_definition(
         self, xref: str, record_type: str, line: int
@@ -53,13 +53,21 @@ class ReferenceValidator:
         """Record where an xref is referenced."""
         self.usages[xref].append(UsageInfo(line=line, context=context))
 
-    def collect_indi_family_link(self, indi_xref: str, fam_xref: str) -> None:
-        """Record that an individual is linked to a family."""
-        self.indi_connections[indi_xref].add(fam_xref)
+    def collect_indi_as_child(self, indi_xref: str, fam_xref: str) -> None:
+        """Record that an individual references a family via FAMC."""
+        self.indi_as_child.setdefault(indi_xref, set()).add(fam_xref)
 
-    def collect_fam_member(self, fam_xref: str, member_xref: str) -> None:
-        """Record that a family has a member (HUSB, WIFE, or CHIL)."""
-        self.fam_members[fam_xref].add(member_xref)
+    def collect_indi_as_spouse(self, indi_xref: str, fam_xref: str) -> None:
+        """Record that an individual references a family via FAMS."""
+        self.indi_as_spouse.setdefault(indi_xref, set()).add(fam_xref)
+
+    def collect_fam_child(self, fam_xref: str, child_xref: str) -> None:
+        """Record that a family lists an individual as CHIL."""
+        self.fam_children.setdefault(fam_xref, set()).add(child_xref)
+
+    def collect_fam_spouse(self, fam_xref: str, spouse_xref: str) -> None:
+        """Record that a family lists an individual as HUSB or WIFE."""
+        self.fam_spouses.setdefault(fam_xref, set()).add(spouse_xref)
 
     def validate(self) -> list[ValidationIssue]:
         """Validate all collected references and return issues."""
@@ -69,6 +77,7 @@ class ReferenceValidator:
         issues.extend(self._check_orphaned_records())
         issues.extend(self._check_isolated_individuals())
         issues.extend(self._check_empty_families())
+        issues.extend(self._check_asymmetric_links())
 
         return issues
 
@@ -123,7 +132,10 @@ class ReferenceValidator:
 
         for xref, info in self.definitions.items():
             if info.record_type == "INDI":
-                if xref not in self.indi_connections or not self.indi_connections[xref]:
+                connections = self.indi_as_child.get(
+                    xref, set()
+                ) | self.indi_as_spouse.get(xref, set())
+                if not connections:
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W014_ISOLATED_INDI,
@@ -141,13 +153,90 @@ class ReferenceValidator:
 
         for xref, info in self.definitions.items():
             if info.record_type == "FAM":
-                if xref not in self.fam_members or not self.fam_members[xref]:
+                members = self.fam_children.get(xref, set()) | self.fam_spouses.get(
+                    xref, set()
+                )
+                if not members:
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W015_EMPTY_FAM,
                             message="Family has no members",
                             line=info.line,
                             xref=xref,
+                        )
+                    )
+
+        return issues
+
+    def _check_asymmetric_links(self) -> list[ValidationIssue]:
+        """Check for one-sided family-individual cross-references."""
+        issues: list[ValidationIssue] = []
+
+        # Child links: FAM lists CHIL but INDI doesn't reference FAM as parent
+        for fam_xref, children in self.fam_children.items():
+            for child_xref in children:
+                if child_xref not in self.definitions:
+                    continue
+                if fam_xref not in self.definitions:
+                    continue
+                if fam_xref not in self.indi_as_child.get(child_xref, set()):
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W016_ASYMMETRIC_CHILD_LINK,
+                            message=f"{child_xref} listed as child in {fam_xref} "
+                            f"but does not reference {fam_xref} as parent family",
+                            xref=child_xref,
+                        )
+                    )
+
+        # Child links: INDI references FAM as parent but FAM doesn't list INDI as CHIL
+        for indi_xref, fam_set in self.indi_as_child.items():
+            for fam_xref in fam_set:
+                if fam_xref not in self.definitions:
+                    continue
+                if indi_xref not in self.definitions:
+                    continue
+                if indi_xref not in self.fam_children.get(fam_xref, set()):
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W016_ASYMMETRIC_CHILD_LINK,
+                            message=f"{indi_xref} references {fam_xref} as parent "
+                            f"family but is not listed as child",
+                            xref=indi_xref,
+                        )
+                    )
+
+        # Spouse links: FAM lists HUSB/WIFE but INDI doesn't reference FAM as spousal
+        for fam_xref, spouses in self.fam_spouses.items():
+            for spouse_xref in spouses:
+                if spouse_xref not in self.definitions:
+                    continue
+                if fam_xref not in self.definitions:
+                    continue
+                if fam_xref not in self.indi_as_spouse.get(spouse_xref, set()):
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W017_ASYMMETRIC_SPOUSE_LINK,
+                            message=f"{spouse_xref} listed as spouse in {fam_xref} "
+                            f"but does not reference {fam_xref} as spousal family",
+                            xref=spouse_xref,
+                        )
+                    )
+
+        # Spouse links: INDI references FAM as spousal but FAM doesn't list as HUSB/WIFE
+        for indi_xref, fam_set in self.indi_as_spouse.items():
+            for fam_xref in fam_set:
+                if fam_xref not in self.definitions:
+                    continue
+                if indi_xref not in self.definitions:
+                    continue
+                if indi_xref not in self.fam_spouses.get(fam_xref, set()):
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W017_ASYMMETRIC_SPOUSE_LINK,
+                            message=f"{indi_xref} references {fam_xref} as spousal "
+                            f"family but is not listed as spouse",
+                            xref=indi_xref,
                         )
                     )
 

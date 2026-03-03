@@ -7,7 +7,6 @@ from ged4py.parser import GedcomReader
 
 from gedcom_tools.commands.search.models import SearchIndividual
 from gedcom_tools.dates import classify_date_precision, extract_year_from_date
-from gedcom_tools.phonetics import soundex
 from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
@@ -84,7 +83,11 @@ def _resolve_death(record: Record) -> tuple[int | None, bool, str]:
     return None, False, place
 
 
-def _build_individual(record: Record, xref: str) -> SearchIndividual:
+def _build_individual(
+    record: Record, xref: str, algorithm: str = "soundex"
+) -> SearchIndividual:
+    from gedcom_tools.phonetics import phonetic_encode
+
     name_records = [sub for sub in record.sub_records if sub.tag == "NAME"]
 
     given = ""
@@ -125,10 +128,16 @@ def _build_individual(record: Record, xref: str) -> SearchIndividual:
         (normalize_compare(g), normalize_compare(s)) for g, s in alt_names_display
     ]
 
-    # Soundex codes
-    surname_sx = soundex(surname_norm)
-    given_sx = soundex(given_norm)
-    alt_sx = [(soundex(g_norm), soundex(s_norm)) for g_norm, s_norm in alt_names_norm]
+    # Phonetic codes (single-pass: compute primary + alt for each name component)
+    s_p, s_a = phonetic_encode(surname_norm, algorithm)
+    g_p, g_a = phonetic_encode(given_norm, algorithm)
+    alt_primary: list[tuple[str, str]] = []
+    alt_secondary: list[tuple[str, str]] = []
+    for g_norm, s_norm in alt_names_norm:
+        gp, ga = phonetic_encode(g_norm, algorithm)
+        sp, sa = phonetic_encode(s_norm, algorithm)
+        alt_primary.append((gp, sp))
+        alt_secondary.append((ga, sa))
 
     return SearchIndividual(
         xref=xref,
@@ -149,14 +158,18 @@ def _build_individual(record: Record, xref: str) -> SearchIndividual:
         birth_place_norm=birth_place_norm,
         death_place_norm=death_place_norm,
         alt_names_norm=alt_names_norm,
-        surname_soundex=surname_sx,
-        given_name_soundex=given_sx,
-        alt_soundex=alt_sx,
+        surname_phonetic=s_p,
+        surname_phonetic_alt=s_a,
+        given_phonetic=g_p,
+        given_phonetic_alt=g_a,
+        alt_phonetic=alt_primary,
+        alt_phonetic_alt=alt_secondary,
     )
 
 
 def collect_individuals(
     file_path: Path,
+    algorithm: str = "soundex",
 ) -> tuple[list[SearchIndividual], EncodingInfo]:
     encoding_info = detect_encoding(file_path)
     individuals: list[SearchIndividual] = []
@@ -166,6 +179,6 @@ def collect_individuals(
             xref = record.xref_id
             if not xref:
                 continue
-            individuals.append(_build_individual(record, xref))
+            individuals.append(_build_individual(record, xref, algorithm))
 
     return individuals, encoding_info

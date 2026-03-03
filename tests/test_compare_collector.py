@@ -235,13 +235,13 @@ class TestFamilyLinks:
 
 
 class TestBlockingKeys:
-    def test_soundex_precomputed(self, tmp_path: Path) -> None:
+    def test_phonetic_precomputed(self, tmp_path: Path) -> None:
         ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
         ind = collect_individuals(ged, "A")[0]
-        assert ind.surname_soundex != ""
-        assert ind.given_name_soundex != ""
+        assert ind.surname_phonetic != ""
+        assert ind.given_phonetic != ""
         # Smith → S530 (from normalized "smith")
-        assert ind.surname_soundex == "S530"
+        assert ind.surname_phonetic == "S530"
 
     def test_decade_keys(self, tmp_path: Path) -> None:
         ged = _write_ged(
@@ -260,11 +260,11 @@ class TestBlockingKeys:
         assert ind.birth_decade == ""
         assert ind.death_decade == ""
 
-    def test_no_name_no_soundex(self, tmp_path: Path) -> None:
+    def test_no_name_no_phonetic(self, tmp_path: Path) -> None:
         ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 SEX M\n")
         ind = collect_individuals(ged, "A")[0]
-        assert ind.surname_soundex == ""
-        assert ind.given_name_soundex == ""
+        assert ind.surname_phonetic == ""
+        assert ind.given_phonetic == ""
 
 
 class TestAltNameNormalization:
@@ -291,3 +291,24 @@ class TestAltNameNormalization:
         ind = collect_individuals(ged, "A")[0]
         assert "Jack" in ind.alt_given_names
         assert ind.alt_surnames == []  # Smith is same as primary
+
+
+class TestMetaphoneCollector:
+    def test_metaphone_produces_alt_codes(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
+        ind = collect_individuals(ged, "A", algorithm="metaphone")[0]
+        assert ind.surname_phonetic != ""
+        assert ind.given_phonetic != ""
+        # Metaphone produces alt codes (may or may not be empty depending on name)
+        # But the fields should exist
+        assert isinstance(ind.surname_phonetic_alt, str)
+        assert isinstance(ind.given_phonetic_alt, str)
+
+    def test_soundex_alt_is_always_empty(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
+        ind = collect_individuals(ged, "A", algorithm="soundex")[0]
+        assert ind.surname_phonetic_alt == ""
+        assert ind.given_phonetic_alt == ""
+        # Primary codes should still be set
+        assert ind.surname_phonetic == "S530"
+        assert ind.given_phonetic != ""

@@ -90,7 +90,16 @@ Warnings indicate potential issues that don't make the file invalid.
 | W014 | **Isolated individual** - INDI with no family connections |
 | W015 | **Empty family** - FAM with no HUSB, WIFE, or CHIL |
 
-### Semantic Warnings (W020-W025)
+### Reference Warnings (W016-W017)
+
+| Code | Description |
+|------|-------------|
+| W016 | **Asymmetric child link** - FAM lists individual as CHIL but individual has no matching FAMC, or individual has FAMC pointing to family but family doesn't list them as CHIL |
+| W017 | **Asymmetric spouse link** - FAM lists individual as HUSB/WIFE but individual has no matching FAMS, or individual has FAMS pointing to family but family doesn't list them as HUSB/WIFE |
+
+These checks detect broken bidirectional links between INDI and FAM records. In valid GEDCOM, every FAM.CHIL should have a corresponding INDI.FAMC and vice versa. The same applies to HUSB/WIFE and FAMS. Only flagged when both the INDI and FAM records exist — if either is missing, E001 (unresolved cross-reference) covers it instead.
+
+### Semantic Warnings (W020-W029)
 
 | Code | Description | Threshold |
 |------|-------------|-----------|
@@ -100,8 +109,18 @@ Warnings indicate potential issues that don't make the file invalid.
 | W023 | **Implausible lifespan** | Age at death > 120 years |
 | W024 | **Marriage before birth** | Marriage date before spouse's birth |
 | W025 | **Child before marriage** | Child born before parents' marriage |
+| W026 | **Siblings born too close** | Siblings born < 9 months apart (excluding twins) |
+| W027 | **Multiple SEX records** | Individual has more than one SEX sub-record |
+| W028 | **Invalid SEX value** | SEX value is not M, F, U, or X |
+| W029 | **Sex-role mismatch** | Individual recorded as HUSB but has SEX F, or recorded as WIFE but has SEX M |
 
-These thresholds are defined in `src/gedcom_tools/constants.py`.
+Age and date thresholds are defined in `src/gedcom_tools/constants.py`.
+
+**W026 known limitations:**
+- Requires month-level precision on both birth dates — year-only dates are skipped
+- Twins (same birth month) are excluded automatically
+- Only checks siblings within the same FAM record
+- Uses Gregorian calendar only (Julian dates are not converted)
 
 ### Strict Mode Warnings (W030-W032)
 
@@ -112,6 +131,15 @@ Only checked when `--strict` is specified.
 | W030 | **ANSEL deprecated** | ANSEL encoding deprecated in GEDCOM 5.5.5 |
 | W031 | **Version mismatch** | Declared version differs from --strict version |
 | W032 | **Line too long (strict)** | Line exceeds 255 bytes (strict check) |
+
+### Media Warnings (W033-W034)
+
+| Code | Description |
+|------|-------------|
+| W033 | **OBJE missing FILE** - Top-level OBJE record has no FILE sub-record |
+| W034 | **FILE missing FORM** - FILE sub-record within OBJE has no FORM (media type) |
+
+These check structural integrity of multimedia object records. A valid OBJE should contain at least one FILE sub-record, and each FILE should specify its FORM (e.g., `jpeg`, `pdf`). Only top-level OBJE records are checked — inline OBJE references within INDI or FAM records are not validated.
 
 ## Output Formats
 
@@ -197,3 +225,5 @@ Strict mode (`--strict 5.5.1` or `--strict 5.5.5`) enables:
 - [`isolated`](isolated.md) -- detect unconnected individuals
 - [`languages`](languages.md) -- detect languages in notes and events
 - [`compare`](compare.md) -- cross-file individual matching
+- [`duplicates`](duplicates.md) -- find duplicate individuals within a file
+- [`relationship`](relationship.md) -- determine genealogical relationships

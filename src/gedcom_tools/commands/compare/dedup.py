@@ -18,7 +18,7 @@ _DIFF_FIELDS: list[tuple[str, str, bool]] = [
 ]
 
 
-def _compute_field_diffs(a: CompareIndividual, b: CompareIndividual) -> list[FieldDiff]:
+def compute_field_diffs(a: CompareIndividual, b: CompareIndividual) -> list[FieldDiff]:
     diffs: list[FieldDiff] = []
     for label, attr, is_int in _DIFF_FIELDS:
         val_a = getattr(a, attr)
@@ -50,7 +50,7 @@ def deduplicate_matches(
             continue
         used_a.add(a.xref)
         used_b.add(b.xref)
-        diffs = _compute_field_diffs(a, b)
+        diffs = compute_field_diffs(a, b)
         pair = MatchPair(individual_a=a, individual_b=b, score=score, field_diffs=diffs)
         if score.classification == "certain":
             certain.append(pair)

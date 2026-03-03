@@ -34,8 +34,8 @@ class TestCompareIndividual:
         assert ind.death_place_normalized == ""
         assert ind.alt_surnames_normalized == []
         assert ind.alt_given_names_normalized == []
-        assert ind.surname_soundex == ""
-        assert ind.given_name_soundex == ""
+        assert ind.surname_phonetic == ""
+        assert ind.given_phonetic == ""
         assert ind.birth_decade == ""
         assert ind.death_decade == ""
 
@@ -61,8 +61,8 @@ class TestCompareIndividual:
             death_place_normalized="patras",
             alt_surnames_normalized=["papadopoulou"],
             alt_given_names_normalized=["helen"],
-            surname_soundex="P131",
-            given_name_soundex="E450",
+            surname_phonetic="P131",
+            given_phonetic="E450",
             birth_decade="1850s",
             death_decade="1920s",
         )
@@ -71,7 +71,7 @@ class TestCompareIndividual:
         assert ind.birth_year == 1852
         assert ind.fams_xrefs == ["@F10@", "@F11@"]
         assert ind.alt_surnames == ["Papadopoulou"]
-        assert ind.surname_soundex == "P131"
+        assert ind.surname_phonetic == "P131"
         assert ind.birth_decade == "1850s"
 
     def test_list_fields_independent(self) -> None:

@@ -33,6 +33,7 @@ def _args(
     verbose: bool = False,
     quiet: bool = False,
     no_color: bool = True,
+    phonetic: str = "soundex",
 ) -> argparse.Namespace:
     return argparse.Namespace(
         file=file,
@@ -45,6 +46,7 @@ def _args(
         verbose=verbose,
         quiet=quiet,
         no_color=no_color,
+        phonetic=phonetic,
     )
 
 
@@ -198,6 +200,24 @@ class TestFullPipeline:
         assert rc == EXIT_SUCCESS
         out = capsys.readouterr().out
         assert "Schmidt" in out
+
+    def test_metaphone_finds_cross_language_match(self, tmp_path: Path, capsys) -> None:
+        # Catherine/Katherine differ in soundex initial letter but match in metaphone
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME Jane /Katherine/\n1 SEX F\n",
+        )
+        # Should NOT match with default soundex
+        rc = run(_args(ged, "surname~Catherine"))
+        assert rc == EXIT_SUCCESS
+        out = capsys.readouterr().out
+        assert "Katherine" not in out
+
+        # Should match with metaphone
+        rc = run(_args(ged, "surname~Catherine", phonetic="metaphone"))
+        assert rc == EXIT_SUCCESS
+        out = capsys.readouterr().out
+        assert "Katherine" in out
 
     def test_date_range_search(self, tmp_path: Path, capsys) -> None:
         ged = _write_ged(
