@@ -11,8 +11,8 @@ pip install kimon-gedcom-tools
 Or for development:
 
 ```bash
-git clone https://github.com/kimon1230/gedcom-tools.git
-cd gedcom-tools
+git clone https://github.com/kimon1230/gedcom_tools.git
+cd gedcom_tools
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"

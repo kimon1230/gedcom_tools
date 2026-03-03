@@ -31,7 +31,7 @@ dev = [
 gedcom-tools = "gedcom_tools.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/kimon1230/gedcom-tools"
+Homepage = "https://github.com/kimon1230/gedcom_tools"
 
 [tool.setuptools.packages.find]
 where = ["src"]
