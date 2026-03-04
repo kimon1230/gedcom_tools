@@ -98,8 +98,11 @@ class IsolatedResult:
         return "\n".join(lines)
 
     def format_json(self) -> str:
+        from pathlib import Path as _Path
+
         data = {
             "file": self.file_path,
+            "filename": _Path(self.file_path).name,
             "summary": {
                 "total_individuals": self.total_individuals,
                 "isolated_count": self.isolated_count,

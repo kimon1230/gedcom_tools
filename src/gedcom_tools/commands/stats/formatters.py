@@ -474,8 +474,11 @@ class StatsResult:
         return "\n".join(lines)
 
     def format_json(self) -> str:
+        from pathlib import Path as _Path
+
         data: dict[str, Any] = {
             "file": self.file_path,
+            "filename": _Path(self.file_path).name,
             "encoding": None,
             "records": {
                 "individuals": self.individuals,
@@ -551,19 +554,16 @@ class StatsResult:
             data["timeline"]["earliest_year"] = {
                 "year": self.earliest_year.year,
                 "xref": self.earliest_year.xref,
-                "name": self.earliest_year.name,
             }
         if self.latest_year:
             data["timeline"]["latest_year"] = {
                 "year": self.latest_year.year,
                 "xref": self.latest_year.xref,
-                "name": self.latest_year.name,
             }
         if self.earliest_generation:
             data["timeline"]["earliest_generation"] = {
                 "generation": self.earliest_generation.generation,
                 "xref": self.earliest_generation.xref,
-                "name": self.earliest_generation.name,
             }
         if self.lifespan:
             data["timeline"]["lifespan"] = {

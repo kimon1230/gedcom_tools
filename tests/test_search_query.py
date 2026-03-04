@@ -307,6 +307,43 @@ class TestRegexErrors:
         with pytest.raises(ValueError, match="remove --regex"):
             parse_query("name:[invalid", regex_mode=True)
 
+    def test_quantified_inner_group(self) -> None:
+        with pytest.raises(ValueError, match="quantified group"):
+            parse_query(r"name:(a*b)+", regex_mode=True)
+
+    def test_overlapping_alternation(self) -> None:
+        with pytest.raises(ValueError, match="alternation"):
+            parse_query(r"name:(a|b)+", regex_mode=True)
+
+    def test_pattern_too_long(self) -> None:
+        long_pattern = "a" * 257
+        with pytest.raises(ValueError, match="too long"):
+            parse_query(f"name:{long_pattern}", regex_mode=True)
+
+    def test_pattern_at_max_length_accepted(self) -> None:
+        ok_pattern = "a" * 256
+        q = parse_query(f"name:{ok_pattern}", regex_mode=True)
+        assert q.terms[0].value == ok_pattern
+
+    def test_too_many_nested_groups(self) -> None:
+        # 4 levels of nesting → rejected (max 3)
+        with pytest.raises(ValueError, match="nested groups"):
+            parse_query(r"name:((((a))))", regex_mode=True)
+
+    def test_three_nested_groups_accepted(self) -> None:
+        # Exactly 3 levels → accepted
+        q = parse_query(r"name:(a(b(c)))", regex_mode=True)
+        assert len(q.terms) == 1
+
+    def test_valid_complex_regex_accepted(self) -> None:
+        q = parse_query(r"name:^(John|Jane)\s+\w+$", regex_mode=True)
+        assert q.terms[0].value == r"^(John|Jane)\s+\w+$"
+
+    def test_escaped_parens_not_counted(self) -> None:
+        # Escaped parens should not count toward nesting depth
+        q = parse_query(r"name:\(literal\)", regex_mode=True)
+        assert len(q.terms) == 1
+
 
 class TestWildcardErrors:
     def test_too_broad_pattern(self) -> None:

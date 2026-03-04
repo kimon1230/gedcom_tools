@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -102,6 +103,7 @@ def format_text(
 def format_json(result: RelationshipResult) -> str:
     data: dict[str, Any] = {
         "file": result.file,
+        "filename": Path(result.file).name,
         "primary": _individual_to_dict(result.primary),
         "target": _individual_to_dict(result.target),
         "related": result.related,

@@ -2,6 +2,16 @@
 CLAUDE.md
 .claude/
 
+# AI/LLM tool directories
+.cursor/
+.aider*
+.continue/
+.copilot/
+.codeium/
+.windsurf/
+.tabnine/
+.sourcegraph/
+
 # GEDCOM data files (prevent accidental commit of large/private files)
 *.ged
 !tests/fixtures/*.ged
@@ -52,12 +62,28 @@ htmlcov/
 
 # Environment variables
 .env
-.env.local
+.env.*
+!.env.example
+!.env.template
 *.local
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+credentials.json
+service-account*.json
+*.gpg
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
+._*
 
 # Logs
 *.log

@@ -315,3 +315,64 @@ class TestCheckOutputSafety:
         result = self._check(inp, inp, dry_run=True)
         assert result is not None
         assert "resolves to the input" in result
+
+
+class TestSanitizeError:
+    def _sanitize(self, msg: str) -> str:
+        from gedcom_tools.utils import sanitize_error
+
+        return sanitize_error(msg)
+
+    def test_normal_text_preserved(self) -> None:
+        assert self._sanitize("File not found: test.ged") == "File not found: test.ged"
+
+    def test_tabs_preserved(self) -> None:
+        assert self._sanitize("col1\tcol2") == "col1\tcol2"
+
+    def test_non_latin_unicode_preserved(self) -> None:
+        assert self._sanitize("Ελληνικά 日本語") == "Ελληνικά 日本語"
+
+    def test_c0_controls_stripped(self) -> None:
+        assert self._sanitize("bad\x00\x01\x02text") == "badtext"
+
+    def test_null_byte_stripped(self) -> None:
+        assert self._sanitize("hello\x00world") == "helloworld"
+
+    def test_ansi_escape_stripped(self) -> None:
+        assert self._sanitize("normal\x1b[31mred\x1b[0m") == "normalred"
+
+    def test_ansi_complex_sequence_stripped(self) -> None:
+        assert self._sanitize("\x1b[1;32;40mBOLD\x1b[0m") == "BOLD"
+
+    def test_bidi_override_stripped(self) -> None:
+        assert self._sanitize("hello\u202eevil\u202c") == "helloevil"
+
+    def test_lrm_stripped(self) -> None:
+        assert self._sanitize("left\u200eright") == "leftright"
+
+    def test_rlm_stripped(self) -> None:
+        assert self._sanitize("left\u200fright") == "leftright"
+
+    def test_alm_stripped(self) -> None:
+        assert self._sanitize("text\u061cmore") == "textmore"
+
+    def test_line_separator_stripped(self) -> None:
+        assert self._sanitize("line1\u2028line2") == "line1line2"
+
+    def test_paragraph_separator_stripped(self) -> None:
+        assert self._sanitize("para1\u2029para2") == "para1para2"
+
+    def test_lri_rli_fsi_pdi_stripped(self) -> None:
+        assert self._sanitize("a\u2066b\u2067c\u2068d\u2069e") == "abcde"
+
+    def test_empty_string(self) -> None:
+        assert self._sanitize("") == ""
+
+    def test_combined_threats(self) -> None:
+        msg = "\x1b[31m\x00bad\u202epath\u200e"
+        result = self._sanitize(msg)
+        assert result == "badpath"
+        assert "\x1b" not in result
+        assert "\x00" not in result
+        assert "\u202e" not in result
+        assert "\u200e" not in result

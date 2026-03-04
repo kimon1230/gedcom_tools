@@ -164,8 +164,11 @@ class ValidationResult:
                 issue_data["context"] = issue.context
             issues_list.append(issue_data)
 
+        from pathlib import Path as _Path
+
         data: dict[str, object] = {
             "file": self.file_path,
+            "filename": _Path(self.file_path).name,
             "valid": self.success,
             "encoding": encoding_data,
             "record_counts": self.record_counts,

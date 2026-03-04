@@ -224,5 +224,7 @@ def run(args: Namespace) -> int:
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
         return EXIT_ERROR

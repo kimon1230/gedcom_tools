@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -89,7 +91,9 @@ class ConvertResult:
     def format_json(self) -> str:
         data = {
             "source_file": str(self.source_file),
+            "source_filename": self.source_file.name,
             "output_file": str(self.output_file),
+            "output_filename": self.output_file.name,
             "source_encoding": self.source_encoding,
             "target_encoding": self.target_encoding,
             "lines_total": self.lines_total,
@@ -154,6 +158,18 @@ def transcode(
     add_bom: bool,
     dry_run: bool,
 ) -> ConvertResult:
+    from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+
+    file_size = source_path.stat().st_size
+    if file_size > MAX_FILE_SIZE_BYTES:
+        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+        actual_mb = file_size / (1024 * 1024)
+        msg = (
+            f"File is too large ({actual_mb:.1f} MB). "
+            f"Maximum supported size is {limit_mb} MB."
+        )
+        raise ValueError(msg)
+
     raw = source_path.read_bytes()
     if len(raw) == 0:
         msg = f"File is empty: {source_path}"
@@ -195,6 +211,11 @@ def transcode(
 
     if not dry_run:
         output_path.write_bytes(encoded)
+        if sys.platform != "win32":
+            try:
+                os.chmod(output_path, 0o600)
+            except OSError:
+                pass
 
     return ConvertResult(
         source_file=source_path,

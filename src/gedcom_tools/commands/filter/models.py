@@ -198,9 +198,13 @@ class FilterResult:
                 "total": c.total,
             }
 
+        from pathlib import Path as _Path
+
         data = {
             "source_file": self.source_path,
+            "source_filename": _Path(self.source_path).name,
             "output_file": self.output_path,
+            "output_filename": _Path(self.output_path).name,
             "source": _counts_dict(self.source_counts),
             "output": _counts_dict(self.output_counts),
             "removed": _counts_dict(self.removed_counts),

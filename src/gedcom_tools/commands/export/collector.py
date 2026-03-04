@@ -58,6 +58,22 @@ def _extract_date_str(record: Record, path: str) -> str:
     return str(date_rec.value)
 
 
+def _detect_living_marker(record: Record) -> str:
+    """Check for custom living/not-living tags from genealogy software.
+
+    Recognized tags: _LVG (Legacy/FTM), _LIVING (RootsMagic),
+    _LVNG (FTM variant), _CONF_FLAG (PAF), _NLIV (Brother's Keeper).
+    """
+    from gedcom_tools.commands.export.models import _LIVING_TAGS, _NOT_LIVING_TAGS
+
+    for sub in record.sub_records:
+        if sub.tag in _NOT_LIVING_TAGS:
+            return sub.tag
+        if sub.tag in _LIVING_TAGS:
+            return sub.tag
+    return ""
+
+
 def _extract_suffix(name_record: Record) -> str:
     """Extract suffix from ged4py NAME tuple (index 2)."""
     val = name_record.value
@@ -143,6 +159,7 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
                 fams_xrefs.append(ref)
 
     source_count = count_sources_recursive(record)
+    living_marker = _detect_living_marker(record)
 
     return ExportIndividual(
         xref=xref,
@@ -162,6 +179,7 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
         source_count=source_count,
         famc_xref=famc_xref,
         fams_xrefs=fams_xrefs,
+        living_marker=living_marker,
         alt_names=alt_names,
         notes=notes,
     )

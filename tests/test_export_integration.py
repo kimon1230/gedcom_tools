@@ -248,6 +248,37 @@ class TestFormatMapping:
         assert rows[0][0] == "xref"
 
 
+class TestOutputPermissions:
+    def test_output_file_has_restrictive_permissions(self, tmp_path: Path) -> None:
+        import os
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("chmod not applicable on Windows")
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        out_file = tmp_path / "out.csv"
+        code = run(_make_args(ged, output=out_file))
+        assert code == EXIT_SUCCESS
+        mode = os.stat(out_file).st_mode & 0o777
+        assert mode == 0o600
+
+    def test_chmod_failure_is_nonfatal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("chmod not applicable on Windows")
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        out_file = tmp_path / "out.csv"
+        monkeypatch.setattr(
+            os, "chmod", lambda *a, **kw: (_ for _ in ()).throw(OSError("mocked"))
+        )
+        code = run(_make_args(ged, output=out_file))
+        assert code == EXIT_SUCCESS
+
+
 class TestErrorCases:
     def test_missing_file(self, tmp_path: Path) -> None:
         missing = tmp_path / "nonexistent.ged"

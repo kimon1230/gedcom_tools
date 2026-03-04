@@ -143,9 +143,22 @@ Regex mode only applies to the `:` operator. The `=` and `~` operators behave
 normally regardless of `--regex`. Date and relationship fields are also
 unaffected.
 
-Patterns with nested quantifiers (e.g. `(a+)+`) are rejected to prevent
-catastrophic backtracking. Invalid regex syntax produces an error with
-a suggestion to use substring matching instead.
+Regex patterns are validated before execution. The following are rejected to
+prevent catastrophic backtracking (ReDoS):
+
+- Nested quantifiers: `(a+)+`, `(a*)*`
+- Quantified groups with quantified inner expressions: `(a+)+`, `(\d+)*`
+- Overlapping alternation in quantified groups: `(a|a)+`, `(\w|\d)*`
+- Patterns longer than 256 characters
+- More than 3 levels of nested groups
+
+These checks use heuristic detection — they catch common ReDoS patterns but
+are not exhaustive. The regex engine is Python's stdlib `re`, which does not
+support timeouts. If a pathological pattern slips through validation, use
+Ctrl+C to interrupt.
+
+Invalid regex syntax produces an error with a suggestion to use substring
+matching instead.
 
 ### Quoting
 

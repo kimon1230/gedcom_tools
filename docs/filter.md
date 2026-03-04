@@ -299,6 +299,8 @@ Appends `(dry run — no file written)` to the output. No file is created.
 
 ## Safety
 
+- **File size limit** — input files larger than 500 MB are rejected with an
+  actionable error message showing the actual size and the limit.
 - **Output file required** — `-o` is mandatory. The original file is never
   modified.
 - **Overwrite protection** — refuses to overwrite an existing file unless
@@ -308,6 +310,8 @@ Appends `(dry run — no file written)` to the output. No file is created.
   supported.
 - **Dry run** — `--dry-run` previews the filtering results without writing any
   file.
+- **Output permissions** — output files are created with `0600` permissions
+  (owner read/write only) on Unix systems. Skipped on Windows.
 - **Encoding preservation** — the output is encoded using the same codec as the
   input. If the input had a BOM, the output will too.
 - **Line ending preservation** — CRLF or LF line endings are preserved from the

@@ -33,9 +33,13 @@ Basic counts of records in the file: individuals, families, sources, locations.
 
 ### Timeline
 
-- Earliest/latest events with dates
+- Earliest/latest events with cross-reference IDs (xref) and dates
 - Date span in years
 - Distribution by century
+
+Note: Timeline entries in JSON output include the xref but not the
+individual's name. Names are excluded to prevent PII leakage when stats
+output is shared or logged.
 
 ### Tree Structure
 

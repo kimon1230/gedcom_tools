@@ -132,6 +132,7 @@ JSON output always includes both individuals and families regardless of the
 {
   "meta": {
     "file": "family.ged",
+    "filename": "family.ged",
     "encoding": "UTF-8",
     "gedcom_tools_version": "1.0.0",
     "individual_count": 150,
@@ -197,6 +198,9 @@ These fields appear in JSON but not in CSV:
 - `occupations`: Native JSON array (not joined like CSV).
 - `ensure_ascii=False`: Unicode characters are preserved directly (e.g.,
   `"Müller"` not `"M\\u00fcller"`).
+- `meta.file`: Full file path as provided by the user.
+- `meta.filename`: Basename only (no directory path), for safe embedding in
+  reports or logs.
 - `meta.gedcom_tools_version`: Always reflects the running version (never
   hardcoded).
 - `meta.redacted_living`: `true` when `--redact-living` was active, `false`
@@ -205,13 +209,28 @@ These fields appear in JSON but not in CSV:
 ## Living Person Estimation
 
 The `--redact-living` flag replaces names, dates, and places of individuals
-estimated to be living. The estimation algorithm:
+estimated to be living. The estimation uses a layered approach:
 
-1. **Has death year** → not living
-2. **Has burial date** → not living
-3. **No birth year** (and no death/burial) → unknown, **not redacted**
-4. **Birth year > max_age years ago** → not living
-5. **Birth year <= max_age years ago AND no death** → estimated living
+### Custom GEDCOM Living Tags (Highest Priority)
+
+Many genealogy programs write custom tags to explicitly mark living
+individuals. When present, these tags override all date-based inference:
+
+| Tag | Software | Meaning |
+|-----|----------|---------|
+| `_LVG` | Legacy Family Tree, Family Tree Maker | Living |
+| `_LIVING` | RootsMagic | Living |
+| `_LVNG` | Family Tree Maker (variant) | Living |
+| `_CONF_FLAG` | Personal Ancestral File (PAF) | Living (confidential) |
+| `_NLIV` | Brother's Keeper | Not living |
+
+### Date-Based Inference
+
+When no custom tag is present, estimation falls back to dates:
+
+1. **Has death year or burial date** → not living
+2. **Birth year ≤ max_age years ago AND no death** → estimated living
+3. **Everything else** (no dates, ancient dates, unknown) → **not redacted**
 
 The `--max-age` option controls the threshold (default: 110 years, inclusive).
 A person born exactly `max_age` years ago is still considered possibly living.
@@ -223,18 +242,20 @@ A person born exactly `max_age` years ago is still considered possibly living.
 - `surname`, `suffix`, dates, places, occupations → cleared (empty)
 - `alt_names`, `notes` → cleared (JSON only)
 - `xref`, `sex`, `source_count`, `famc_xref`, `fams_xrefs` → preserved
+- Cross-reference IDs (`famc_xref`, `fams_xrefs`) are cleared in CSV and JSON
+  to prevent correlation attacks via family links
 
 **Families:**
 - When a spouse is estimated living, their denormalized `husband_name` or
-  `wife_name` is replaced with `"Living"`. All other family fields (xrefs,
-  dates, child links) are preserved.
+  `wife_name` is replaced with `"Living"`. Spouse xrefs (`husband_xref`,
+  `wife_xref`) are cleared when the referenced individual is living.
 
 ### Design Note
 
 Individuals with no birth year and no death record are **not** redacted. This
-conservative approach avoids blanket-redacting poorly-sourced historical
-individuals (the majority of records in many files). If you need stricter
-privacy, filter by birth year in your downstream processing.
+avoids blanket-redacting poorly-sourced historical individuals (the majority of
+records in many files). If you need stricter privacy, filter by birth year in
+your downstream processing.
 
 ## Date String Format
 
@@ -252,11 +273,19 @@ content.
 | 1 | Error during processing |
 | 2 | Usage error (file not found, invalid arguments) |
 
+## Output Permissions
+
+When writing to a file (`-o`), output files are created with restrictive
+permissions (`0600` — owner read/write only) on Unix systems. This is a
+best-effort measure for files that may contain personal data. On Windows,
+file permissions are managed by the OS and this step is skipped.
+
 ## Known Limitations
 
 - Date strings are ged4py's canonical form, not verbatim original GEDCOM text
-- `--redact-living` requires a birth year to estimate living status; individuals
-  with no birth year and no death year are not redacted
+- `--redact-living` requires either a custom living tag or a birth year to
+  estimate living status; individuals with no birth year, no custom tag, and no
+  death year are not redacted
 - Only inline NOTE text is exported; pointer-referenced notes (`NOTE @N1@`) are
   skipped
 - `--table` is ignored for JSON format (always includes both individuals and

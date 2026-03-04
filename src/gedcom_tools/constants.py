@@ -18,3 +18,6 @@ MIN_MARRIAGE_AGE = 12
 MAX_MARRIAGE_AGE = 80
 MAX_FIRST_CHILD_AGE = 70  # Exclude implausible ages from first-child stats
 MAX_SPOUSAL_AGE_GAP = 50
+
+# File size limit for byte-level operations (filter, convert)
+MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB

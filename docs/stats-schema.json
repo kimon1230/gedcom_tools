@@ -8,6 +8,10 @@
       "type": "string",
       "description": "Path to the GEDCOM file that was analyzed"
     },
+    "filename": {
+      "type": "string",
+      "description": "Basename of the GEDCOM file (no directory path)"
+    },
     "encoding": {
       "oneOf": [
         {
@@ -301,7 +305,7 @@
     }
   },
   "required": [
-    "file", "encoding", "records", "timeline", "tree_structure",
+    "file", "filename", "encoding", "records", "timeline", "tree_structure",
     "demographics", "locations", "completeness", "life_events",
     "family_size", "birth_patterns", "lifespan_trends", "research_quality"
   ],
@@ -312,10 +316,9 @@
       "description": "An individual referenced in timeline context (by birth year)",
       "properties": {
         "year": { "type": "integer" },
-        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" },
-        "name": { "type": "string" }
+        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" }
       },
-      "required": ["year", "xref", "name"],
+      "required": ["year", "xref"],
       "additionalProperties": false
     },
     "generationEntry": {
@@ -323,10 +326,9 @@
       "description": "An individual referenced by generation depth",
       "properties": {
         "generation": { "type": "integer", "minimum": 1 },
-        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" },
-        "name": { "type": "string" }
+        "xref": { "type": "string", "description": "GEDCOM cross-reference ID" }
       },
-      "required": ["generation", "xref", "name"],
+      "required": ["generation", "xref"],
       "additionalProperties": false
     },
     "rankedItem": {

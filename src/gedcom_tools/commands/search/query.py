@@ -26,6 +26,10 @@ OPERATORS = frozenset({":", "=", "~"})
 _SINGLE_YEAR_RE = re.compile(r"^\d{1,4}$")
 _DATE_RANGE_RE = re.compile(r"^\d{1,4}-\d{1,4}$")
 _NESTED_QUANTIFIER_RE = re.compile(r"([+*?}])\s*\)\s*[+*?{]")
+_QUANTIFIED_INNER_RE = re.compile(r"\([^)]*[+*][^)]*\)\s*[+*?{]")
+_OVERLAPPING_ALT_RE = re.compile(r"\(([^)]*\|[^)]*)\)\s*[+*?{]")
+_MAX_REGEX_LENGTH = 256
+_MAX_NESTING_DEPTH = 3
 _XREF_RE = re.compile(r"^@[A-Za-z0-9_]+@$")
 
 
@@ -140,11 +144,50 @@ def _validate_wildcard(value: str) -> None:
         )
 
 
+def _count_nesting_depth(value: str) -> int:
+    """Count maximum parenthesis nesting depth, ignoring escaped parens."""
+    depth = 0
+    max_depth = 0
+    i = 0
+    while i < len(value):
+        if value[i] == "\\" and i + 1 < len(value):
+            i += 2
+            continue
+        if value[i] == "(":
+            depth += 1
+            max_depth = max(max_depth, depth)
+        elif value[i] == ")":
+            depth = max(0, depth - 1)
+        i += 1
+    return max_depth
+
+
 def _validate_regex(value: str) -> None:
+    if len(value) > _MAX_REGEX_LENGTH:
+        raise ValueError(
+            f"Regex pattern is too long ({len(value)} chars, max {_MAX_REGEX_LENGTH}). "
+            f"Simplify the pattern"
+        )
+    if _count_nesting_depth(value) > _MAX_NESTING_DEPTH:
+        raise ValueError(
+            f"Regex pattern has too many nested groups "
+            f"(max {_MAX_NESTING_DEPTH} levels). Simplify the pattern"
+        )
     if _NESTED_QUANTIFIER_RE.search(value):
         raise ValueError(
             f"Regex pattern '{value}' contains nested quantifiers which could "
             f"cause slow matching. Simplify the pattern"
+        )
+    if _QUANTIFIED_INNER_RE.search(value):
+        raise ValueError(
+            f"Regex pattern '{value}' contains a quantified group with "
+            f"quantified subexpressions. Simplify the pattern"
+        )
+    if _OVERLAPPING_ALT_RE.search(value):
+        raise ValueError(
+            f"Regex pattern '{value}' contains alternation inside a "
+            f"quantified group which could cause slow matching. "
+            f"Simplify the pattern"
         )
     try:
         re.compile(value)

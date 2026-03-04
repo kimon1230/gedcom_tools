@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimon-gedcom-tools"
-version = "1.0.1"
+version = "1.1.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
-    "ged4py>=0.4.4",
+    "ged4py~=0.4.4",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
     "DoubleMetaphone>=1.1",

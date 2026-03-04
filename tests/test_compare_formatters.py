@@ -369,7 +369,9 @@ class TestJsonStructure:
         data = json.loads(format_json(_result()))
         expected = {
             "file_a",
+            "filename_a",
             "file_b",
+            "filename_b",
             "encoding_a",
             "encoding_b",
             "total_a",
@@ -384,6 +386,11 @@ class TestJsonStructure:
             "unique_to_b_total",
         }
         assert expected <= set(data.keys())
+
+    def test_filename_basenames(self) -> None:
+        data = json.loads(format_json(_result()))
+        assert data["filename_a"] == "tree1.ged"
+        assert data["filename_b"] == "tree2.ged"
 
     def test_encoding_structure(self) -> None:
         data = json.loads(format_json(_result()))

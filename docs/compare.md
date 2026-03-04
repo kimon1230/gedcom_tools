@@ -201,6 +201,8 @@ Single line:
 {
   "file_a": "tree_a.ged",
   "file_b": "tree_b.ged",
+  "filename_a": "tree_a.ged",
+  "filename_b": "tree_b.ged",
   "encoding_a": { "detected": "UTF-8", "has_bom": false, "declared": "UTF-8" },
   "encoding_b": { "detected": "UTF-8", "has_bom": false, "declared": "UTF-8" },
   "total_a": 100,

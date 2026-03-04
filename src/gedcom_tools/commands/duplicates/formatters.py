@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -166,6 +167,7 @@ def format_json(
 
     output: dict[str, Any] = {
         "file": result.file,
+        "filename": Path(result.file).name,
         "encoding": {
             "detected": result.encoding.encoding,
             "has_bom": result.encoding.has_bom,

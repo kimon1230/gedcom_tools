@@ -294,6 +294,48 @@ class TestCountLongLines:
 # ---------------------------------------------------------------------------
 
 
+class TestTranscodeFileSizeLimit:
+    def test_oversized_file_rejected(self, tmp_path: Path) -> None:
+        from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+
+        src = tmp_path / "big.ged"
+        with open(src, "wb") as f:
+            f.seek(MAX_FILE_SIZE_BYTES + 1)
+            f.write(b"\x00")
+        out = tmp_path / "out.ged"
+        with pytest.raises(ValueError, match="too large"):
+            transcode(
+                src,
+                out,
+                source_codec="utf-8",
+                target_codec="utf-8",
+                target_char="UTF-8",
+                normalize=False,
+                add_bom=False,
+                dry_run=False,
+            )
+
+    def test_error_includes_size_and_limit(self, tmp_path: Path) -> None:
+        from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+
+        src = tmp_path / "big.ged"
+        with open(src, "wb") as f:
+            f.seek(MAX_FILE_SIZE_BYTES + 1)
+            f.write(b"\x00")
+        out = tmp_path / "out.ged"
+        with pytest.raises(ValueError, match="500 MB"):
+            transcode(
+                src,
+                out,
+                source_codec="utf-8",
+                target_codec="utf-8",
+                target_char="UTF-8",
+                normalize=False,
+                add_bom=False,
+                dry_run=False,
+            )
+
+
 class TestTranscode:
     def test_utf8_to_utf8(self, tmp_path: Path) -> None:
         src = _write_ged(tmp_path)

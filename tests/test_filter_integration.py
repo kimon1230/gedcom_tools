@@ -954,3 +954,37 @@ class TestFilterSubtree555Sample:
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert data["output"]["total"] < data["source"]["total"]
+
+
+class TestFilterFileSizeLimit:
+    def test_oversized_file_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+
+        src = tmp_path / "big.ged"
+        # Create a sparse file exceeding limit
+        with open(src, "wb") as f:
+            f.seek(MAX_FILE_SIZE_BYTES + 1)
+            f.write(b"\x00")
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_custom_tags=True))
+        assert code == EXIT_ERROR
+        captured = capsys.readouterr()
+        assert "too large" in captured.err
+        assert "500 MB" in captured.err
+
+
+class TestFilterOutputPermissions:
+    def test_output_file_has_restrictive_permissions(self, tmp_path: Path) -> None:
+        import os
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("chmod not applicable on Windows")
+        ged = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(ged, out, strip_custom_tags=True))
+        assert code == EXIT_SUCCESS
+        mode = os.stat(out).st_mode & 0o777
+        assert mode == 0o600

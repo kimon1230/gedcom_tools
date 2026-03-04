@@ -244,7 +244,9 @@ def format_json(
 
     data: dict[str, Any] = {
         "file_a": result.file_a,
+        "filename_a": Path(result.file_a).name,
         "file_b": result.file_b,
+        "filename_b": Path(result.file_b).name,
         "encoding_a": {
             "detected": result.encoding_a.encoding,
             "has_bom": result.encoding_a.has_bom,

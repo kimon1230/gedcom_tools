@@ -25,7 +25,12 @@ from gedcom_tools.commands.filter.writer import (
     remove_empty_families,
     serialize_records,
 )
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import (
+    EXIT_ERROR,
+    EXIT_SUCCESS,
+    EXIT_USAGE_ERROR,
+    MAX_FILE_SIZE_BYTES,
+)
 from gedcom_tools.progress import Colors, PhaseTracker
 from gedcom_tools.utils import (
     BOMS,
@@ -161,6 +166,17 @@ def run(args: Namespace) -> int:
         4, stream=sys.stderr, no_color=no_color, quiet=quiet, verbose=verbose
     )
 
+    file_size = file_path.stat().st_size
+    if file_size > MAX_FILE_SIZE_BYTES:
+        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+        actual_mb = file_size / (1024 * 1024)
+        print(
+            f"Error: File is too large ({actual_mb:.1f} MB). "
+            f"Maximum supported size is {limit_mb} MB.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
     with tracker.phase("Reading input"):
         raw_bytes = file_path.read_bytes()
         stripped_bytes, bom_type = strip_bom(raw_bytes)
@@ -226,6 +242,13 @@ def run(args: Namespace) -> int:
             if bom_type is not None:
                 out_bytes = BOMS[bom_type] + out_bytes
             output.write_bytes(out_bytes)
+            if sys.platform != "win32":
+                try:
+                    import os
+
+                    os.chmod(output, 0o600)
+                except OSError:
+                    pass
 
     result = FilterResult(
         source_path=str(file_path),

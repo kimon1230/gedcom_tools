@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from gedcom_tools.commands.search.models import (
     MatchDetail,
@@ -13,36 +14,25 @@ from gedcom_tools.utils import normalize_compare
 
 _RELATIONSHIP_FIELDS = frozenset({"ancestor", "descendant"})
 
-_pattern_cache: dict[str, re.Pattern[str]] = {}
 
-
+@lru_cache(maxsize=256)
 def _wildcard_to_regex(pattern: str) -> re.Pattern[str]:
     """Translate wildcard pattern to anchored regex.
 
     Splits on * and ?, re.escape() each literal segment,
     rejoins with .* and . respectively. Anchored at both ends.
     """
-    key = f"wc:{pattern}"
-    cached = _pattern_cache.get(key)
-    if cached is not None:
-        return cached
     star_parts = pattern.split("*")
     escaped: list[str] = []
     for part in star_parts:
         q_parts = part.split("?")
         escaped.append(".".join(re.escape(seg) for seg in q_parts))
-    compiled = re.compile("^" + ".*".join(escaped) + "$", re.IGNORECASE)
-    _pattern_cache[key] = compiled
-    return compiled
+    return re.compile("^" + ".*".join(escaped) + "$", re.IGNORECASE)
 
 
+@lru_cache(maxsize=256)
 def _compile_regex(pattern: str) -> re.Pattern[str]:
-    cached = _pattern_cache.get(pattern)
-    if cached is not None:
-        return cached
-    compiled = re.compile(pattern, re.IGNORECASE)
-    _pattern_cache[pattern] = compiled
-    return compiled
+    return re.compile(pattern, re.IGNORECASE)
 
 
 def _get_match_type(term: SearchTerm, query: SearchQuery) -> str:

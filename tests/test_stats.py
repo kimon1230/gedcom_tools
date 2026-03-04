@@ -300,6 +300,9 @@ class TestResultOutput:
         assert data["records"]["individuals"] == 100
         assert data["records"]["families"] == 50
         assert data["timeline"]["earliest_year"]["year"] == 1800
+        assert data["timeline"]["earliest_year"]["xref"] == "@I1@"
+        assert "name" not in data["timeline"]["earliest_year"]
+        assert data["filename"] == "file.ged"
         assert data["tree_structure"]["generation_depth"] == 5
         assert data["demographics"]["gender"]["male"] == 55
         assert len(data["demographics"]["surnames"]) == 1

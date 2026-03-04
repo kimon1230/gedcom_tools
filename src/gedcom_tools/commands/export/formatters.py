@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gedcom_tools import __version__
@@ -69,8 +70,8 @@ def _redact_individual_csv(indi: ExportIndividual) -> list[str]:
         "",  # burial_place
         "",  # occupations
         str(indi.source_count),
-        indi.famc_xref,
-        ";".join(indi.fams_xrefs),
+        "",  # famc_xref — redacted
+        "",  # fams_xrefs — redacted
     ]
 
 
@@ -99,24 +100,30 @@ def _individual_csv_row(indi: ExportIndividual) -> list[str]:
 def _family_csv_row(
     fam: ExportFamily, living_xrefs: set[str] | None = None
 ) -> list[str]:
+    husband_xref = fam.husband_xref
     husband_name = fam.husband_name
+    wife_xref = fam.wife_xref
     wife_name = fam.wife_name
+    children_xrefs = list(fam.children_xrefs)
     if living_xrefs:
         if fam.husband_xref in living_xrefs:
+            husband_xref = ""
             husband_name = "Living"
         if fam.wife_xref in living_xrefs:
+            wife_xref = ""
             wife_name = "Living"
+        children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
     return [
         fam.xref,
-        fam.husband_xref,
+        husband_xref,
         husband_name,
-        fam.wife_xref,
+        wife_xref,
         wife_name,
         fam.marriage_date,
         str(fam.marriage_year) if fam.marriage_year is not None else "",
         fam.marriage_place,
         str(fam.child_count),
-        ";".join(fam.children_xrefs),
+        ";".join(children_xrefs),
     ]
 
 
@@ -139,7 +146,11 @@ def format_csv(
             indi.xref
             for indi in result.individuals
             if estimate_living(
-                indi.birth_year, indi.death_year, indi.burial_date, max_age=max_age
+                indi.birth_year,
+                indi.death_year,
+                indi.burial_date,
+                max_age=max_age,
+                living_marker=indi.living_marker,
             )
         }
 
@@ -178,8 +189,8 @@ def _individual_to_dict(
             "burial_place": "",
             "occupations": [],
             "source_count": indi.source_count,
-            "famc_xref": indi.famc_xref,
-            "fams_xrefs": list(indi.fams_xrefs),
+            "famc_xref": "",
+            "fams_xrefs": [],
             "alt_names": [],
             "notes": [],
         }
@@ -209,24 +220,30 @@ def _individual_to_dict(
 def _family_to_dict(
     fam: ExportFamily, living_xrefs: set[str] | None = None
 ) -> dict[str, Any]:
+    husband_xref = fam.husband_xref
     husband_name = fam.husband_name
+    wife_xref = fam.wife_xref
     wife_name = fam.wife_name
+    children_xrefs = list(fam.children_xrefs)
     if living_xrefs:
         if fam.husband_xref in living_xrefs:
+            husband_xref = ""
             husband_name = "Living"
         if fam.wife_xref in living_xrefs:
+            wife_xref = ""
             wife_name = "Living"
+        children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
     return {
         "xref": fam.xref,
-        "husband_xref": fam.husband_xref,
+        "husband_xref": husband_xref,
         "husband_name": husband_name,
-        "wife_xref": fam.wife_xref,
+        "wife_xref": wife_xref,
         "wife_name": wife_name,
         "marriage_date": fam.marriage_date,
         "marriage_year": fam.marriage_year,
         "marriage_place": fam.marriage_place,
         "child_count": fam.child_count,
-        "children_xrefs": list(fam.children_xrefs),
+        "children_xrefs": children_xrefs,
     }
 
 
@@ -241,13 +258,18 @@ def format_json(
             indi.xref
             for indi in result.individuals
             if estimate_living(
-                indi.birth_year, indi.death_year, indi.burial_date, max_age=max_age
+                indi.birth_year,
+                indi.death_year,
+                indi.burial_date,
+                max_age=max_age,
+                living_marker=indi.living_marker,
             )
         }
 
     data: dict[str, Any] = {
         "meta": {
             "file": result.file_path,
+            "filename": Path(result.file_path).name,
             "encoding": result.encoding,
             "gedcom_tools_version": __version__,
             "individual_count": result.individual_count,

@@ -215,6 +215,8 @@ Appends `(dry run — no file written)` to the output. No file is created.
 
 ## Safety
 
+- **File size limit** — input files larger than 500 MB are rejected with an
+  actionable error message showing the actual size and the limit.
 - **Output file required** — `-o` is mandatory. No stdout output for UTF-16
   targets (which are binary).
 - **Overwrite protection** — refuses to overwrite an existing file unless
@@ -222,6 +224,8 @@ Appends `(dry run — no file written)` to the output. No file is created.
 - **Same-file protection** — detects when input and output are the same file
   (including via symlinks and hardlinks) and refuses. In-place conversion is
   not supported.
+- **Output permissions** — output files are created with `0600` permissions
+  (owner read/write only) on Unix systems. Skipped on Windows.
 - **Dry run** — `--dry-run` previews the conversion without writing any file.
 
 ## Exit Codes

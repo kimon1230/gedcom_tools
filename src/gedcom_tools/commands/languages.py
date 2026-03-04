@@ -325,8 +325,11 @@ class LanguagesResult:
         if self.language_filter:
             return self._format_filter_json(show_text)
 
+        from pathlib import Path as _Path
+
         data: dict[str, Any] = {
             "file": self.file_path,
+            "filename": _Path(self.file_path).name,
             "mode": "aggregate",
             "encoding": None,
             "languages": [
@@ -398,8 +401,11 @@ class LanguagesResult:
                 obj["texts"] = self.event_texts.get(key, [])
             events.append(obj)
 
+        from pathlib import Path as _Path
+
         data: dict[str, Any] = {
             "file": self.file_path,
+            "filename": _Path(self.file_path).name,
             "mode": "filter",
             "encoding": None,
             "language": self.language_filter_name,

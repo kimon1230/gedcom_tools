@@ -4,7 +4,27 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.1.0]
+
+### Security
+- Living person estimation redesigned: custom GEDCOM tags (`_LVG`, `_LIVING`, `_LVNG`, `_CONF_FLAG` for living; `_NLIV` for not living) take priority over date-based inference; individuals with no dates and no custom tag are no longer conservatively marked as living
+- Cross-reference IDs cleared for redacted living individuals in export output (prevents correlation via family links)
+- `filename` / `filename_a` / `filename_b` fields added to JSON output in export, compare, and stats commands (basename only, safe for sharing)
+- Individual names removed from stats timeline JSON entries to prevent PII leakage
+- Output files from export, filter, and convert commands are created with `0600` permissions (owner-only) on Unix systems
+- Regex validation strengthened: pattern length limit (256 chars), nesting depth limit (3 levels), quantified inner group rejection, overlapping alternation rejection
+- Search pattern cache replaced with bounded `@lru_cache(maxsize=256)` to prevent unbounded memory growth
+- 500 MB file size limit for filter and convert commands to prevent unbounded memory allocation
+- Recursive source counting converted to iterative to prevent stack overflow on deeply nested records
+- Error messages sanitized to strip C0 control characters, ANSI escape sequences, and Unicode bidi overrides before printing to stderr
+- `ged4py` dependency pinned to compatible release (`~=0.4.4`) to prevent unexpected breaking changes
+
+## [1.0.1]
+
+### Fixed
+- Fix package name and repository URLs for PyPI publishing
+
+## [1.0.0]
 
 ### Added
 - `filter` command — transform GEDCOM files by stripping tags, removing records, or extracting subtrees centered on an individual
@@ -23,10 +43,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Line length warnings when transcoding causes lines to exceed the GEDCOM 255-byte limit
 - Same-file protection via `os.path.samefile()` (detects symlinks and hardlinks)
 - Overwrite protection (`--force` to override)
-
-## [1.0.0]
-
-### Added
 - `export` command — extract all individuals and families from a GEDCOM file into CSV or JSON format for spreadsheets, databases, and downstream tools
 - CSV export with 17 individual columns and 10 family columns, UTF-8 BOM for Excel file output
 - JSON export with `meta` section, `alt_names` objects, `notes` arrays, and `null` for missing years

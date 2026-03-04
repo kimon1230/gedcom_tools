@@ -32,7 +32,7 @@ class TestEstimateLiving:
         assert estimate_living(1980, None, "", current_year=2026) is True
 
     def test_no_birth_year_no_death(self) -> None:
-        # Unknown — not redacted
+        # Unknown birth, no dates at all → not living
         assert estimate_living(None, None, "", current_year=2026) is False
 
     def test_boundary_exactly_max_age(self) -> None:
@@ -48,6 +48,65 @@ class TestEstimateLiving:
         assert estimate_living(1940, None, "", max_age=80, current_year=2026) is False
         # Born 1950, max_age=80, current year 2026 → 76 years → within
         assert estimate_living(1950, None, "", max_age=80, current_year=2026) is True
+
+    def test_no_birth_with_old_birth_not_living(self) -> None:
+        # Born 200 years ago, no death → not living (exceeds max_age)
+        assert estimate_living(1826, None, "", current_year=2026) is False
+
+    def test_living_tag_lvg(self) -> None:
+        assert (
+            estimate_living(None, None, "", current_year=2026, living_marker="_LVG")
+            is True
+        )
+
+    def test_living_tag_living(self) -> None:
+        assert (
+            estimate_living(None, None, "", current_year=2026, living_marker="_LIVING")
+            is True
+        )
+
+    def test_living_tag_lvng(self) -> None:
+        assert (
+            estimate_living(None, None, "", current_year=2026, living_marker="_LVNG")
+            is True
+        )
+
+    def test_living_tag_conf_flag(self) -> None:
+        assert (
+            estimate_living(
+                None, None, "", current_year=2026, living_marker="_CONF_FLAG"
+            )
+            is True
+        )
+
+    def test_not_living_tag_nliv(self) -> None:
+        # _NLIV overrides even a recent birth year
+        assert (
+            estimate_living(2000, None, "", current_year=2026, living_marker="_NLIV")
+            is False
+        )
+
+    def test_living_tag_overrides_missing_dates(self) -> None:
+        # No dates, but tagged as living by software
+        assert (
+            estimate_living(None, None, "", current_year=2026, living_marker="_LVG")
+            is True
+        )
+
+    def test_nliv_overrides_living_indicators(self) -> None:
+        # _NLIV takes priority even with recent birth and no death
+        assert (
+            estimate_living(2000, None, "", current_year=2026, living_marker="_NLIV")
+            is False
+        )
+
+    def test_living_tag_overrides_death(self) -> None:
+        # Software says living, but has death year — living tag wins
+        # (trust the software's explicit marker)
+        assert (
+            estimate_living(1900, 1980, "", current_year=2026, living_marker="_LVG")
+            is True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +346,44 @@ class TestCollectorOccupationsAndNotes:
         assert len(ind.notes) == 2
         assert "First note text" in ind.notes
         assert "Second note" in ind.notes
+
+    def test_living_marker_lvg(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 _LVG Y\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.living_marker == "_LVG"
+
+    def test_living_marker_nliv(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 _NLIV Y\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.living_marker == "_NLIV"
+
+    def test_living_marker_rootsmagic(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 _LIVING Y\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.living_marker == "_LIVING"
+
+    def test_no_living_marker(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME A /B/\n")
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.living_marker == ""
+
+    def test_nliv_takes_priority_over_living_tag(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 _NLIV Y\n1 _LVG Y\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        # _NLIV appears first, so it wins
+        assert ind.living_marker == "_NLIV"
 
     def test_source_count(self, tmp_path: Path) -> None:
         ged = _write_ged(

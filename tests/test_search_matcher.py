@@ -909,3 +909,30 @@ class TestMetaphoneMatch:
         q = _query([_term(field="surname", operator="~", value="Catherine")])
         result = match_individual(ind, q)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Cache bounded by lru_cache
+# ---------------------------------------------------------------------------
+
+
+class TestCacheBounds:
+    def test_regex_cache_bounded(self) -> None:
+        from gedcom_tools.commands.search.matcher import _compile_regex
+
+        _compile_regex.cache_clear()
+        for i in range(300):
+            _compile_regex(f"pattern_{i}")
+        info = _compile_regex.cache_info()
+        assert info.maxsize == 256
+        assert info.currsize == 256
+
+    def test_wildcard_cache_bounded(self) -> None:
+        from gedcom_tools.commands.search.matcher import _wildcard_to_regex
+
+        _wildcard_to_regex.cache_clear()
+        for i in range(300):
+            _wildcard_to_regex(f"pat*{i}")
+        info = _wildcard_to_regex.cache_info()
+        assert info.maxsize == 256
+        assert info.currsize == 256

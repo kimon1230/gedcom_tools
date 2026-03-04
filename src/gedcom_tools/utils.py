@@ -84,10 +84,31 @@ def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None)
     raise ValueError(msg)
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_C0_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+_BIDI_CHARS = frozenset(
+    "\u200e\u200f\u061c"
+    "\u202a\u202b\u202c\u202d\u202e"
+    "\u2066\u2067\u2068\u2069"
+    "\u2028\u2029"
+)
+
+
+def sanitize_error(msg: str) -> str:
+    """Strip control characters, ANSI escapes, and bidi overrides from error text."""
+    result = _ANSI_ESCAPE_RE.sub("", msg)
+    result = _C0_CONTROL_RE.sub("", result)
+    return "".join(c for c in result if c not in _BIDI_CHARS)
+
+
 def check_output_safety(
     input_path: Path, output_path: Path, *, force: bool, dry_run: bool
 ) -> str | None:
-    """Return error message if output path is unsafe, or None if OK."""
+    """Return error message if output path is unsafe, or None if OK.
+
+    Note: TOCTOU race between this check and the caller's write.
+    Acceptable for a local CLI tool — not practically exploitable.
+    """
     parent = output_path.parent
     if not parent.exists():
         return f"Error: Directory {parent} does not exist"
@@ -232,21 +253,21 @@ def validate_input_file(file_path: Path) -> int | None:
     return None
 
 
-def count_sources_recursive(record: Record, _visited: set[int] | None = None) -> int:
-    # visited-set guards against circular refs in malformed GEDCOM
-    if _visited is None:
-        _visited = set()
-
-    record_id = id(record)
-    if record_id in _visited:
-        return 0
-    _visited.add(record_id)
-
+def count_sources_recursive(record: Record) -> int:
+    """Count SOUR sub-records iteratively to avoid stack overflow."""
+    visited: set[int] = set()
     count = 0
-    for sub in record.sub_records:
-        if sub.tag == "SOUR":
-            count += 1
-        count += count_sources_recursive(sub, _visited)
+    stack = [record]
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+        for sub in current.sub_records:
+            if sub.tag == "SOUR":
+                count += 1
+            stack.append(sub)
     return count
 
 

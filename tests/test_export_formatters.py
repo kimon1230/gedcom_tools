@@ -30,6 +30,7 @@ def _indi(
     source_count: int = 3,
     famc_xref: str = "@F5@",
     fams_xrefs: list[str] | None = None,
+    living_marker: str = "",
     alt_names: list[tuple[str, str]] | None = None,
     notes: list[str] | None = None,
 ) -> ExportIndividual:
@@ -51,6 +52,7 @@ def _indi(
         source_count=source_count,
         famc_xref=famc_xref,
         fams_xrefs=fams_xrefs if fams_xrefs is not None else ["@F1@", "@F7@"],
+        living_marker=living_marker,
         alt_names=alt_names or [],
         notes=notes or [],
     )
@@ -269,6 +271,7 @@ class TestJsonFormat:
         data = json.loads(out)
         meta = data["meta"]
         assert meta["file"] == "tree.ged"
+        assert meta["filename"] == "tree.ged"
         assert meta["encoding"] == "UTF-8"
         assert meta["individual_count"] == 1
         assert meta["family_count"] == 1
@@ -276,6 +279,14 @@ class TestJsonFormat:
         from gedcom_tools import __version__
 
         assert meta["gedcom_tools_version"] == __version__
+
+    def test_meta_filename_is_basename(self) -> None:
+        result = _result()
+        result.file_path = "/some/deep/path/family.ged"
+        out = format_json(result)
+        data = json.loads(out)
+        assert data["meta"]["filename"] == "family.ged"
+        assert data["meta"]["file"] == "/some/deep/path/family.ged"
 
     def test_individual_all_fields(self) -> None:
         indi = _indi(
@@ -384,3 +395,162 @@ class TestJsonFormat:
         assert fam["marriage_year"] == 1875
         assert fam["child_count"] == 2
         assert fam["children_xrefs"] == ["@I3@", "@I4@"]
+
+
+# ---------------------------------------------------------------------------
+# Xref redaction — CSV
+# ---------------------------------------------------------------------------
+
+
+class TestCsvXrefRedaction:
+    def test_redacted_csv_clears_family_xrefs(self) -> None:
+        living = _indi(
+            xref="@I9@",
+            birth_year=2000,
+            death_year=None,
+            death_date="",
+            burial_date="",
+            famc_xref="@F5@",
+            fams_xrefs=["@F1@", "@F7@"],
+        )
+        out = format_csv(
+            _result(individuals=[living]),
+            include_bom=False,
+            redact_living=True,
+        )
+        reader = csv.reader(io.StringIO(out))
+        rows = list(reader)
+        row = rows[1]
+        assert row[15] == ""  # famc_xref cleared
+        assert row[16] == ""  # fams_xrefs cleared
+
+    def test_family_csv_redacts_living_spouse_xrefs(self) -> None:
+        living = _indi(
+            xref="@I1@",
+            birth_year=2000,
+            death_year=None,
+            death_date="",
+            burial_date="",
+        )
+        fam = _fam(
+            husband_xref="@I1@",
+            wife_xref="@I2@",
+            children_xrefs=["@I1@", "@I3@"],
+        )
+        out = format_csv(
+            _result(individuals=[living], families=[fam]),
+            table="families",
+            include_bom=False,
+            redact_living=True,
+        )
+        reader = csv.reader(io.StringIO(out))
+        rows = list(reader)
+        row = rows[1]
+        assert row[1] == ""  # husband_xref cleared (living)
+        assert row[3] == "@I2@"  # wife_xref kept (not living)
+        xrefs = row[9].split(";")
+        assert xrefs[0] == ""  # child @I1@ cleared
+        assert xrefs[1] == "@I3@"  # child @I3@ kept
+
+
+# ---------------------------------------------------------------------------
+# Xref redaction — JSON
+# ---------------------------------------------------------------------------
+
+
+class TestJsonXrefRedaction:
+    def test_redacted_json_clears_family_xrefs(self) -> None:
+        living = _indi(
+            xref="@I9@",
+            birth_year=2000,
+            death_year=None,
+            death_date="",
+            burial_date="",
+            famc_xref="@F5@",
+            fams_xrefs=["@F1@"],
+        )
+        out = format_json(
+            _result(individuals=[living]),
+            redact_living=True,
+        )
+        data = json.loads(out)
+        ind = data["individuals"][0]
+        assert ind["famc_xref"] == ""
+        assert ind["fams_xrefs"] == []
+
+    def test_family_json_redacts_living_xrefs(self) -> None:
+        living = _indi(
+            xref="@I1@",
+            birth_year=2000,
+            death_year=None,
+            death_date="",
+            burial_date="",
+        )
+        fam = _fam(
+            husband_xref="@I1@",
+            wife_xref="@I2@",
+            children_xrefs=["@I1@", "@I3@"],
+        )
+        out = format_json(
+            _result(individuals=[living], families=[fam]),
+            redact_living=True,
+        )
+        data = json.loads(out)
+        fam_data = data["families"][0]
+        assert fam_data["husband_xref"] == ""
+        assert fam_data["husband_name"] == "Living"
+        assert fam_data["wife_xref"] == "@I2@"
+        assert fam_data["children_xrefs"] == ["", "@I3@"]
+
+    def test_no_dates_not_redacted(self) -> None:
+        """Individual with no dates at all is not redacted (not inferred as living)."""
+        unknown = _indi(
+            xref="@I5@",
+            birth_year=None,
+            death_year=None,
+            death_date="",
+            burial_date="",
+        )
+        out = format_json(
+            _result(individuals=[unknown]),
+            redact_living=True,
+        )
+        data = json.loads(out)
+        ind = data["individuals"][0]
+        assert ind["given_name"] == "John"  # not redacted
+
+    def test_living_tag_causes_redaction(self) -> None:
+        """Individual with _LVG tag is redacted regardless of dates."""
+        tagged = _indi(
+            xref="@I6@",
+            birth_year=None,
+            death_year=None,
+            death_date="",
+            burial_date="",
+            living_marker="_LVG",
+        )
+        out = format_json(
+            _result(individuals=[tagged]),
+            redact_living=True,
+        )
+        data = json.loads(out)
+        ind = data["individuals"][0]
+        assert ind["given_name"] == "Living"
+
+    def test_nliv_tag_prevents_redaction(self) -> None:
+        """Individual with _NLIV tag is not redacted even with recent birth."""
+        tagged = _indi(
+            xref="@I7@",
+            birth_year=2000,
+            death_year=None,
+            death_date="",
+            burial_date="",
+            living_marker="_NLIV",
+        )
+        out = format_json(
+            _result(individuals=[tagged]),
+            redact_living=True,
+        )
+        data = json.loads(out)
+        ind = data["individuals"][0]
+        assert ind["given_name"] == "John"  # not redacted

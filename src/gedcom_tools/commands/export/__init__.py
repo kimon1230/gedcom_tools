@@ -135,6 +135,13 @@ def run(args: Namespace) -> int:
 
         if output_path:
             output_path.write_text(output, encoding="utf-8")
+            if sys.platform != "win32":
+                try:
+                    import os
+
+                    os.chmod(output_path, 0o600)
+                except OSError:
+                    pass
             if not quiet:
                 print(f"Exported to {output_path}", file=sys.stderr)
         else:
