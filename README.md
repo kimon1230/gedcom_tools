@@ -6,6 +6,9 @@ CLI utility for GEDCOM file validation, analysis, and search.
 
 ```bash
 pip install kimon-gedcom-tools
+
+# With optional GraphViz chart generation (pedigree, relationship, hourglass, bowtie)
+pip install kimon-gedcom-tools[graph]
 ```
 
 Or for development:

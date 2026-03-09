@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.1]
+
+### Added
+- Optional `graph` extras group for GraphViz chart generation via `kimon-gedgraph` (`pip install kimon-gedcom-tools[graph]`)
+
 ## [1.1.0]
 
 ### Security
