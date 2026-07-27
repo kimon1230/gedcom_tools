@@ -121,7 +121,9 @@ def _harden_streams() -> None:
     ):
         # Only touch the real interpreter streams. pytest's CaptureIO is a
         # TextIOWrapper subclass and would otherwise be mutated session-wide.
-        if stream is None or stream is not original:
+        if stream is not original:
+            continue
+        if stream is None:
             continue
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
