@@ -13,7 +13,8 @@ dependencies = [
     "ged4py>=0.5.2,<0.6",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
-    "DoubleMetaphone>=1.1",
+    # 1.1 has no wheels and its Cython source fails to build on 3.13.
+    "DoubleMetaphone>=1.2",
 ]
 
 [project.optional-dependencies]
