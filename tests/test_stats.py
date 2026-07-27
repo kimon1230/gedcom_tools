@@ -507,7 +507,8 @@ class TestCollectorBasic:
 
     def test_depth_single_person(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "single.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -517,7 +518,9 @@ class TestCollectorBasic:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -525,7 +528,8 @@ class TestCollectorBasic:
 
     def test_depth_parent_child(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "parent_child.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -543,7 +547,9 @@ class TestCollectorBasic:
 1 HUSB @I1@
 1 CHIL @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -551,7 +557,8 @@ class TestCollectorBasic:
 
     def test_depth_three_generations(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "three_gen.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -577,7 +584,9 @@ class TestCollectorBasic:
 1 HUSB @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -588,14 +597,17 @@ class TestEdgeCases:
 
     def test_empty_file(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "empty.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
 2 VERS 5.5.1
 1 CHAR UTF-8
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -605,7 +617,8 @@ class TestEdgeCases:
 
     def test_no_dates(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_dates.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -615,7 +628,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -626,7 +641,8 @@ class TestEdgeCases:
 
     def test_no_surnames(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_surname.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -636,7 +652,9 @@ class TestEdgeCases:
 1 NAME John
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -644,7 +662,8 @@ class TestEdgeCases:
 
     def test_isolated_detection(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "orphan.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -654,7 +673,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -663,7 +684,8 @@ class TestEdgeCases:
 
     def test_estimated_living(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "living.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -680,7 +702,9 @@ class TestEdgeCases:
 1 BIRT
 2 DATE 1800
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -689,7 +713,8 @@ class TestEdgeCases:
 
     def test_baptism_fallback(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "baptism.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -701,7 +726,9 @@ class TestEdgeCases:
 1 CHR
 2 DATE 1850
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -710,7 +737,8 @@ class TestEdgeCases:
 
     def test_burial_fallback(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "burial.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -722,7 +750,9 @@ class TestEdgeCases:
 1 BURI
 2 DATE 1900
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -731,7 +761,8 @@ class TestEdgeCases:
 
     def test_note_and_media_detection(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "notes_media.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -744,7 +775,9 @@ class TestEdgeCases:
 1 OBJE
 2 FILE photo.jpg
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -755,7 +788,8 @@ class TestEdgeCases:
 
     def test_multiple_families_spouse(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "multi_spouse.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -781,7 +815,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 WIFE @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -793,7 +829,8 @@ class TestEdgeCases:
 
     def test_family_parent_name_extraction(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "parent_names.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -818,7 +855,9 @@ class TestEdgeCases:
 1 WIFE @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -845,7 +884,8 @@ class TestEdgeCases:
 
     def test_century_calculation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "centuries.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -864,7 +904,9 @@ class TestEdgeCases:
 1 BIRT
 2 DATE 1950
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -874,7 +916,8 @@ class TestEdgeCases:
 
     def test_name_from_tuple_no_surname(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "tuple_name.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -884,7 +927,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -897,7 +942,8 @@ class TestEdgeCases:
     def test_ancestry_cycle_detection(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "cycle.ged"
         # Create a cycle: I1 -> F1 -> I2 (parent) -> F2 -> I1 (parent)
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -918,7 +964,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 CHIL @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -927,7 +975,8 @@ class TestEdgeCases:
 
     def test_invalid_family_reference(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "invalid_fam.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -937,7 +986,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 FAMC @F999@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -946,7 +997,8 @@ class TestEdgeCases:
 
     def test_family_with_no_parents(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_parents.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -958,7 +1010,9 @@ class TestEdgeCases:
 0 @F1@ FAM
 1 CHIL @I1@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -969,7 +1023,8 @@ class TestEdgeCases:
 
     def test_format_text_completeness_section_full(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "complete.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -998,7 +1053,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1013,7 +1070,8 @@ class TestEdgeCases:
 
     def test_format_text_with_surnames_and_lineages(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "surnames.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1028,7 +1086,9 @@ class TestEdgeCases:
 2 SURN Doe
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1040,7 +1100,8 @@ class TestEdgeCases:
 
     def test_empty_family_no_children(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "empty_family.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1056,7 +1117,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1064,7 +1127,8 @@ class TestEdgeCases:
 
     def test_implausible_ages_filtered(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "implausible.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1086,7 +1150,9 @@ class TestEdgeCases:
 1 MARR
 2 DATE 1855
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1105,7 +1171,8 @@ class TestEdgeCases:
 
     def test_marriage_without_spouse_birth(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_birth.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1123,7 +1190,9 @@ class TestEdgeCases:
 1 MARR
 2 DATE 1875
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1133,7 +1202,8 @@ class TestEdgeCases:
 
     def test_individual_without_xref_skipped(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_xref.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1143,7 +1213,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1151,7 +1223,8 @@ class TestEdgeCases:
 
     def test_source_depth_no_sources(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_sources.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1161,7 +1234,9 @@ class TestEdgeCases:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1171,7 +1246,8 @@ class TestEdgeCases:
 
     def test_marriage_by_century(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_century.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1195,7 +1271,9 @@ class TestEdgeCases:
 1 MARR
 2 DATE 1 JAN 1875
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1205,7 +1283,8 @@ class TestEdgeCases:
 
     def test_multiple_marriages_uses_first(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "multiple_marriages.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1241,7 +1320,9 @@ class TestEdgeCases:
 1 MARR
 2 DATE 1 JAN 1890
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1251,7 +1332,8 @@ class TestEdgeCases:
 
     def test_age_at_first_child_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "child_age_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1280,7 +1362,9 @@ class TestEdgeCases:
 1 WIFE @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1324,7 +1408,7 @@ class TestEdgeCases:
             lines.append(f"1 CHIL @I{i}@")
         lines.append("0 TRLR")
 
-        gedcom.write_text("\n".join(lines))
+        gedcom.write_text("\n".join(lines), encoding="utf-8")
 
         result = _collect(gedcom)
 
@@ -1337,7 +1421,7 @@ class TestEdgeCases:
         from gedcom_tools.commands.stats import run
 
         bad_file = tmp_path / "bad.ged"
-        bad_file.write_text("not a valid gedcom file at all")
+        bad_file.write_text("not a valid gedcom file at all", encoding="utf-8")
 
         args = Namespace(
             file=bad_file,
@@ -1356,7 +1440,8 @@ class TestEdgeCases:
 
     def test_name_suffix_handling(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "suffix.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1366,7 +1451,9 @@ class TestEdgeCases:
 1 NAME John /Doe/ Jr.
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1374,7 +1461,8 @@ class TestEdgeCases:
 
     def test_depth_limit_locations(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "locations.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1387,7 +1475,9 @@ class TestEdgeCases:
 2 DATE 1850
 2 PLAC Boston, Massachusetts, USA
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1396,7 +1486,8 @@ class TestEdgeCases:
 
     def test_xref_extraction_various_formats(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "xref_formats.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1414,7 +1505,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1423,7 +1516,8 @@ class TestEdgeCases:
 
     def test_families_but_no_individuals(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "fam_only.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1433,7 +1527,9 @@ class TestEdgeCases:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1444,7 +1540,8 @@ class TestEdgeCases:
 
     def test_individuals_but_no_families(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "indi_only.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1457,7 +1554,9 @@ class TestEdgeCases:
 1 NAME Bob /Smith/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1470,7 +1569,8 @@ class TestEdgeCases:
 
     def test_individual_with_no_name(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_name.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1481,7 +1581,9 @@ class TestEdgeCases:
 1 BIRT
 2 DATE 1850
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1622,7 +1724,8 @@ class TestGivenNameFrequency:
 
     def test_given_name_extraction_from_name_tuple(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "given_names.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1635,7 +1738,9 @@ class TestGivenNameFrequency:
 1 NAME Mary Elizabeth /Smith/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1646,7 +1751,8 @@ class TestGivenNameFrequency:
 
     def test_given_name_from_givn_subrecord(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "givn_subrecord.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1657,7 +1763,9 @@ class TestGivenNameFrequency:
 2 GIVN William
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1666,7 +1774,8 @@ class TestGivenNameFrequency:
 
     def test_given_name_frequency_counts(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "given_freq.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1691,7 +1800,9 @@ class TestGivenNameFrequency:
 1 NAME Mary /Jones/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1705,7 +1816,8 @@ class TestGivenNameFrequency:
 
     def test_given_names_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "given_output.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1718,7 +1830,9 @@ class TestGivenNameFrequency:
 1 NAME Mary /Smith/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1731,7 +1845,8 @@ class TestGivenNameFrequency:
 
     def test_given_names_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "given_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1744,7 +1859,9 @@ class TestGivenNameFrequency:
 1 NAME Mary /Smith/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -1759,7 +1876,8 @@ class TestLifespanStats:
 
     def test_lifespan_calculation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1780,7 +1898,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1990
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1792,7 +1912,8 @@ class TestLifespanStats:
 
     def test_lifespan_filters_invalid(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_filter.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1820,7 +1941,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1940
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1832,7 +1955,8 @@ class TestLifespanStats:
 
     def test_lifespan_no_data(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_none.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1844,7 +1968,9 @@ class TestLifespanStats:
 1 BIRT
 2 DATE 1900
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1852,7 +1978,8 @@ class TestLifespanStats:
 
     def test_lifespan_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1866,7 +1993,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1975
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1878,7 +2007,8 @@ class TestLifespanStats:
 
     def test_lifespan_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1892,7 +2022,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1975
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -1904,7 +2036,8 @@ class TestLifespanStats:
 
     def test_lifespan_by_century(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_century.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1925,7 +2058,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1 JAN 2020
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1937,7 +2072,8 @@ class TestLifespanStats:
 
     def test_lifespan_trends_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "lifespan_trends_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1951,7 +2087,9 @@ class TestLifespanStats:
 1 DEAT
 2 DATE 1920
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -1967,7 +2105,8 @@ class TestMarriageStats:
 
     def test_marriage_year_extraction(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_year.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -1987,7 +2126,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1950
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -1998,7 +2139,8 @@ class TestMarriageStats:
 
     def test_marriage_without_date(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_no_date.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2016,7 +2158,9 @@ class TestMarriageStats:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2027,7 +2171,8 @@ class TestMarriageStats:
 
     def test_average_children_per_family(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "avg_children.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2068,7 +2213,9 @@ class TestMarriageStats:
 1 WIFE @I7@
 1 CHIL @I8@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2079,7 +2226,8 @@ class TestMarriageStats:
 
     def test_marriage_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2101,7 +2249,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1950
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2114,7 +2264,8 @@ class TestMarriageStats:
 
     def test_marriage_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2132,7 +2283,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1950
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -2143,7 +2296,8 @@ class TestMarriageStats:
 
     def test_age_at_first_marriage(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "marriage_age.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2167,7 +2321,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1 JAN 1875
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2179,7 +2335,8 @@ class TestMarriageStats:
 
     def test_age_at_first_child(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "child_age.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2208,7 +2365,9 @@ class TestMarriageStats:
 1 WIFE @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2220,7 +2379,8 @@ class TestMarriageStats:
 
     def test_spousal_age_gap(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "age_gap.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2240,7 +2400,9 @@ class TestMarriageStats:
 1 HUSB @I1@
 1 WIFE @I2@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2250,7 +2412,8 @@ class TestMarriageStats:
 
     def test_life_events_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "life_events_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2274,7 +2437,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1 JAN 1875
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2289,7 +2454,8 @@ class TestMarriageStats:
 
     def test_life_events_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "life_events_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2313,7 +2479,9 @@ class TestMarriageStats:
 1 MARR
 2 DATE 1 JAN 1875
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -2328,7 +2496,8 @@ class TestSourceCoverage:
 
     def test_direct_source_citation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "direct_source.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2341,7 +2510,9 @@ class TestSourceCoverage:
 0 @S1@ SOUR
 1 TITL A Source
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2351,7 +2522,8 @@ class TestSourceCoverage:
 
     def test_event_source_citation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "event_source.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2366,7 +2538,9 @@ class TestSourceCoverage:
 0 @S1@ SOUR
 1 TITL Birth Certificate
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2376,7 +2550,8 @@ class TestSourceCoverage:
 
     def test_no_source_citation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_source.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2386,7 +2561,9 @@ class TestSourceCoverage:
 1 NAME John /Doe/
 1 SEX M
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2397,7 +2574,8 @@ class TestSourceCoverage:
 
     def test_source_coverage_mixed(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "mixed_source.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2422,7 +2600,9 @@ class TestSourceCoverage:
 0 @S1@ SOUR
 1 TITL A Source
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2433,7 +2613,8 @@ class TestSourceCoverage:
 
     def test_source_coverage_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "source_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2446,7 +2627,9 @@ class TestSourceCoverage:
 0 @S1@ SOUR
 1 TITL A Source
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2456,7 +2639,8 @@ class TestSourceCoverage:
 
     def test_source_coverage_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "source_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2469,7 +2653,9 @@ class TestSourceCoverage:
 0 @S1@ SOUR
 1 TITL A Source
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -2575,7 +2761,8 @@ class TestFamilySize:
 
     def test_family_size_distribution(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "family_size.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2603,7 +2790,9 @@ class TestFamilySize:
 1 CHIL @I4@
 1 CHIL @I5@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2615,7 +2804,8 @@ class TestFamilySize:
 
     def test_family_size_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "family_size_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2635,7 +2825,9 @@ class TestFamilySize:
 1 WIFE @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2649,7 +2841,8 @@ class TestFamilySize:
 
     def test_family_size_in_json_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "family_size_json.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2669,7 +2862,9 @@ class TestFamilySize:
 1 WIFE @I2@
 1 CHIL @I3@
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         data = json.loads(result.format_json())
@@ -2683,7 +2878,8 @@ class TestBirthPatterns:
 
     def test_birth_month_distribution(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "birth_month.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2705,7 +2901,9 @@ class TestBirthPatterns:
 1 BIRT
 2 DATE 5 OCT 1860
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2715,7 +2913,8 @@ class TestBirthPatterns:
 
     def test_birth_patterns_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "birth_patterns_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2727,7 +2926,9 @@ class TestBirthPatterns:
 1 BIRT
 2 DATE 15 JAN 1850
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2741,7 +2942,8 @@ class TestBirthPatterns:
 
     def test_birth_patterns_no_month_data(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_birth_month.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2753,7 +2955,9 @@ class TestBirthPatterns:
 1 BIRT
 2 DATE 1850
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2764,7 +2968,8 @@ class TestBirthPatterns:
 
     def test_date_precision_calculation(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "date_precision.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2789,7 +2994,9 @@ class TestBirthPatterns:
 1 NAME No /Date/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2802,7 +3009,8 @@ class TestBirthPatterns:
 
     def test_occupation_coverage(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "occupation.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2816,7 +3024,9 @@ class TestBirthPatterns:
 1 NAME Jane /Smith/
 1 SEX F
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2827,7 +3037,8 @@ class TestBirthPatterns:
 
     def test_source_depth(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "source_depth.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2849,7 +3060,9 @@ class TestBirthPatterns:
 0 @S2@ SOUR
 1 TITL Source 2
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
 
@@ -2861,7 +3074,8 @@ class TestBirthPatterns:
 
     def test_research_quality_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "research_quality_text.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2877,7 +3091,9 @@ class TestBirthPatterns:
 0 @S1@ SOUR
 1 TITL A Source
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)
@@ -2889,7 +3105,8 @@ class TestBirthPatterns:
 
     def test_research_quality_approximate_breakdown(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "approx_breakdown.ged"
-        gedcom.write_text("""\
+        gedcom.write_text(
+            """\
 0 HEAD
 1 SOUR Test
 1 GEDC
@@ -2906,7 +3123,9 @@ class TestBirthPatterns:
 1 BIRT
 2 DATE ABT 1855
 0 TRLR
-""")
+""",
+            encoding="utf-8",
+        )
 
         result = _collect(gedcom)
         colors = Colors(None, force_disable=True)

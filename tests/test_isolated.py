@@ -18,7 +18,8 @@ def _write_gedcom(tmp_path: Path, name: str, body: str) -> Path:
     """Write a minimal GEDCOM file and return its path."""
     f = tmp_path / name
     f.write_text(
-        f"0 HEAD\n1 SOUR Test\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n{body}0 TRLR\n"
+        f"0 HEAD\n1 SOUR Test\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n{body}0 TRLR\n",
+        encoding="utf-8",
     )
     return f
 
@@ -488,7 +489,7 @@ class TestIsolatedCLI:
 
     def test_permission_denied(self, tmp_path: Path) -> None:
         f = tmp_path / "noperm.ged"
-        f.write_text("0 HEAD\n0 TRLR\n")
+        f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
         f.chmod(0o000)
         result = main(["isolated", str(f)])
         f.chmod(0o644)  # restore for cleanup

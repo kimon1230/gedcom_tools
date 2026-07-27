@@ -105,7 +105,8 @@ def test_quiet_mode_errors_only(tmp_path, capsys):
         "0 @I1@ INDI\n"
         "1 NAME Test /Person/\n"
         "1 FAMC @F99@\n"
-        "0 TRLR\n"
+        "0 TRLR\n",
+        encoding="utf-8",
     )
 
     result = main(["-q", "validate", "--full", str(ged)])
@@ -130,7 +131,7 @@ def test_exception_handling(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(validate, "run", _raise_error)
 
     gedcom_file = tmp_path / "test.ged"
-    gedcom_file.write_text("0 HEAD\n0 TRLR\n")
+    gedcom_file.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
     result = main(["validate", str(gedcom_file)])
     assert result != EXIT_SUCCESS
@@ -143,7 +144,7 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
     monkeypatch.setattr(validate, "run", _raise_error)
 
     f = tmp_path / "test.ged"
-    f.write_text("0 HEAD\n0 TRLR\n")
+    f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="boom"):
         main(["--verbose", "validate", str(f)])

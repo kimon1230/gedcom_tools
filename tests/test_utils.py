@@ -18,7 +18,7 @@ from gedcom_tools.utils import (
 class TestDetectEncoding:
     def test_utf8_no_bom(self, tmp_path: Path) -> None:
         ged = tmp_path / "test.ged"
-        ged.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n")
+        ged.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "UTF-8"
         assert info.has_bom is False
@@ -34,7 +34,7 @@ class TestDetectEncoding:
 
     def test_no_char_header(self, tmp_path: Path) -> None:
         ged = tmp_path / "test.ged"
-        ged.write_text("0 HEAD\n0 TRLR\n")
+        ged.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "UTF-8"
         assert info.has_bom is False
@@ -50,7 +50,7 @@ class TestDetectEncoding:
 
     def test_declared_charset_used_when_no_bom(self, tmp_path: Path) -> None:
         ged = tmp_path / "test.ged"
-        ged.write_text("0 HEAD\n1 CHAR ASCII\n0 TRLR\n")
+        ged.write_text("0 HEAD\n1 CHAR ASCII\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "ASCII"
         assert info.has_bom is False
@@ -58,13 +58,13 @@ class TestDetectEncoding:
 
     def test_declared_charset_uppercased(self, tmp_path: Path) -> None:
         ged = tmp_path / "test.ged"
-        ged.write_text("0 HEAD\n1 CHAR utf-8\n0 TRLR\n")
+        ged.write_text("0 HEAD\n1 CHAR utf-8\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "UTF-8"
 
     def test_ansel_charset_detected(self, tmp_path: Path) -> None:
         ged = tmp_path / "test.ged"
-        ged.write_text("0 HEAD\n1 CHAR ANSEL\n0 TRLR\n")
+        ged.write_text("0 HEAD\n1 CHAR ANSEL\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "ANSEL"
         assert info.declared_charset == "ANSEL"
@@ -111,7 +111,7 @@ class TestExtractXref:
 class TestValidateInputFile:
     def test_valid_file(self, tmp_path: Path) -> None:
         f = tmp_path / "test.ged"
-        f.write_text("content")
+        f.write_text("content", encoding="utf-8")
         assert validate_input_file(f) is None
 
     def test_nonexistent_file(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -130,7 +130,7 @@ class TestValidateInputFile:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         f = tmp_path / "noperm.ged"
-        f.write_text("content")
+        f.write_text("content", encoding="utf-8")
         f.chmod(0o000)
         try:
             result = validate_input_file(f)
@@ -258,13 +258,13 @@ class TestCheckOutputSafety:
 
     def test_safe_path_returns_none(self, tmp_path: Path) -> None:
         inp = tmp_path / "input.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         out = tmp_path / "output.ged"
         assert self._check(inp, out) is None
 
     def test_nonexistent_parent_dir(self, tmp_path: Path) -> None:
         inp = tmp_path / "input.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         out = tmp_path / "nosuchdir" / "output.ged"
         result = self._check(inp, out)
         assert result is not None
@@ -272,14 +272,14 @@ class TestCheckOutputSafety:
 
     def test_same_file_blocked(self, tmp_path: Path) -> None:
         inp = tmp_path / "file.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         result = self._check(inp, inp)
         assert result is not None
         assert "resolves to the input" in result
 
     def test_same_file_via_symlink(self, tmp_path: Path) -> None:
         inp = tmp_path / "file.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         link = tmp_path / "link.ged"
         link.symlink_to(inp)
         result = self._check(inp, link)
@@ -288,30 +288,30 @@ class TestCheckOutputSafety:
 
     def test_existing_output_without_force(self, tmp_path: Path) -> None:
         inp = tmp_path / "input.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         out = tmp_path / "output.ged"
-        out.write_text("existing")
+        out.write_text("existing", encoding="utf-8")
         result = self._check(inp, out)
         assert result is not None
         assert "already exists" in result
 
     def test_existing_output_with_force(self, tmp_path: Path) -> None:
         inp = tmp_path / "input.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         out = tmp_path / "output.ged"
-        out.write_text("existing")
+        out.write_text("existing", encoding="utf-8")
         assert self._check(inp, out, force=True) is None
 
     def test_dry_run_skips_overwrite_check(self, tmp_path: Path) -> None:
         inp = tmp_path / "input.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         out = tmp_path / "output.ged"
-        out.write_text("existing")
+        out.write_text("existing", encoding="utf-8")
         assert self._check(inp, out, dry_run=True) is None
 
     def test_same_file_still_blocked_during_dry_run(self, tmp_path: Path) -> None:
         inp = tmp_path / "file.ged"
-        inp.write_text("data")
+        inp.write_text("data", encoding="utf-8")
         result = self._check(inp, inp, dry_run=True)
         assert result is not None
         assert "resolves to the input" in result

@@ -83,7 +83,8 @@ def _ged(tmp_path: Path, name: str, body: str) -> Path:
     """Write a minimal GEDCOM file and return its path."""
     path = tmp_path / name
     path.write_text(
-        "0 HEAD\n" "1 GEDC\n" "2 VERS 5.5.1\n" "1 CHAR UTF-8\n" f"{body}" "0 TRLR\n"
+        "0 HEAD\n" "1 GEDC\n" "2 VERS 5.5.1\n" "1 CHAR UTF-8\n" f"{body}" "0 TRLR\n",
+        encoding="utf-8",
     )
     return path
 
@@ -1061,7 +1062,7 @@ class TestLanguagesCLI:
         from gedcom_tools.commands.languages import run
 
         f = tmp_path / "bad.ged"
-        f.write_text("not a valid gedcom file\n")
+        f.write_text("not a valid gedcom file\n", encoding="utf-8")
         args = Namespace(
             file=f,
             format="text",

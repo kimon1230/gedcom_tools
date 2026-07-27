@@ -13,7 +13,7 @@ SCHEMA_PATH = Path(__file__).parent.parent / "docs" / "stats-schema.json"
 
 @pytest.fixture
 def schema() -> dict:
-    with open(SCHEMA_PATH) as f:
+    with open(SCHEMA_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -39,7 +39,8 @@ class TestSchemaCompliance:
     ) -> None:
         ged = tmp_path / "empty.ged"
         ged.write_text(
-            "0 HEAD\n" "1 GEDC\n" "2 VERS 5.5.1\n" "1 CHAR UTF-8\n" "0 TRLR\n"
+            "0 HEAD\n" "1 GEDC\n" "2 VERS 5.5.1\n" "1 CHAR UTF-8\n" "0 TRLR\n",
+            encoding="utf-8",
         )
         collector = StatsCollector(
             file_path=ged, quiet=True, verbose=False, no_color=True
@@ -96,7 +97,8 @@ class TestSchemaCompliance:
             "1 CHIL @I3@\n"
             "1 MARR\n"
             "2 DATE 5 JUN 1875\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         collector = StatsCollector(
             file_path=ged, quiet=True, verbose=False, no_color=True
