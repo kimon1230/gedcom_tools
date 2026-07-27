@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -126,6 +127,10 @@ class TestValidateInputFile:
         assert result == EXIT_USAGE_ERROR
         assert "not a file" in capsys.readouterr().err.lower()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod(0o000) leaves the owner read access on Windows",
+    )
     def test_unreadable_file(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -138,6 +143,21 @@ class TestValidateInputFile:
             assert "permission denied" in capsys.readouterr().err.lower()
         finally:
             f.chmod(0o644)
+
+    def test_unreadable_file_without_chmod(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Same branch as above, minus the OS permission model.
+
+        chmod(0o000) is a no-op for read access on Windows, so the test above
+        cannot run there. This one exercises the handler everywhere.
+        """
+        f = tmp_path / "noperm.ged"
+        f.write_text("content", encoding="utf-8")
+        with patch("os.access", return_value=False):
+            result = validate_input_file(f)
+        assert result == EXIT_ERROR
+        assert "permission denied" in capsys.readouterr().err.lower()
 
 
 class TestCountSourcesRecursive:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -277,12 +278,21 @@ class TestFileValidation:
         result = run(_make_args(fake))
         assert result != EXIT_SUCCESS
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod(0o000) leaves the owner read access on Windows",
+    )
     def test_unreadable_file(self, tmp_path: Path) -> None:
         f = _write_gedcom(tmp_path / "test.ged", [])
         f.chmod(0o000)
         result = run(_make_args(f))
         assert result != EXIT_SUCCESS
         f.chmod(0o644)  # restore for cleanup
+
+    def test_unreadable_file_without_chmod(self, tmp_path: Path) -> None:
+        f = _write_gedcom(tmp_path / "test.ged", [])
+        with patch("os.access", return_value=False):
+            assert run(_make_args(f)) != EXIT_SUCCESS
 
 
 # ---------------------------------------------------------------------------

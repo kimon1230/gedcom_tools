@@ -18,7 +18,9 @@ def _reset_hardening_sentinel(monkeypatch):
 
 
 def _wrapper(encoding="cp1252", errors="strict"):
-    return io.TextIOWrapper(io.BytesIO(), encoding=encoding, errors=errors)
+    # newline="" keeps these tests about encoding: without it, Windows
+    # translates \n to \r\n on write and the byte comparisons drift.
+    return io.TextIOWrapper(io.BytesIO(), encoding=encoding, errors=errors, newline="")
 
 
 class _FakeTty:

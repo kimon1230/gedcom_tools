@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from gedcom_tools.cli import main
 from gedcom_tools.commands.isolated import (
@@ -487,6 +491,10 @@ class TestIsolatedCLI:
         output = result.format_text(colors, quiet=False)
         assert "Isolated individuals:     0" in output
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="chmod(0o000) leaves the owner read access on Windows",
+    )
     def test_permission_denied(self, tmp_path: Path) -> None:
         f = tmp_path / "noperm.ged"
         f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
@@ -494,3 +502,9 @@ class TestIsolatedCLI:
         result = main(["isolated", str(f)])
         f.chmod(0o644)  # restore for cleanup
         assert result == 1
+
+    def test_permission_denied_without_chmod(self, tmp_path: Path) -> None:
+        f = tmp_path / "noperm.ged"
+        f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
+        with patch("os.access", return_value=False):
+            assert main(["isolated", str(f)]) == 1
