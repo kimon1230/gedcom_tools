@@ -75,7 +75,7 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         type=int,
         default=None,
         metavar="N",
-        help="Expand approximate dates ±N years",
+        help="Expand approximate dates +/-N years",
     )
     parser.add_argument(
         "--limit",

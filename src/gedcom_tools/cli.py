@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,7 @@ from gedcom_tools.commands import (
     validate,
 )
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
+from gedcom_tools.progress import set_ascii_mode
 
 if TYPE_CHECKING:
     from argparse import Namespace
@@ -60,6 +62,11 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable colored output",
     )
+    parser.add_argument(
+        "--ascii",
+        action="store_true",
+        help="Use ASCII-only decorations (for consoles lacking the glyph fonts)",
+    )
 
     subparsers = parser.add_subparsers(
         title="commands",
@@ -81,9 +88,64 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_streams_hardened = False
+
+
+def _harden_streams() -> None:
+    """Make stdout/stderr survive non-ASCII output on legacy codepages.
+
+    Windows picks the ANSI codepage (cp1252 and friends) for a redirected
+    stream, so writing a name like Muller with an umlaut - or the report's own
+    check marks - raises UnicodeEncodeError. The tool works interactively and
+    dies under `> out.txt`, which is the worst way for it to fail.
+
+    Redirected streams get UTF-8: there is no terminal on the other end whose
+    codepage we owe anything to. A real terminal keeps its encoding, because
+    forcing UTF-8 onto a cp1252 console produces mojibake; it only gets the
+    error handler, which changes nothing except for characters that would
+    otherwise raise.
+    """
+    global _streams_hardened
+    if _streams_hardened:
+        return
+    _streams_hardened = True
+
+    io_encoding = os.environ.get("PYTHONIOENCODING", "")
+    if ":" in io_encoding:
+        # User specified their own error handler; leave both settings alone.
+        return
+
+    for stream, original in (
+        (sys.stdout, sys.__stdout__),
+        (sys.stderr, sys.__stderr__),
+    ):
+        # Only touch the real interpreter streams. pytest's CaptureIO is a
+        # TextIOWrapper subclass and would otherwise be mutated session-wide.
+        if stream is None or stream is not original:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if stream.isatty() or io_encoding:
+                reconfigure(errors="backslashreplace")
+            else:
+                # reconfigure() resets errors to strict unless told otherwise.
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (ValueError, OSError):
+            continue
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Before create_parser(): argparse writes --help and usage errors from
+    # inside parse_args() and then exits.
+    _harden_streams()
+
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    if args.ascii:
+        set_ascii_mode(True)
 
     if args.verbose and args.quiet:
         parser.error("--verbose and --quiet are mutually exclusive")

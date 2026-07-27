@@ -6,10 +6,45 @@ import os
 import sys
 import threading
 import time
-from typing import IO, TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+
+class GlyphSet(NamedTuple):
+    check: str
+    cross: str
+    arrow: str
+    frames: str
+
+
+UNICODE_GLYPHS = GlyphSet("✓", "✗", "→", "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+ASCII_GLYPHS = GlyphSet("[OK]", "[!]", "->", "|/-\\")
+
+# Encoding is handled by cli._harden_streams(); this is purely about whether the
+# terminal has a font that can draw the things. Windows console fonts routinely
+# lack braille and render the spinner as a row of boxes, and nothing about the
+# stream reveals that - so it's a switch, not a detection.
+_ascii_forced = False
+_ASCII_OFF_VALUES = frozenset({"", "0", "false", "no"})
+
+
+def set_ascii_mode(enabled: bool) -> None:
+    """Force ASCII decorations for the rest of the process."""
+    global _ascii_forced
+    _ascii_forced = enabled
+
+
+def ascii_mode() -> bool:
+    if _ascii_forced:
+        return True
+    value = os.environ.get("GEDCOM_TOOLS_ASCII", "")
+    return value.strip().lower() not in _ASCII_OFF_VALUES
+
+
+def glyphs() -> GlyphSet:
+    return ASCII_GLYPHS if ascii_mode() else UNICODE_GLYPHS
 
 
 class Colors:
@@ -70,7 +105,7 @@ class Spinner:
                 s.update(f" ({i+1} items)")
     """
 
-    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    FRAMES = UNICODE_GLYPHS.frames
 
     def __init__(
         self,
@@ -82,6 +117,7 @@ class Spinner:
         self.message = message
         self.stream = stream if stream is not None else sys.stderr
         self.colors = Colors(self.stream, force_disable=no_color)
+        self.glyphs = glyphs()
         self.is_tty = hasattr(self.stream, "isatty") and self.stream.isatty()
         self.show_timing = show_timing
         self._frame = 0
@@ -125,10 +161,12 @@ class Spinner:
     def _animate(self) -> None:
         while not self._stop_event.wait(0.08):
             with self._lock:
-                self._frame = (self._frame + 1) % len(self.FRAMES)
+                self._frame = (self._frame + 1) % len(self.glyphs.frames)
                 try:
                     self._render()
-                except OSError:
+                except (OSError, UnicodeError):
+                    # UnicodeError escaping here would kill the thread and dump
+                    # a traceback through the middle of the user's output.
                     break
 
     def update(self, suffix: str = "") -> None:
@@ -154,17 +192,25 @@ class Spinner:
                 elapsed = (
                     f" {self.colors.dim}({duration*1000:.0f}ms){self.colors.reset}"
                 )
-        if self.is_tty and self._line_written:
-            self.stream.write("\r\033[K")
-        icon = f"{self.colors.green}✓" if success else f"{self.colors.red}✗"
-        self.stream.write(f"{icon} {self.message}{elapsed}{self.colors.reset}\n")
-        self.stream.flush()
+        if success:
+            icon = f"{self.colors.green}{self.glyphs.check}"
+        else:
+            icon = f"{self.colors.red}{self.glyphs.cross}"
+        try:
+            if self.is_tty and self._line_written:
+                self.stream.write("\r\033[K")
+            self.stream.write(f"{icon} {self.message}{elapsed}{self.colors.reset}\n")
+            self.stream.flush()
+        except UnicodeError:
+            # Progress output is never worth failing a command over. The CLI
+            # hardens its streams; a library caller may not have.
+            pass
 
     # caller must hold _lock
     def _render(self) -> None:
         if not self.is_tty:
             return
-        frame = self.FRAMES[self._frame]
+        frame = self.glyphs.frames[self._frame]
         line = (
             f"{self.colors.cyan}{frame}{self.colors.reset} {self.message}{self._suffix}"
         )

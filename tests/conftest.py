@@ -2,7 +2,16 @@ from pathlib import Path
 
 import pytest
 
+from gedcom_tools import progress
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _reset_ascii_mode(monkeypatch):
+    """main() sets ASCII mode process-wide, so a --ascii test would otherwise
+    leak into every test that runs after it."""
+    monkeypatch.setattr(progress, "_ascii_forced", False)
 
 
 @pytest.fixture

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from gedcom_tools.progress import glyphs
 from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import Severity, ValidationIssue
 
@@ -87,17 +88,18 @@ class ValidationResult:
             lines.append("")
 
         # Summary
+        marks = glyphs()
         if self.success:
             if self.warnings:
                 lines.append(
-                    f"{colors.green}✓ Valid{colors.reset} "
+                    f"{colors.green}{marks.check} Valid{colors.reset} "
                     f"(with {len(self.warnings)} warning(s))"
                 )
             else:
-                lines.append(f"{colors.green}✓ Valid{colors.reset}")
+                lines.append(f"{colors.green}{marks.check} Valid{colors.reset}")
         else:
             lines.append(
-                f"{colors.red}✗ Invalid{colors.reset} "
+                f"{colors.red}{marks.cross} Invalid{colors.reset} "
                 f"({len(self.errors)} error(s), {len(self.warnings)} warning(s))"
             )
 
@@ -134,7 +136,8 @@ class ValidationResult:
 
         # Third line: context (if present)
         if issue.context:
-            result += f"\n    {colors.dim}→ {issue.context}{colors.reset}"
+            arrow = glyphs().arrow
+            result += f"\n    {colors.dim}{arrow} {issue.context}{colors.reset}"
 
         return result
 

@@ -242,3 +242,21 @@ def test_validate_royal92_ansel(capsys):
 
     out = capsys.readouterr().out
     assert "E009" not in out
+
+
+class TestAsciiFlag:
+    def test_ascii_flag_switches_decorations(self, capsys, temp_gedcom_file):
+        assert main(["--ascii", "--no-color", "validate", str(temp_gedcom_file)]) == 0
+        captured = capsys.readouterr()
+        assert "[OK] Valid" in captured.out
+        assert "✓" not in captured.out
+        (captured.out + captured.err).encode("ascii")
+
+    def test_default_keeps_unicode(self, capsys, temp_gedcom_file):
+        assert main(["--no-color", "validate", str(temp_gedcom_file)]) == 0
+        assert "✓ Valid" in capsys.readouterr().out
+
+    def test_env_var_switches_decorations(self, capsys, monkeypatch, temp_gedcom_file):
+        monkeypatch.setenv("GEDCOM_TOOLS_ASCII", "1")
+        assert main(["--no-color", "validate", str(temp_gedcom_file)]) == 0
+        assert "[OK] Valid" in capsys.readouterr().out
