@@ -146,7 +146,8 @@ class TestAnselDeprecation:
             "1 NAME Test\n"
             "0 @I1@ INDI\n"
             "1 NAME John /Doe/\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
 
         engine = ValidationEngine(ged_file, mode="full", strict="5.5.5")
@@ -174,7 +175,8 @@ class TestAnselDeprecation:
             "1 NAME Test\n"
             "0 @I1@ INDI\n"
             "1 NAME John /Doe/\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
 
         engine = ValidationEngine(ged_file, mode="full", strict="5.5.1")

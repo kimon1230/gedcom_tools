@@ -5,7 +5,18 @@ from unittest.mock import patch
 
 import pytest
 
-from gedcom_tools.progress import Colors, PhaseTracker, Spinner, _NullSpinner
+from gedcom_tools import progress
+from gedcom_tools.progress import (
+    ASCII_GLYPHS,
+    UNICODE_GLYPHS,
+    Colors,
+    PhaseTracker,
+    Spinner,
+    _NullSpinner,
+    ascii_mode,
+    glyphs,
+    set_ascii_mode,
+)
 
 
 def _controlled_wait(max_ticks):
@@ -343,3 +354,80 @@ class TestNullSpinner:
         s.update()
         s.stop()
         s.stop(success=False)
+
+
+class TestUnencodableStream:
+    """A spinner on a strict legacy-codepage stream must not take the command
+    down with it, and must not kill its own thread noisily."""
+
+    @staticmethod
+    def _cp1252_stream(is_tty):
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+        stream.isatty = lambda: is_tty
+        return stream
+
+    def test_stop_swallows_encode_error(self):
+        stream = self._cp1252_stream(is_tty=False)
+        spinner = Spinner("Working", stream=stream)
+        spinner.start()
+        spinner.stop()  # the check mark is not cp1252-encodable
+
+    def test_animate_thread_exits_cleanly_on_encode_error(self):
+        stream = self._cp1252_stream(is_tty=True)
+        spinner = Spinner("Working", stream=stream)
+        spinner.start()
+        thread = spinner._thread
+        thread.join(timeout=2.0)
+        assert not thread.is_alive()
+        spinner.stop()
+
+
+class TestAsciiMode:
+    @pytest.fixture(autouse=True)
+    def _reset_toggle(self, monkeypatch):
+        monkeypatch.delenv("GEDCOM_TOOLS_ASCII", raising=False)
+        monkeypatch.setattr(progress, "_ascii_forced", False)
+
+    def test_unicode_is_the_default(self):
+        assert glyphs() is UNICODE_GLYPHS
+
+    def test_set_ascii_mode(self):
+        set_ascii_mode(True)
+        assert glyphs() is ASCII_GLYPHS
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "anything"])
+    def test_env_var_enables(self, monkeypatch, value):
+        monkeypatch.setenv("GEDCOM_TOOLS_ASCII", value)
+        assert ascii_mode()
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "False", " NO "])
+    def test_env_var_off_values(self, monkeypatch, value):
+        """A variable named for a mode invites GEDCOM_TOOLS_ASCII=0, unlike
+        NO_COLOR whose spec makes any non-empty value mean on."""
+        monkeypatch.setenv("GEDCOM_TOOLS_ASCII", value)
+        assert not ascii_mode()
+
+    def test_spinner_uses_ascii_icons(self):
+        set_ascii_mode(True)
+        stream = io.StringIO()
+        spinner = Spinner("Working", stream=stream)
+        spinner.start()
+        spinner.stop()
+        assert "[OK]" in stream.getvalue()
+        assert "✓" not in stream.getvalue()
+
+    def test_spinner_ascii_frames_cycle_without_indexerror(self):
+        set_ascii_mode(True)
+        stream = _make_tty_stream()
+        spinner = Spinner("Working", stream=stream)
+        spinner._stop_event.wait = _controlled_wait(12)
+        spinner._animate()
+        assert set(stream.getvalue()) & set(ASCII_GLYPHS.frames)
+
+    def test_ascii_output_encodes_to_ascii(self):
+        set_ascii_mode(True)
+        stream = io.StringIO()
+        spinner = Spinner("Working", stream=stream, no_color=True)
+        spinner.start()
+        spinner.stop(success=False)
+        stream.getvalue().encode("ascii")

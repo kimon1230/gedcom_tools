@@ -165,17 +165,17 @@ class TestFileOutput:
     ) -> None:
         ged = _write_ged(tmp_path, MINIMAL_GED)
         out_file = tmp_path / "existing.csv"
-        out_file.write_text("old data")
+        out_file.write_text("old data", encoding="utf-8")
         code = run(_make_args(ged, output=out_file))
         assert code == EXIT_ERROR
         err = capsys.readouterr().err
         assert "already exists" in err
-        assert out_file.read_text() == "old data"
+        assert out_file.read_text(encoding="utf-8") == "old data"
 
     def test_force_overwrite(self, tmp_path: Path) -> None:
         ged = _write_ged(tmp_path, MINIMAL_GED)
         out_file = tmp_path / "existing.csv"
-        out_file.write_text("old data")
+        out_file.write_text("old data", encoding="utf-8")
         code = run(_make_args(ged, output=out_file, force=True))
         assert code == EXIT_SUCCESS
         content = out_file.read_text(encoding="utf-8")

@@ -105,7 +105,8 @@ def test_quiet_mode_errors_only(tmp_path, capsys):
         "0 @I1@ INDI\n"
         "1 NAME Test /Person/\n"
         "1 FAMC @F99@\n"
-        "0 TRLR\n"
+        "0 TRLR\n",
+        encoding="utf-8",
     )
 
     result = main(["-q", "validate", "--full", str(ged)])
@@ -130,7 +131,7 @@ def test_exception_handling(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(validate, "run", _raise_error)
 
     gedcom_file = tmp_path / "test.ged"
-    gedcom_file.write_text("0 HEAD\n0 TRLR\n")
+    gedcom_file.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
     result = main(["validate", str(gedcom_file)])
     assert result != EXIT_SUCCESS
@@ -143,7 +144,7 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
     monkeypatch.setattr(validate, "run", _raise_error)
 
     f = tmp_path / "test.ged"
-    f.write_text("0 HEAD\n0 TRLR\n")
+    f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="boom"):
         main(["--verbose", "validate", str(f)])
@@ -242,3 +243,21 @@ def test_validate_royal92_ansel(capsys):
 
     out = capsys.readouterr().out
     assert "E009" not in out
+
+
+class TestAsciiFlag:
+    def test_ascii_flag_switches_decorations(self, capsys, temp_gedcom_file):
+        assert main(["--ascii", "--no-color", "validate", str(temp_gedcom_file)]) == 0
+        captured = capsys.readouterr()
+        assert "[OK] Valid" in captured.out
+        assert "✓" not in captured.out
+        (captured.out + captured.err).encode("ascii")
+
+    def test_default_keeps_unicode(self, capsys, temp_gedcom_file):
+        assert main(["--no-color", "validate", str(temp_gedcom_file)]) == 0
+        assert "✓ Valid" in capsys.readouterr().out
+
+    def test_env_var_switches_decorations(self, capsys, monkeypatch, temp_gedcom_file):
+        monkeypatch.setenv("GEDCOM_TOOLS_ASCII", "1")
+        assert main(["--no-color", "validate", str(temp_gedcom_file)]) == 0
+        assert "[OK] Valid" in capsys.readouterr().out

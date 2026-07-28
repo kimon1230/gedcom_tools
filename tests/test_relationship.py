@@ -34,7 +34,7 @@ from gedcom_tools.progress import Colors
 
 def _write_ged(tmp_path: Path, content: str) -> Path:
     p = tmp_path / "test.ged"
-    p.write_text(f"0 HEAD\n1 CHAR UTF-8\n{content}0 TRLR\n")
+    p.write_text(f"0 HEAD\n1 CHAR UTF-8\n{content}0 TRLR\n", encoding="utf-8")
     return p
 
 

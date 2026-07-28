@@ -36,6 +36,13 @@ gedcom-tools <command> [options] <file>
 | `-q, --quiet` | Suppress non-essential output |
 | `--format {text,json}` | Output format (default: text) |
 | `--no-color` | Disable colored output |
+| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`) instead of `✓ ✗ →` |
+
+Redirected output is written as UTF-8 regardless of the system codepage, so
+`gedcom-tools search tree.ged 'surname=Müller' > out.txt` produces a UTF-8 file
+on Windows as well as on Unix. `--ascii` is for consoles whose fonts cannot draw
+the decorations; it can also be set with `GEDCOM_TOOLS_ASCII=1`. Setting
+`PYTHONIOENCODING` yourself takes precedence over the UTF-8 default.
 
 ### Commands
 

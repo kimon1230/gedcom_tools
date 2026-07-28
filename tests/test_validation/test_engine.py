@@ -305,7 +305,8 @@ class TestAnselSupport:
             "1 CHAR ANSEL\n"
             "0 @I1@ INDI\n"
             "1 NAME John /Smith/\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         assert result.success is True
@@ -381,7 +382,8 @@ class TestSexValidation:
             "1 NAME John /Smith/\n"
             "1 SEX M\n"
             "1 SEX F\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w027 = [i for i in result.issues if i.code == ErrorCode.W027_MULTIPLE_SEX]
@@ -399,7 +401,8 @@ class TestSexValidation:
             "0 @I1@ INDI\n"
             "1 NAME John /Smith/\n"
             "1 SEX Z\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w028 = [i for i in result.issues if i.code == ErrorCode.W028_INVALID_SEX]
@@ -417,7 +420,8 @@ class TestSexValidation:
             "0 @I1@ INDI\n"
             "1 NAME Jane /Smith/\n"
             "1 SEX F\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w027 = [i for i in result.issues if i.code == ErrorCode.W027_MULTIPLE_SEX]
@@ -439,7 +443,8 @@ class TestSexValidation:
             "0 @I2@ INDI\n"
             "1 NAME Alex /Jones/\n"
             "1 SEX X\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w028 = [i for i in result.issues if i.code == ErrorCode.W028_INVALID_SEX]
@@ -457,7 +462,8 @@ class TestObjeValidation:
             "1 CHAR UTF-8\n"
             "0 @O1@ OBJE\n"
             "1 TITL Photo\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w033 = [i for i in result.issues if i.code == ErrorCode.W033_OBJE_MISSING_FILE]
@@ -474,7 +480,8 @@ class TestObjeValidation:
             "1 CHAR UTF-8\n"
             "0 @O1@ OBJE\n"
             "1 FILE photo.jpg\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
@@ -492,7 +499,8 @@ class TestObjeValidation:
             "0 @O1@ OBJE\n"
             "1 FILE photo.jpg\n"
             "2 FORM JPEG\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w033 = [i for i in result.issues if i.code == ErrorCode.W033_OBJE_MISSING_FILE]
@@ -512,7 +520,8 @@ class TestObjeValidation:
             "1 FILE photo.jpg\n"
             "2 FORM JPEG\n"
             "1 FILE doc.pdf\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
@@ -529,7 +538,8 @@ class TestObjeValidation:
             "0 @O1@ OBJE\n"
             "1 FILE photo.jpg\n"
             "1 FILE doc.pdf\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w034 = [i for i in result.issues if i.code == ErrorCode.W034_FILE_MISSING_FORM]
@@ -549,7 +559,8 @@ class TestAsymmetricLinkIntegration:
             "1 NAME John /Smith/\n"
             "0 @F1@ FAM\n"
             "1 CHIL @I1@\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w016 = [
@@ -570,7 +581,8 @@ class TestAsymmetricLinkIntegration:
             "1 NAME John /Smith/\n"
             "1 FAMS @F1@\n"
             "0 @F1@ FAM\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w017 = [
@@ -602,7 +614,8 @@ class TestSiblingSpacingIntegration:
             "0 @F1@ FAM\n"
             "1 CHIL @I1@\n"
             "1 CHIL @I2@\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w026 = [i for i in result.issues if i.code == ErrorCode.W026_SIBLING_TOO_CLOSE]
@@ -625,7 +638,8 @@ class TestSexRoleMismatchIntegration:
             "1 FAMS @F1@\n"
             "0 @F1@ FAM\n"
             "1 HUSB @I1@\n"
-            "0 TRLR\n"
+            "0 TRLR\n",
+            encoding="utf-8",
         )
         result = validate_file(ged, mode="full", quiet=True)
         w029 = [i for i in result.issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]

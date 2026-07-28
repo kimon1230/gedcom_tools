@@ -1,6 +1,6 @@
 import json
 
-from gedcom_tools.progress import Colors
+from gedcom_tools.progress import Colors, set_ascii_mode
 from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import (
     ErrorCode,
@@ -213,3 +213,29 @@ class TestValidationResult:
         assert "[W014]" not in text
         assert "Invalid" not in text
         assert "Valid" not in text
+
+
+class TestAsciiDecorations:
+    def _result_with_context(self):
+        return ValidationResult(
+            file_path="/test/file.ged",
+            issues=[
+                ValidationIssue(
+                    code=ErrorCode.E001_UNRESOLVED_XREF,
+                    message="Not found",
+                    context="1 FAMC @F99@",
+                )
+            ],
+        )
+
+    def test_ascii_mode_replaces_marks_and_arrow(self):
+        set_ascii_mode(True)
+        text = self._result_with_context().format_text(Colors(force_disable=True))
+        assert "[!] Invalid" in text
+        assert "-> 1 FAMC @F99@" in text
+        text.encode("ascii")
+
+    def test_unicode_mode_is_unchanged(self):
+        text = self._result_with_context().format_text(Colors(force_disable=True))
+        assert "✗ Invalid" in text
+        assert "→ 1 FAMC @F99@" in text

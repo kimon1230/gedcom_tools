@@ -1,0 +1,19 @@
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Πηνελόπη /Ανδρέου/
+1 SEX F
+1 BIRT
+2 DATE 12 MAR 1901
+2 PLAC Λευκωσία, Κύπρος
+0 @I2@ INDI
+1 NAME Jürgen /Müller/
+1 SEX M
+1 BIRT
+2 DATE 4 JUN 1898
+2 PLAC München, Bayern
+0 TRLR
