@@ -23,6 +23,7 @@ The relationship is expressed as target-to-primary: "Target is the X of Primary.
 | `-v, --verbose` | Show timing and depth-limit warnings |
 | `-q, --quiet` | Description sentence(s) only |
 | `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations (`[OK]`, `[!]`, `->`) |
 
 ### Xref Format
 

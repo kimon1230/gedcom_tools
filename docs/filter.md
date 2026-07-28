@@ -24,6 +24,7 @@ gedcom-tools filter <file> -o <output> [options]
 | `-v, --verbose` | Show progress phases with timing |
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
+| `--ascii` | ASCII-only progress decorations (`[OK]`, `[!]`) |
 
 **Strip options:**
 

@@ -22,6 +22,7 @@ gedcom-tools search <file> <query> [options]
 | `-v, --verbose` | Show phase timing and phonetic codes |
 | `-q, --quiet` | Minimal output (names and xrefs only) |
 | `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations (`[OK]`, `[!]`, `->`) |
 
 ## How It Works
 

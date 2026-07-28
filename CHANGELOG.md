@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0]
+
+### Fixed
+- `UnicodeEncodeError` when output is redirected on a legacy codepage — the CLI worked interactively and crashed under `> out.txt`, CI capture, or any build script. Affected non-ASCII names and places in every command, not just the tool's own `✓ ✗ →` decorations; `--format json` was affected too, since most formatters emit unescaped Unicode
+
+### Added
+- `--ascii` global flag and `GEDCOM_TOOLS_ASCII` environment variable — replaces `✓ ✗ →` and the spinner with `[OK]`, `[!]`, `->` for consoles whose fonts cannot draw them (Windows console fonts routinely lack braille)
+- Continuous integration: lint/format/type checks, a test matrix across Linux and Windows on Python 3.11 and 3.13, and a regression job that captures CLI output on both platforms
+
+### Changed
+- Redirected output is now written as UTF-8 regardless of the system codepage; terminals keep their own encoding and gain a `backslashreplace` error handler. An explicit `PYTHONIOENCODING` is honoured and takes precedence
+- `ged4py` requirement changed from `~=0.4.4` to `>=0.5.2,<0.6`. The 1.1.0 pin was never what development ran — the declared range excluded the version actually tested. The bounded range is retained, now aligned with what is exercised
+- `DoubleMetaphone` requirement raised to `>=1.2`; 1.1 has no wheels and its Cython source fails to build on Python 3.13
+- Development dependency floors raised to the versions CI and local development actually run
+
 ## [1.1.1]
 
 ### Added

@@ -30,6 +30,7 @@ gedcom-tools export <file> [options]
 | `-v, --verbose` | Show progress phases with timing |
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
+| `--ascii` | ASCII-only progress decorations (`[OK]`, `[!]`) |
 
 ### Examples
 
