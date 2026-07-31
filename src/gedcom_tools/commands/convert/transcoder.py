@@ -14,7 +14,7 @@ from pathlib import Path
 import ansel  # type: ignore[import-untyped]
 
 from gedcom_tools import __version__
-from gedcom_tools.progress import Colors
+from gedcom_tools.progress import Colors, glyphs
 from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
@@ -49,11 +49,12 @@ class ConvertResult:
     dry_run: bool
 
     def format_text(self, colors: Colors, quiet: bool) -> str:
+        g = glyphs()
         if quiet:
             line = (
                 f"Converted {self.source_file.name} "
-                f"({self.source_encoding} \u2192 {self.target_encoding}) "
-                f"\u2192 {self.output_file}"
+                f"({self.source_encoding} {g.arrow} {self.target_encoding}) "
+                f"{g.arrow} {self.output_file}"
             )
             if self.dry_run:
                 line += " (dry run)"
@@ -84,7 +85,7 @@ class ConvertResult:
             )
 
         if self.dry_run:
-            lines.append("\n  (dry run \u2014 no file written)")
+            lines.append("\n  (dry run -- no file written)")
 
         return "\n".join(lines)
 
@@ -125,7 +126,7 @@ def update_char_header(text: str, new_char: str) -> str:
     eol = "\r\n" if "\r\n" in text else "\n"
     head_match = _HEAD_RE.search(text)
     if head_match is None:
-        msg = "No HEAD record found \u2014 not a valid GEDCOM file"
+        msg = "No HEAD record found -- not a valid GEDCOM file"
         raise ValueError(msg)
 
     insert_pos = head_match.end()

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.1]
+
+### Fixed
+- `--ascii` (and `GEDCOM_TOOLS_ASCII`) now reaches every decoration, not just the validation output. Six modules drew their separators from hardcoded characters and ignored the flag entirely: the `languages` table rule (53 box-drawing characters, so the whole table collapsed into a row of boxes on a console whose font lacks them), the `↔` pair separator and `×` score multiplier in `compare` and `duplicates`, and the `→` conversion arrows in `convert --quiet` and `filter --quiet`. These were written as `\uXXXX` escapes rather than literal characters, which is why the 1.2.0 sweep missed them
+
+### Changed
+- Em-dashes in message prose are now written `--` in both Unicode and ASCII mode, for consistency with the `-- use --limit 0 for all` wording that `compare` already used. Affects the `--dry-run` notices in `convert` and `filter`, the truncation notice in `duplicates`, the "no HEAD record" error from `convert`, and two `search` query-validation errors. The `languages` event separator keeps its em-dash in Unicode mode — it is a field separator and now follows `--ascii` like the other decorations
+- Added a regression test that walks `src/` and rejects new non-ASCII string literals outside a small allowlist, so the next hardcoded glyph fails in CI rather than shipping
+
 ## [1.2.0]
 
 ### Fixed

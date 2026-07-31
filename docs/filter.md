@@ -250,7 +250,7 @@ Filtered tree.ged (780 → 225 records) → subtree.ged
 
 ### Dry run
 
-Appends `(dry run — no file written)` to the output. No file is created.
+Appends `(dry run -- no file written)` to the output. No file is created.
 
 ### JSON (`--format json`)
 

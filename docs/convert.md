@@ -194,7 +194,7 @@ Converted old_tree.ged (ANSEL → UTF-8) → tree_utf8.ged
 
 ### Dry run
 
-Appends `(dry run — no file written)` to the output. No file is created.
+Appends `(dry run -- no file written)` to the output. No file is created.
 
 ### JSON (`--format json`)
 

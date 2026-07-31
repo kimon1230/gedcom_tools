@@ -10,8 +10,11 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 @pytest.fixture(autouse=True)
 def _reset_ascii_mode(monkeypatch):
     """main() sets ASCII mode process-wide, so a --ascii test would otherwise
-    leak into every test that runs after it."""
+    leak into every test that runs after it. ascii_mode() also reads the
+    environment, so a runner that exports the variable would flip every
+    default-mode assertion in the suite."""
     monkeypatch.setattr(progress, "_ascii_forced", False)
+    monkeypatch.delenv("GEDCOM_TOOLS_ASCII", raising=False)
 
 
 @pytest.fixture

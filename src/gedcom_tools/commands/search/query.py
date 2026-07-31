@@ -140,7 +140,7 @@ def _validate_wildcard(value: str) -> None:
     if len(non_wild) < 3:
         raise ValueError(
             f"Wildcard pattern '{value}' is too broad "
-            f"\N{EM DASH} add more characters, e.g. 'Sm*th'"
+            "-- add more characters, e.g. 'Sm*th'"
         )
 
 
@@ -204,7 +204,7 @@ def _check_tilde_expansion(value: str, operator: str) -> None:
         return
     if "/home/" in value or "/Users/" in value:
         raise ValueError(
-            f"Value '{value}' looks like a home directory path \N{EM DASH} "
+            f"Value '{value}' looks like a home directory path -- "
             f"the shell likely expanded ~. Wrap the query in single quotes: "
             f"gedcom-tools search tree.ged 'surname~Schmidt'"
         )

@@ -36,7 +36,7 @@ gedcom-tools <command> [options] <file>
 | `-q, --quiet` | Suppress non-essential output |
 | `--format {text,json}` | Output format (default: text) |
 | `--no-color` | Disable colored output |
-| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`) instead of `✓ ✗ →` |
+| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`, `<->`, `x`, `-`) instead of `✓ ✗ → ↔ × ─` |
 
 Redirected output is written as UTF-8 regardless of the system codepage, so
 `gedcom-tools search tree.ged 'surname=Müller' > out.txt` produces a UTF-8 file
@@ -1166,7 +1166,7 @@ File: old_tree.ged
   BOM:             none
   Output:          tree_utf8.ged
 
-  (dry run — no file written)
+  (dry run -- no file written)
 ```
 
 </details>

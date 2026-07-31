@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from gedcom_tools.progress import glyphs
+
 if TYPE_CHECKING:
     from gedcom_tools.commands.compare.models import (
         CompareIndividual,
@@ -26,6 +28,7 @@ def _format_match_section(
     verbose: bool,
     limit: int,
 ) -> list[str]:
+    g = glyphs()
     total = len(pairs)
     if total == 0:
         return []
@@ -53,7 +56,7 @@ def _format_match_section(
             suffix = " (low confidence)"
         lines.append(
             f"  {a_name} ({a_years}) [{a.xref}] "
-            f"\u2194 {b_name} ({b_years}) [{b.xref}]  "
+            f"{g.pair} {b_name} ({b_years}) [{b.xref}]  "
             f"score: {pair.score.total:.2f}{suffix}"
         )
 
@@ -66,12 +69,12 @@ def _format_match_section(
         if verbose and pair.score.field_scores:
             parts = [f"{k} {v:.2f}" for k, v in pair.score.field_scores.items()]
             if pair.score.sex_penalty:
-                parts.append("Sex mismatch \u00d70.70")
+                parts.append(f"Sex mismatch {g.times}0.70")
             lines.append(f"    [Scores: {', '.join(parts)}]")
 
     if limit > 0 and total > limit:
         remaining = total - limit
-        lines.append(f"  ({remaining} more \u2014 use --limit 0 for all)")
+        lines.append(f"  ({remaining} more -- use --limit 0 for all)")
 
     return lines
 

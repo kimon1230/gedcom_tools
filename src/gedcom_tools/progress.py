@@ -17,10 +17,16 @@ class GlyphSet(NamedTuple):
     cross: str
     arrow: str
     frames: str
+    pair: str
+    rule: str
+    times: str
+    dash: str
 
 
-UNICODE_GLYPHS = GlyphSet("✓", "✗", "→", "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-ASCII_GLYPHS = GlyphSet("[OK]", "[!]", "->", "|/-\\")
+# rule is multiplied to draw table separators, so it has to stay one character
+# wide in both sets. dash separates fields; it is not the table rule.
+UNICODE_GLYPHS = GlyphSet("✓", "✗", "→", "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", "↔", "─", "×", "—")
+ASCII_GLYPHS = GlyphSet("[OK]", "[!]", "->", "|/-\\", "<->", "-", "x", "--")
 
 # Encoding is handled by cli._harden_streams(); this is purely about whether the
 # terminal has a font that can draw the things. Windows console fonts routinely

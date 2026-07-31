@@ -19,7 +19,7 @@ from gedcom_tools.language_detect import (
     MIN_TEXT_LENGTH_DEFAULT,
     GedcomLanguageDetector,
 )
-from gedcom_tools.progress import Colors, PhaseTracker
+from gedcom_tools.progress import Colors, PhaseTracker, glyphs
 from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
@@ -137,6 +137,8 @@ class LanguagesResult:
         if self.language_filter:
             return self._format_filter_text(colors, quiet, show_text)
 
+        g = glyphs()
+
         if quiet:
             if self.total_texts == 0 and self.skipped_short == 0:
                 return ""
@@ -177,13 +179,13 @@ class LanguagesResult:
         # Table
         lines.append("")
         lines.append("  Language             Notes  Stories  Events   Total")
-        lines.append("  " + "\u2500" * 53)
+        lines.append("  " + g.rule * 53)
         for row in self.rows:
             lines.append(
                 f"  {row.language:<20} {row.notes:>5}"
                 f"  {row.stories:>7}  {row.events:>6}  {row.total:>6}"
             )
-        lines.append("  " + "\u2500" * 53)
+        lines.append("  " + g.rule * 53)
 
         # Totals row
         t_notes = sum(r.notes for r in self.rows)
@@ -226,6 +228,7 @@ class LanguagesResult:
         return "\n".join(lines)
 
     def _format_filter_text(self, colors: Colors, quiet: bool, show_text: bool) -> str:
+        g = glyphs()
         display = f"{self.language_filter_name} ({self.language_filter})"
         n_persons = len(self.person_xrefs)
         n_notes = len(self.note_xrefs)
@@ -308,7 +311,7 @@ class LanguagesResult:
                 if em.event_tag is None:
                     label = f"    {em.parent_xref}  (family note)"
                 elif em.name:
-                    label = f"    {em.parent_xref}  {em.event_tag}  \u2014 {em.name}"
+                    label = f"    {em.parent_xref}  {em.event_tag}  {g.dash} {em.name}"
                 else:
                     label = f"    {em.parent_xref}  {em.event_tag}"
                 lines.append(label)

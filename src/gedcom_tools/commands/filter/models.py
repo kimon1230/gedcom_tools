@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 
 from gedcom_tools import __version__
-from gedcom_tools.progress import Colors
+from gedcom_tools.progress import Colors, glyphs
 
 UNLIMITED_DEPTH: int = 2**20
 
@@ -85,12 +85,13 @@ class FilterResult:
     dry_run: bool
 
     def format_text(self, colors: Colors, quiet: bool) -> str:
+        g = glyphs()
         if quiet:
             line = (
                 f"Filtered {self.source_path} "
-                f"({self.source_counts.total:,} \u2192 "
+                f"({self.source_counts.total:,} {g.arrow} "
                 f"{self.output_counts.total:,} records) "
-                f"\u2192 {self.output_path}"
+                f"{g.arrow} {self.output_path}"
             )
             if self.dry_run:
                 line += " (dry run)"
@@ -180,7 +181,7 @@ class FilterResult:
         lines.append(f"\n  Output: {self.output_path}")
 
         if self.dry_run:
-            lines.append("\n  (dry run \u2014 no file written)")
+            lines.append("\n  (dry run -- no file written)")
 
         return "\n".join(lines)
 
