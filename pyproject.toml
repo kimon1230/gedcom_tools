@@ -11,6 +11,10 @@ license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "ged4py>=0.5.2,<0.6",
+    # Imported directly by commands/convert/transcoder.py. ged4py pulls it in
+    # too, but relying on that transitive edge breaks `convert` at import time
+    # the day ged4py drops it.
+    "ansel>=1.0,<2",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.
@@ -50,7 +54,7 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "UP"]
+select = ["E", "W", "F", "I", "B", "UP", "S110", "BLE001"]
 
 [tool.mypy]
 python_version = "3.11"

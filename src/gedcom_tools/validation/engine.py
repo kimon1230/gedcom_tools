@@ -410,7 +410,7 @@ class ValidationEngine:
                     )
 
             # Check for nested pointer references
-            self._collect_sub_xrefs(sub, xref)
+            self._collect_sub_xrefs_recursive(sub, xref, depth=1)
 
         if sex_count > 1:
             self._add_issue(
@@ -492,7 +492,7 @@ class ValidationEngine:
                     )
 
             # Check for nested pointer references
-            self._collect_sub_xrefs(sub, xref)
+            self._collect_sub_xrefs_recursive(sub, xref, depth=1)
 
         # Store for semantic validation
         self._sem_validator.collect_family(
@@ -539,20 +539,6 @@ class ValidationEngine:
 
         # Recursively collect xref usages
         self._collect_sub_xrefs_recursive(record, xref)
-
-    def _collect_sub_xrefs(self, record: Record, parent_xref: str) -> None:
-        """Collect xref usages from a sub-record (one level only)."""
-        # Check for SOUR, NOTE, OBJE, REPO references
-        for sub in record.sub_records:
-            sub_offset = sub.offset if sub.offset else 0
-            if sub.tag in ("SOUR", "NOTE", "OBJE", "REPO") and sub.value:
-                ref_xref = self._extract_xref(sub.value)
-                if ref_xref:
-                    self._ref_validator.collect_usage(
-                        ref_xref,
-                        self._offset_to_line(sub_offset),
-                        f"{sub.tag} reference in {parent_xref}",
-                    )
 
     def _collect_sub_xrefs_recursive(
         self, record: Record, parent_xref: str, depth: int = 0

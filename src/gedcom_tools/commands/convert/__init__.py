@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ged4py.parser import CodecError, ParserError
+
 from gedcom_tools.commands.convert.transcoder import (
     CODEC_TO_CHAR,
     ConvertResult,
@@ -17,6 +19,7 @@ from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import Colors, PhaseTracker
 from gedcom_tools.utils import (
     BOM_ENCODINGS,
+    EncodingInfo,
     check_output_safety,
     detect_encoding,
     resolve_source_codec,
@@ -101,25 +104,35 @@ def run(args: Namespace) -> int:
     if err := validate_input_file(file_path):
         return err
 
-    safety_err = check_output_safety(file_path, output, force=force, dry_run=dry_run)
+    safety_err = check_output_safety(
+        file_path, output, force=force, dry_run=dry_run, command="Convert"
+    )
     if safety_err is not None:
         print(safety_err, file=sys.stderr)
         return EXIT_ERROR
 
-    colors = Colors(sys.stderr, force_disable=no_color)
+    colors = Colors(sys.stdout, force_disable=no_color)
     tracker = PhaseTracker(
         2, stream=sys.stderr, no_color=no_color, quiet=quiet, verbose=verbose
     )
 
     try:
         with tracker.phase("Detecting encoding"):
-            encoding_info = detect_encoding(file_path)
+            # Detection parses the header, which throws on a broken CHAR value.
+            # --from exists to rescue exactly those files, so skip it entirely
+            # when the user has already told us the encoding.
+            if from_encoding is not None:
+                encoding_info = EncodingInfo(encoding=from_encoding)
+            else:
+                encoding_info = detect_encoding(file_path)
 
             try:
                 source_codec = resolve_source_codec(encoding_info, from_encoding)
                 target_codec = resolve_target_codec(to_encoding)
             except ValueError as e:
-                print(f"Error: {e}", file=sys.stderr)
+                from gedcom_tools.utils import sanitize_error
+
+                print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
                 return EXIT_USAGE_ERROR
 
             normalize = (source_codec == "gedcom") and not no_normalize
@@ -138,8 +151,22 @@ def run(args: Namespace) -> int:
                 dry_run=dry_run,
             )
 
+    except (CodecError, ParserError) as e:
+        # CodecError currently subclasses ParserError; both are listed so a
+        # future ged4py reshuffle cannot let one of them escape as a traceback.
+        from gedcom_tools.utils import sanitize_error
+
+        print(
+            f"Error: {sanitize_error(str(e))}\n"
+            "  Use --from to state the source encoding and skip header "
+            "detection (e.g. --from ansel).",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     except (UnicodeDecodeError, UnicodeEncodeError, ValueError) as e:
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
         return EXIT_ERROR
 
     fmt = getattr(args, "format", "text")

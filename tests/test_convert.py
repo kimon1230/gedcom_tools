@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -247,6 +249,41 @@ class TestUpdateCharHeader:
         result = update_char_header(text, "ANSEL")
         assert "1 CHARSET ANSI" in result
         assert "1 CHAR ANSEL" in result
+
+    def test_mixed_eol_insert_keeps_every_line_intact(self) -> None:
+        # HEAD ends with LF while the next line ends with CRLF; the insert must
+        # follow HEAD's own terminator rather than a file-wide guess.
+        text = "0 HEAD\n1 SOUR TEST\r\n0 TRLR\n"
+        result = update_char_header(text, "UTF-8")
+        assert result.splitlines() == [
+            "0 HEAD",
+            "1 CHAR UTF-8",
+            "1 SOUR TEST",
+            "0 TRLR",
+        ]
+        assert "1 SOUR TEST\r\n" in result
+
+    def test_valueless_char_on_crlf_not_duplicated(self) -> None:
+        text = "0 HEAD\r\n1 CHAR\r\n0 TRLR\r\n"
+        result = update_char_header(text, "UTF-8")
+        char_lines = [ln for ln in result.splitlines() if ln.startswith("1 CHAR")]
+        assert char_lines == ["1 CHAR UTF-8"]
+
+    def test_valueless_char_on_cr_only_not_duplicated(self) -> None:
+        text = "0 HEAD\r1 CHAR\r0 TRLR\r"
+        result = update_char_header(text, "UTF-8")
+        char_lines = [ln for ln in result.splitlines() if ln.startswith("1 CHAR")]
+        assert char_lines == ["1 CHAR UTF-8"]
+
+    def test_valued_char_on_crlf_replaced_in_place(self) -> None:
+        text = "0 HEAD\r\n1 CHAR ANSEL\r\n0 TRLR\r\n"
+        result = update_char_header(text, "UTF-8")
+        assert result == "0 HEAD\r\n1 CHAR UTF-8\r\n0 TRLR\r\n"
+
+    def test_head_as_last_line_gets_terminator(self) -> None:
+        text = "0 HEAD"
+        result = update_char_header(text, "UTF-8")
+        assert result == "0 HEAD\n1 CHAR UTF-8\n"
 
 
 # ---------------------------------------------------------------------------
@@ -903,3 +940,77 @@ class TestConvertRun:
         # ANSEL codec decodes \xe2 + e as e + combining acute (NFD).
         # run() normalizes ANSEL sources to NFC by default.
         assert "\u00e9" in content or "e\u0301" in content
+
+
+BROKEN_CHAR_GED = (
+    "0 HEAD\n1 SOUR TEST\n1 CHAR FOOBAR\n" "0 @I1@ INDI\n1 NAME John /Smith/\n0 TRLR\n"
+)
+
+
+class _FakeTtyStream(io.StringIO):
+    """Stand-in for a terminal-attached stream, without the pty machinery."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+# ---------------------------------------------------------------------------
+# TestConvertBrokenCharHeader
+# ---------------------------------------------------------------------------
+
+
+class TestConvertBrokenCharHeader:
+    def test_from_override_rescues_unknown_charset(self, tmp_path: Path) -> None:
+        src = tmp_path / "broken.ged"
+        src.write_text(BROKEN_CHAR_GED, encoding="ascii")
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out, from_encoding="ascii"))
+        assert code == EXIT_SUCCESS
+        assert "1 CHAR UTF-8" in out.read_text(encoding="utf-8")
+
+    def test_unknown_charset_without_override_suggests_from(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = tmp_path / "broken.ged"
+        src.write_text(BROKEN_CHAR_GED, encoding="ascii")
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out))
+        assert code == EXIT_ERROR
+        captured = capsys.readouterr()
+        assert "FOOBAR" in captured.err
+        assert "--from" in captured.err
+
+    def test_error_text_is_sanitized(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The charset name is echoed back from file content, so it must not be
+        # able to smuggle ANSI escapes into the terminal.
+        src = tmp_path / "escape.ged"
+        src.write_text(
+            "0 HEAD\n1 SOUR TEST\n1 CHAR \x1b[31mBAD\n0 TRLR\n", encoding="ascii"
+        )
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out))
+        assert code == EXIT_ERROR
+        assert "\x1b[" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# TestConvertColorStream
+# ---------------------------------------------------------------------------
+
+
+class TestConvertColorStream:
+    def test_no_ansi_on_stdout_when_only_stderr_is_a_tty(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(sys, "stderr", _FakeTtyStream())
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out, no_color=False))
+        assert code == EXIT_SUCCESS
+        assert "\x1b[" not in capsys.readouterr().out

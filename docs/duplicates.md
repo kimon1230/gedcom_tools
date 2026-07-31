@@ -23,6 +23,8 @@ gedcom-tools duplicates <file> [options]
 | `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
 | `--reject-sex-mismatch` | Treat sex mismatches as hard reject (score 0.0) |
 | `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ## How It Works
 

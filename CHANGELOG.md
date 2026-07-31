@@ -7,11 +7,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [1.2.1]
 
 ### Fixed
+- `convert` could silently corrupt the file it wrote. On a file whose line endings were mixed, inserting a missing `1 CHAR` header sliced the first character off the following line; and a valueless `1 CHAR` line was not recognised on CRLF or CR input, so a second one was appended next to it. The header regexes are now line-ending agnostic and reuse the terminator the HEAD record actually carries
+- `convert --from` could not rescue the broken-header files it exists for. Encoding detection ran before the override was consulted and raised an error the command did not catch, so `--from ascii` on a file declaring an unknown charset still failed. Detection is now skipped entirely when `--from` is given, and the failure without it names `--from` as the remedy
+- Piping any command into a consumer that stops reading — `| head`, for instance — exited **120** instead of 0. `BrokenPipeError` reached the generic error handler, and the interpreter then failed to flush stdout at shutdown
+- Records referenced only by a pointer nested three or more levels deep inside an individual or family were reported as orphaned. Reference collection stopped one level below the level-1 tag while the generic path recursed fully, so a note cited under a source under a birth event looked unused
+- `filter` and `convert` wrote ANSI colour codes into redirected output. Both selected colours based on whether *stderr* was a terminal while printing their results to *stdout* — the only two of ten commands to do so
+- `convert` reported the wrong command name when its output path matched its input, telling the user "Filter always produces a new file"
+- `export` accepted `--format` in a way that meant three different things depending on where it appeared: before the subcommand it silently produced CSV when `text` was requested and rejected `csv` outright, while after the subcommand `csv` worked. A `--to {csv,json}` flag now selects the format, `--format` remains as an alias so existing scripts keep working, and `--to` wins when both are given
+- `languages` silently continued when it could not detect a file's encoding, where `stats` warned about the same input. It now catches the same specific errors and prints the same warning
+- Error messages from nine commands were printed without the escape-sequence stripping the tool already applies elsewhere, so control characters embedded in a filename or in GEDCOM content could reach the terminal unfiltered
+- Unexpected errors printed only the message, with no exception type and no indication that `--verbose` shows a traceback
 - `--ascii` (and `GEDCOM_TOOLS_ASCII`) now reaches every decoration, not just the validation output. Six modules drew their separators from hardcoded characters and ignored the flag entirely: the `languages` table rule (53 box-drawing characters, so the whole table collapsed into a row of boxes on a console whose font lacks them), the `↔` pair separator and `×` score multiplier in `compare` and `duplicates`, and the `→` conversion arrows in `convert --quiet` and `filter --quiet`. These were written as `\uXXXX` escapes rather than literal characters, which is why the 1.2.0 sweep missed them
 
 ### Changed
 - Em-dashes in message prose are now written `--` in both Unicode and ASCII mode, for consistency with the `-- use --limit 0 for all` wording that `compare` already used. Affects the `--dry-run` notices in `convert` and `filter`, the truncation notice in `duplicates`, the "no HEAD record" error from `convert`, and two `search` query-validation errors. The `languages` event separator keeps its em-dash in Unicode mode — it is a field separator and now follows `--ascii` like the other decorations
 - Added a regression test that walks `src/` and rejects new non-ASCII string literals outside a small allowlist, so the next hardcoded glyph fails in CI rather than shipping
+- `ansel` is now a declared dependency. It was imported directly by the conversion code but reached the install only because `ged4py` happened to require it, so a future `ged4py` release dropping that edge would have broken `gedcom-tools convert` at import time
+- Startup is roughly twice as fast — `gedcom-tools --version` drops from about 0.6 s to 0.3 s. The language-detection model loader was imported at module scope and pulled an HTTP stack in on every invocation; it is now loaded on first use
+- Reference documentation for `--ascii` and `--no-color` was missing from six command pages and is now present on all of them
+
+### Internal
+- A test covering error propagation could never fail: its only assertion sat inside a `try`/`except Exception`, which swallowed the `AssertionError`. The ruff rules that catch this pattern (`S110`, `BLE001`) are now enabled
+- Two regression tests against the reference sample file had never executed — the fixture path was wrong, so they skipped on every run since they were written. Both pass now, and the suite has no skipped tests on Linux
+- Three statistics tests asserted only inside truthiness guards, so they stayed green if the statistic disappeared entirely; two of their fixtures were also missing the family links needed to reach the code under test at all
+- The GEDCOM tag sets shared by `stats` and `languages` were duplicated verbatim in both modules and have been hoisted to a single definition
+- CI caches the 126 MB language-detection model on the Linux jobs, so a third-party CDN outage no longer turns into a failed build
 
 ## [1.2.0]
 

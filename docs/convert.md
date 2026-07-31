@@ -29,7 +29,7 @@ gedcom-tools convert <file> --to <encoding> -o <output> [options]
 | `-v, --verbose` | Show progress phases with timing |
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
-| `--ascii` | ASCII-only progress decorations (`[OK]`, `[!]`) |
+| `--ascii` | ASCII-only decorations in progress output and results (the `->` in the conversion line follows it) |
 
 ### Examples
 
@@ -58,7 +58,8 @@ gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged --force
 The conversion pipeline:
 
 1. **Detect encoding** — auto-detects the source encoding from the CHAR header
-   and BOM, or uses the `--from` override.
+   and BOM. When `--from` is given this step is skipped entirely, so a file
+   whose CHAR header is unreadable can still be converted.
 2. **Read and decode** — reads the entire file as raw bytes, strips any BOM,
    and decodes using the resolved source codec.
 3. **Normalize** — applies NFC normalization when the source is ANSEL (which
@@ -250,7 +251,9 @@ Appends `(dry run -- no file written)` to the output. No file is created.
   is actually Latin-1, auto-detection returns UTF-8 and decoding fails. The
   error message suggests `--from` as the fix.
 - **Non-standard CHAR values** — values like `ANSI` or `IBM WINDOWS` are not
-  in the auto-detection map. Use `--from` to specify the actual codec.
+  in the auto-detection map. Use `--from` to specify the actual codec; it
+  bypasses header detection rather than overriding its result, so an
+  unrecognised CHAR value cannot fail the command.
 
 ## Related Commands
 

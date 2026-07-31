@@ -1,8 +1,14 @@
+import io
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from gedcom_tools import __version__
 from gedcom_tools.cli import main
-from gedcom_tools.constants import EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.commands import stats
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 
 
 def test_version(capsys):
@@ -93,7 +99,6 @@ def test_quiet_mode_valid_file_no_output(temp_gedcom_file, capsys):
 
 def test_quiet_mode_errors_only(tmp_path, capsys):
     """Quiet mode shows only errors, not warnings or file info."""
-    from gedcom_tools.constants import EXIT_ERROR
 
     # Create file with an error (unresolved xref)
     ged = tmp_path / "bad.ged"
@@ -233,7 +238,6 @@ def test_isolated_no_color(sample_gedcom_path):
 
 def test_validate_royal92_ansel(capsys):
     """ANSEL-encoded royal92.ged should not produce E009."""
-    from pathlib import Path
 
     from gedcom_tools.constants import EXIT_ERROR
 
@@ -261,3 +265,69 @@ class TestAsciiFlag:
         monkeypatch.setenv("GEDCOM_TOOLS_ASCII", "1")
         assert main(["--no-color", "validate", str(temp_gedcom_file)]) == 0
         assert "[OK] Valid" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Failure paths
+# ---------------------------------------------------------------------------
+
+# Run the CLI the way a shell would, without depending on the console script
+# being on PATH in whatever environment the suite is running in.
+_RUN_CLI = "from gedcom_tools.cli import main; raise SystemExit(main())"
+
+
+def test_broken_pipe_exits_success(tmp_path):
+    """`gedcom-tools ... | head -1` must not report failure.
+
+    Needs a real pipe: the interpreter's shutdown flush is part of what goes
+    wrong, and that only happens in a separate process.
+    """
+    sample = Path(__file__).parent / "fixtures" / "555sample.ged"
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _RUN_CLI,
+            "--format",
+            "json",
+            "convert",
+            str(sample),
+            "--to",
+            "utf-8",
+            "--output",
+            str(tmp_path / "out.ged"),
+            "--dry-run",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    # Closing the read end is head walking away once it has the line it
+    # wanted: every later write on the child's side gets EPIPE.
+    assert proc.stdout is not None
+    proc.stdout.close()
+    assert proc.wait(timeout=120) == EXIT_SUCCESS
+
+
+def test_broken_pipe_handler_survives_fdless_stdout(monkeypatch, tmp_path):
+    """The devnull redirect must not blow up when stdout has no real fd."""
+
+    def burst(args):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(stats, "run", burst)
+    # StringIO.fileno() raises io.UnsupportedOperation; a captured or wrapped
+    # stdout behaves the same way, and there is no fd to redirect anyway.
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_SUCCESS
+
+
+def test_unexpected_error_names_the_exception(monkeypatch, sample_gedcom_path, capsys):
+    def boom(args):
+        raise KeyError("indi_count")
+
+    monkeypatch.setattr(stats, "run", boom)
+
+    assert main(["stats", str(sample_gedcom_path)]) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "KeyError: 'indi_count'" in err
+    assert "--verbose" in err

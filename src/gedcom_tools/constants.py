@@ -21,3 +21,46 @@ MAX_SPOUSAL_AGE_GAP = 50
 
 # File size limit for byte-level operations (filter, convert)
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB
+
+# Tags on INDI sub-records that are NOT events/attributes.
+# Shared by the languages command and the stats collector so both agree on
+# what counts as an event when attributing notes.
+INDI_NON_EVENT_TAGS = frozenset(
+    {
+        "NAME",
+        "SEX",
+        "NOTE",
+        "FAMC",
+        "FAMS",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "RFN",
+        "AFN",
+        "REFN",
+        "RIN",
+        "ALIA",
+        "ANCI",
+        "DESI",
+        "SUBM",
+        "ASSO",
+        "RESN",
+    }
+)
+
+# Tags on FAM sub-records that are NOT events
+FAM_NON_EVENT_TAGS = frozenset(
+    {
+        "HUSB",
+        "WIFE",
+        "CHIL",
+        "NCHI",
+        "NOTE",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "REFN",
+        "RIN",
+        "SUBM",
+    }
+)

@@ -24,6 +24,7 @@ def _write_ged(path: Path, content: str) -> Path:
 def _make_args(
     file_path: Path,
     fmt: str = "text",
+    to: str | None = None,
     table: str = "individuals",
     no_bom: bool = False,
     output: Path | None = None,
@@ -46,8 +47,11 @@ def _make_args(
         verbose=verbose,
         no_color=no_color,
     )
+    # Both flags use argparse.SUPPRESS, so they are absent unless given.
     if fmt != "text":
         ns.format = fmt
+    if to is not None:
+        ns.to = to
     return ns
 
 
@@ -296,3 +300,65 @@ class TestRegression:
         assert data["meta"]["family_count"] == 2
         assert len(data["individuals"]) == 3
         assert len(data["families"]) == 2
+
+
+class TestFormatResolution:
+    """`--to` is the real flag; `--format` stays as a hidden alias."""
+
+    def test_to_json(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert main(["export", "--to", "json", str(ged)]) == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["individuals"]) == 2
+
+    def test_subparser_format_json_still_works(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert main(["export", "--format", "json", str(ged)]) == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["individuals"]) == 2
+
+    def test_global_format_json_honoured(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert main(["--format", "json", "export", str(ged)]) == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert len(data["individuals"]) == 2
+
+    def test_to_wins_over_format(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        code = main(["export", "--format", "json", "--to", "csv", str(ged)])
+        assert code == EXIT_SUCCESS
+        out = capsys.readouterr().out
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[0][0] == "xref"
+
+    def test_run_level_to_overrides_format(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert run(_make_args(ged, fmt="json", to="csv")) == EXIT_SUCCESS
+        rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
+        assert rows[0][0] == "xref"
+
+    def test_global_text_means_csv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert main(["--format", "text", "export", str(ged)]) == EXIT_SUCCESS
+        rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
+        assert rows[0][0] == "xref"

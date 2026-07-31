@@ -269,11 +269,12 @@ class TestCheckOutputSafety:
         *,
         force: bool = False,
         dry_run: bool = False,
+        command: str = "Filter",
     ) -> str | None:
         from gedcom_tools.utils import check_output_safety
 
         return check_output_safety(
-            input_path, output_path, force=force, dry_run=dry_run
+            input_path, output_path, force=force, dry_run=dry_run, command=command
         )
 
     def test_safe_path_returns_none(self, tmp_path: Path) -> None:
@@ -335,6 +336,22 @@ class TestCheckOutputSafety:
         result = self._check(inp, inp, dry_run=True)
         assert result is not None
         assert "resolves to the input" in result
+
+    def test_message_names_the_calling_command(self, tmp_path: Path) -> None:
+        inp = tmp_path / "file.ged"
+        inp.write_text("data", encoding="utf-8")
+        result = self._check(inp, inp, command="Convert")
+        assert result is not None
+        assert "Convert always produces a new file." in result
+        assert "Filter" not in result
+
+    def test_command_name_in_resolve_fallback(self, tmp_path: Path) -> None:
+        # samefile() raises FileNotFoundError when the path does not exist,
+        # so this drives the resolve() branch rather than the stat comparison.
+        missing = tmp_path / "not-created-yet.ged"
+        result = self._check(missing, missing, command="Convert")
+        assert result is not None
+        assert "Convert always produces a new file." in result
 
 
 class TestSanitizeError:

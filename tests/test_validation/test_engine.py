@@ -111,6 +111,32 @@ class TestValidateFile:
         # NOTE @N1@ is referenced directly by INDI, should not be orphaned
         assert len(orphan_warnings) == 0
 
+    def test_deeply_nested_note_reference_not_orphaned(self, tmp_path):
+        ged = tmp_path / "nested_note.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME John /Doe/\n"
+            "1 BIRT\n"
+            "2 SOUR @S1@\n"
+            "3 NOTE @N1@\n"
+            "0 @S1@ SOUR\n"
+            "1 TITL Parish register\n"
+            "0 @N1@ NOTE Cited in the baptism entry.\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        # @N1@ is cited at level 3 under BIRT/SOUR, so it is not orphaned
+        orphan_warnings = [
+            i for i in result.issues if i.code == ErrorCode.W010_ORPHANED_NOTE
+        ]
+        assert orphan_warnings == []
+
 
 class TestQuickMode:
     def test_quick_mode_stops_on_first_error(self):

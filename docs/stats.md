@@ -16,6 +16,8 @@ gedcom-tools stats <file> [options]
 | `--top N` | Number of items in top-N lists (default: 10) |
 | `-v, --verbose` | Show timing information |
 | `-q, --quiet` | One-line summary of record counts |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ### Quiet Mode
 

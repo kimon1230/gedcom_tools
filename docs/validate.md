@@ -15,6 +15,8 @@ gedcom-tools validate <file> [options]
 | `--quick` | Fail fast on first error (default) |
 | `--full` | Collect all errors with IDs and line numbers |
 | `--strict {5.5.1,5.5.5}` | Validate against a specific GEDCOM version |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ### Modes
 
@@ -89,6 +91,8 @@ Warnings indicate potential issues that don't make the file invalid.
 | W013 | **Orphaned REPO** - REPO (repository) record not referenced |
 | W014 | **Isolated individual** - INDI with no family connections |
 | W015 | **Empty family** - FAM with no HUSB, WIFE, or CHIL |
+
+A record counts as referenced if a pointer to it appears anywhere inside another record, at any nesting depth — a NOTE cited under a SOUR under a BIRT event is not orphaned.
 
 ### Reference Warnings (W016-W017)
 

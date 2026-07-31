@@ -508,3 +508,56 @@ class TestIsolatedCLI:
         f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
         with patch("os.access", return_value=False):
             assert main(["isolated", str(f)]) == 1
+
+
+class TestErrorSanitization:
+    """The generic run() handlers print exception text derived from GEDCOM
+    content and filenames, so an unsanitized print is a terminal-injection
+    vector. sanitize_error() exists for this; these handlers were bypassing it.
+
+    One command stands in for all eight - the edit is one identical line in
+    each, so parametrizing across them would test the same line eight times.
+    """
+
+    def test_ansi_escape_stripped_from_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = tmp_path / "hostile.ged"
+        f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
+
+        boom = RuntimeError("\x1b[31mred\x1b[0m ‮reversed")
+        with patch("gedcom_tools.commands.isolated._collect_data", side_effect=boom):
+            assert main(["isolated", str(f)]) == 1
+
+        err = capsys.readouterr().err
+        assert "\x1b[" not in err
+        assert "‮" not in err
+        assert "red" in err  # the message itself still reaches the user
+
+
+class TestBrokenPipeNotSwallowed:
+    """cli._run_command turns BrokenPipeError into a clean exit, but only if it
+    actually reaches cli. Each command's generic `except Exception` would have
+    caught it first and reported a closed pipe as a command failure, which is
+    the reader-already-gone case rather than the `| head -1` case.
+    """
+
+    def test_broken_pipe_propagates_out_of_run(self, tmp_path: Path) -> None:
+        f = tmp_path / "t.ged"
+        f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
+
+        from gedcom_tools.commands import isolated
+
+        with patch.object(
+            isolated, "_collect_data", side_effect=BrokenPipeError(32, "Broken pipe")
+        ):
+            with pytest.raises(BrokenPipeError):
+                isolated.run(
+                    __import__("argparse").Namespace(
+                        file=f,
+                        format="text",
+                        quiet=False,
+                        verbose=False,
+                        no_color=True,
+                    )
+                )

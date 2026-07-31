@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gedcom_tools.commands.stats import (
     CoverageStats,
     FamilyData,
@@ -16,6 +18,7 @@ from gedcom_tools.commands.stats import (
     StatsResult,
     TimelineEntry,
 )
+from gedcom_tools.constants import EXIT_ERROR
 from gedcom_tools.progress import Colors
 from gedcom_tools.utils import EncodingInfo
 
@@ -1126,6 +1129,9 @@ class TestEdgeCases:
         assert result.family_size is None or result.family_size.sample_size == 0
 
     def test_implausible_ages_filtered(self, tmp_path: Path) -> None:
+        # @I1@/@I2@ marry at 5 and 0; @I3@/@I4@ marry at 35 and 25. The second
+        # couple is the control: without it a regression that stopped emitting
+        # the statistic altogether would look identical to correct filtering.
         gedcom = tmp_path / "implausible.ged"
         gedcom.write_text(
             """\
@@ -1139,14 +1145,33 @@ class TestEdgeCases:
 1 SEX M
 1 BIRT
 2 DATE 1850
+1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Also /Young/
 1 SEX F
 1 BIRT
 2 DATE 1855
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Plausible /Groom/
+1 SEX M
+1 BIRT
+2 DATE 1820
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Plausible /Bride/
+1 SEX F
+1 BIRT
+2 DATE 1830
+1 FAMS @F2@
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I2@
+1 MARR
+2 DATE 1855
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
 1 MARR
 2 DATE 1855
 0 TRLR
@@ -1156,20 +1181,19 @@ class TestEdgeCases:
 
         result = _collect(gedcom)
 
-        if result.age_at_first_marriage:
-            male_n = (
-                result.age_at_first_marriage.male.sample_size
-                if result.age_at_first_marriage.male
-                else 0
-            )
-            female_n = (
-                result.age_at_first_marriage.female.sample_size
-                if result.age_at_first_marriage.female
-                else 0
-            )
-            assert male_n == 0 or female_n == 0
+        assert result.age_at_first_marriage is not None
+        male = result.age_at_first_marriage.male
+        female = result.age_at_first_marriage.female
+        assert male is not None
+        assert male.sample_size == 1
+        assert male.average == 35.0
+        assert female is not None
+        assert female.sample_size == 1
+        assert female.average == 25.0
 
     def test_marriage_without_spouse_birth(self, tmp_path: Path) -> None:
+        # @I1@/@I2@ have no birth dates, so their marriage yields no age.
+        # @I3@/@I4@ are the control that keeps the statistic populated.
         gedcom = tmp_path / "no_birth.ged"
         gedcom.write_text(
             """\
@@ -1181,12 +1205,31 @@ class TestEdgeCases:
 0 @I1@ INDI
 1 NAME John /Doe/
 1 SEX M
+1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Jane /Smith/
 1 SEX F
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Dated /Groom/
+1 SEX M
+1 BIRT
+2 DATE 1850
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Dated /Bride/
+1 SEX F
+1 BIRT
+2 DATE 1855
+1 FAMS @F2@
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I2@
+1 MARR
+2 DATE 1875
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
 1 MARR
 2 DATE 1875
 0 TRLR
@@ -1196,9 +1239,15 @@ class TestEdgeCases:
 
         result = _collect(gedcom)
 
-        if result.age_at_first_marriage:
-            assert result.age_at_first_marriage.male is None
-            assert result.age_at_first_marriage.female is None
+        assert result.age_at_first_marriage is not None
+        male = result.age_at_first_marriage.male
+        female = result.age_at_first_marriage.female
+        assert male is not None
+        assert male.sample_size == 1
+        assert male.average == 25.0
+        assert female is not None
+        assert female.sample_size == 1
+        assert female.average == 20.0
 
     def test_individual_without_xref_skipped(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_xref.ged"
@@ -1327,8 +1376,9 @@ class TestEdgeCases:
         result = _collect(gedcom)
 
         # John's first marriage age should be 25 (1875-1850), not 40
-        if result.age_at_first_marriage and result.age_at_first_marriage.male:
-            assert result.age_at_first_marriage.male.average == 25.0
+        assert result.age_at_first_marriage is not None
+        assert result.age_at_first_marriage.male is not None
+        assert result.age_at_first_marriage.male.average == 25.0
 
     def test_age_at_first_child_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "child_age_text.ged"
@@ -1423,20 +1473,22 @@ class TestEdgeCases:
         bad_file = tmp_path / "bad.ged"
         bad_file.write_text("not a valid gedcom file at all", encoding="utf-8")
 
-        args = Namespace(
-            file=bad_file,
-            format="text",
-            quiet=False,
-            verbose=True,
-            no_color=True,
-            top=10,
-        )
+        def make_args(*, verbose: bool) -> Namespace:
+            return Namespace(
+                file=bad_file,
+                format="text",
+                quiet=False,
+                verbose=verbose,
+                no_color=True,
+                top=10,
+            )
 
-        try:
-            result = run(args)
-            assert result != 0
-        except Exception:
-            pass
+        # Verbose keeps the traceback: the parse failure escapes run().
+        with pytest.raises(OSError, match="Unexpected EOF"):
+            run(make_args(verbose=True))
+
+        # Without it the same failure is reported as an exit code.
+        assert run(make_args(verbose=False)) == EXIT_ERROR
 
     def test_name_suffix_handling(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "suffix.ged"

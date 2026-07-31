@@ -2101,3 +2101,79 @@ class TestStatsLanguageIntegration:
             file_path=f, quiet=True, verbose=False, no_color=True
         ).collect()
         assert result.distinct_languages >= 1
+
+
+class TestEncodingDetectionFailure:
+    """The encoding warning must match what `stats` reports for the same file."""
+
+    @staticmethod
+    def _raiser(exc):
+        def _fail(_path):
+            raise exc
+
+        return _fail
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_warns_and_continues(self, tmp_path, monkeypatch, capsys):
+        from ged4py.parser import CodecError
+
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(CodecError("CHAR codec ascii is different from BOM codec")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert "Warning: Could not detect encoding:" in captured.err
+        assert "Unknown" in captured.out
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_quiet_suppresses_warning(self, tmp_path, monkeypatch, capsys):
+        from ged4py.parser import ParserError
+
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(ParserError("bad record")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=True,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        assert "Could not detect encoding" not in capsys.readouterr().err
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_unexpected_error_is_not_swallowed(self, tmp_path, monkeypatch, capsys):
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(ValueError("something else entirely")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=True,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) != EXIT_SUCCESS

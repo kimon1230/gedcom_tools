@@ -768,25 +768,18 @@ class TestJsonStructure:
 
 
 class TestSampleFile:
-    @pytest.fixture()
-    def sample_path(self) -> Path:
-        p = Path(__file__).parent / "555sample.ged"
-        if not p.exists():
-            pytest.skip("555sample.ged not available")
-        return p
-
     def test_runs_without_error(
-        self, sample_path: Path, capsys: pytest.CaptureFixture[str]
+        self, sample_gedcom_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = run(_make_args(sample_path))
+        result = run(_make_args(sample_gedcom_path))
         assert result == EXIT_SUCCESS
         output = capsys.readouterr().out
         assert "Duplicate Scan Summary" in output
 
     def test_json_valid(
-        self, sample_path: Path, capsys: pytest.CaptureFixture[str]
+        self, sample_gedcom_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = run(_make_args(sample_path, fmt="json"))
+        result = run(_make_args(sample_gedcom_path, fmt="json"))
         assert result == EXIT_SUCCESS
         data = json.loads(capsys.readouterr().out)
         assert isinstance(data["total_individuals"], int)

@@ -16,6 +16,8 @@ gedcom-tools isolated <file> [options]
 | `--format {text,json}` | Output format (default: text) |
 | `-v, --verbose` | Show timing information |
 | `-q, --quiet` | One-line summary |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ## What It Detects
 

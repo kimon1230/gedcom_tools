@@ -28,6 +28,8 @@ from gedcom_tools.commands.stats.models import (
     TimelineEntry,
 )
 from gedcom_tools.constants import (
+    FAM_NON_EVENT_TAGS,
+    INDI_NON_EVENT_TAGS,
     MAX_FIRST_CHILD_AGE,
     MAX_LIFESPAN,
     MAX_MARRIAGE_AGE,
@@ -65,47 +67,6 @@ MAX_LIFESPAN_YEARS = 110
 
 # Practical limit for place hierarchy traversal
 MAX_LOCATION_DEPTH = 10
-
-# Tags on INDI sub-records that are NOT events/attributes
-_INDI_NON_EVENT_TAGS = frozenset(
-    {
-        "NAME",
-        "SEX",
-        "NOTE",
-        "FAMC",
-        "FAMS",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "RFN",
-        "AFN",
-        "REFN",
-        "RIN",
-        "ALIA",
-        "ANCI",
-        "DESI",
-        "SUBM",
-        "ASSO",
-        "RESN",
-    }
-)
-
-# Tags on FAM sub-records that are NOT events
-_FAM_NON_EVENT_TAGS = frozenset(
-    {
-        "HUSB",
-        "WIFE",
-        "CHIL",
-        "NCHI",
-        "NOTE",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "REFN",
-        "RIN",
-        "SUBM",
-    }
-)
 
 
 class StatsCollector:
@@ -236,7 +197,7 @@ class StatsCollector:
                 for sub in rec.sub_records:
                     if sub.tag == "NOTE":
                         self._detect_note_language(sub, "stories")
-                    elif sub.tag not in _INDI_NON_EVENT_TAGS:
+                    elif sub.tag not in INDI_NON_EVENT_TAGS:
                         for subsub in sub.sub_records:
                             if subsub.tag == "NOTE":
                                 self._detect_note_language(subsub, "events")
@@ -245,7 +206,7 @@ class StatsCollector:
                 for sub in rec.sub_records:
                     if sub.tag == "NOTE":
                         self._detect_note_language(sub, "events")
-                    elif sub.tag not in _FAM_NON_EVENT_TAGS:
+                    elif sub.tag not in FAM_NON_EVENT_TAGS:
                         for subsub in sub.sub_records:
                             if subsub.tag == "NOTE":
                                 self._detect_note_language(subsub, "events")

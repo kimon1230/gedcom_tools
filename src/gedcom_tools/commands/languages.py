@@ -11,9 +11,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ged4py.model import Pointer
-from ged4py.parser import GedcomReader
+from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import (
+    EXIT_ERROR,
+    EXIT_SUCCESS,
+    EXIT_USAGE_ERROR,
+    FAM_NON_EVENT_TAGS,
+    INDI_NON_EVENT_TAGS,
+)
 from gedcom_tools.language_detect import (
     LANGUAGE_NAMES,
     MIN_TEXT_LENGTH_DEFAULT,
@@ -29,47 +35,6 @@ from gedcom_tools.utils import (
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
-
-# Tags on INDI sub-records that are NOT events/attributes
-INDI_NON_EVENT_TAGS = frozenset(
-    {
-        "NAME",
-        "SEX",
-        "NOTE",
-        "FAMC",
-        "FAMS",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "RFN",
-        "AFN",
-        "REFN",
-        "RIN",
-        "ALIA",
-        "ANCI",
-        "DESI",
-        "SUBM",
-        "ASSO",
-        "RESN",
-    }
-)
-
-# Tags on FAM sub-records that are NOT events
-FAM_NON_EVENT_TAGS = frozenset(
-    {
-        "HUSB",
-        "WIFE",
-        "CHIL",
-        "NCHI",
-        "NOTE",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "REFN",
-        "RIN",
-        "SUBM",
-    }
-)
 
 
 class EventMatch(NamedTuple):
@@ -547,7 +512,9 @@ class LanguagesCollector:
         with tracker.phase("Detecting encoding"):
             try:
                 encoding_info = detect_encoding(self.file_path)
-            except Exception:
+            except (CodecError, ParserError, IntegrityError, OSError) as e:
+                if not self.quiet:
+                    print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
                 encoding_info = EncodingInfo(encoding="Unknown")
 
         with tracker.phase("Loading language model"):
@@ -800,8 +767,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
         return EXIT_ERROR

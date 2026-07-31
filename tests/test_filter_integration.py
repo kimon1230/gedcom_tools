@@ -988,3 +988,33 @@ class TestFilterOutputPermissions:
         assert code == EXIT_SUCCESS
         mode = os.stat(out).st_mode & 0o777
         assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# TestFilterColorStream
+# ---------------------------------------------------------------------------
+
+
+class TestFilterColorStream:
+    def test_no_ansi_on_stdout_when_only_stderr_is_a_tty(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import io
+        import sys
+
+        class FakeTtyStream(io.StringIO):
+            """Stand-in for a terminal-attached stream, without the pty."""
+
+            def isatty(self) -> bool:
+                return True
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(sys, "stderr", FakeTtyStream())
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_notes=True, no_color=False))
+        assert code == EXIT_SUCCESS
+        assert "\x1b[" not in capsys.readouterr().out

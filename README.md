@@ -36,13 +36,17 @@ gedcom-tools <command> [options] <file>
 | `-q, --quiet` | Suppress non-essential output |
 | `--format {text,json}` | Output format (default: text) |
 | `--no-color` | Disable colored output |
-| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`, `<->`, `x`, `-`) instead of `✓ ✗ → ↔ × ─` |
+| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`, `<->`, `x`, `-`, `--`) instead of `✓ ✗ → ↔ × ─ —` |
 
-Redirected output is written as UTF-8 regardless of the system codepage, so
-`gedcom-tools search tree.ged 'surname=Müller' > out.txt` produces a UTF-8 file
-on Windows as well as on Unix. `--ascii` is for consoles whose fonts cannot draw
-the decorations; it can also be set with `GEDCOM_TOOLS_ASCII=1`. Setting
-`PYTHONIOENCODING` yourself takes precedence over the UTF-8 default.
+Output is safe to redirect and to pipe. It is written as UTF-8 regardless of the
+system codepage, so `gedcom-tools search tree.ged 'surname=Müller' > out.txt`
+produces a UTF-8 file on Windows as well as on Unix; and piping into a consumer
+that stops reading early — `gedcom-tools --format json stats tree.ged | head` —
+exits 0 rather than reporting a broken pipe as a failure.
+
+`--ascii` is for consoles whose fonts cannot draw the decorations; it can also
+be set with `GEDCOM_TOOLS_ASCII=1`. Setting `PYTHONIOENCODING` yourself takes
+precedence over the UTF-8 default.
 
 ### Commands
 
@@ -1082,7 +1086,8 @@ $ gedcom-tools export family.ged --format json
 
 | Option | Description |
 |--------|-------------|
-| `--format {csv,json}` | Export format (default: csv) |
+| `--to {csv,json}` | Export format (default: csv) |
+| `--format {csv,json}` | Deprecated alias for `--to`; still accepted |
 | `--table {individuals,families}` | Table to export in CSV mode (default: individuals; ignored for JSON) |
 | `--no-bom` | Omit UTF-8 BOM when writing CSV to a file |
 | `-o, --output FILE` | Write to file instead of stdout |

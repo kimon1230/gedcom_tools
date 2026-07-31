@@ -102,9 +102,16 @@ def sanitize_error(msg: str) -> str:
 
 
 def check_output_safety(
-    input_path: Path, output_path: Path, *, force: bool, dry_run: bool
+    input_path: Path,
+    output_path: Path,
+    *,
+    force: bool,
+    dry_run: bool,
+    command: str,
 ) -> str | None:
     """Return error message if output path is unsafe, or None if OK.
+
+    `command` names the caller ("Convert", "Filter") for the error text.
 
     Note: TOCTOU race between this check and the caller's write.
     Acceptable for a local CLI tool — not practically exploitable.
@@ -113,18 +120,17 @@ def check_output_safety(
     if not parent.exists():
         return f"Error: Directory {parent} does not exist"
 
+    same_file_error = (
+        "Error: Output path resolves to the input file. "
+        f"{command} always produces a new file."
+    )
     try:
         if os.path.samefile(input_path, output_path):
-            return (
-                "Error: Output path resolves to the input file. "
-                "Filter always produces a new file."
-            )
+            return same_file_error
     except OSError:
+        # samefile stats both paths, so a missing file lands here too.
         if output_path.resolve() == input_path.resolve():
-            return (
-                "Error: Output path resolves to the input file. "
-                "Filter always produces a new file."
-            )
+            return same_file_error
 
     if not dry_run and output_path.exists() and not force:
         return f"Error: {output_path} already exists. Use --force to overwrite."

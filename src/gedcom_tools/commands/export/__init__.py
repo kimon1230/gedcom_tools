@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_csv, format_json
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.progress import PhaseTracker
 from gedcom_tools.utils import validate_input_file
 
@@ -33,10 +33,18 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         help="GEDCOM file to export",
     )
     parser.add_argument(
-        "--format",
+        "--to",
         choices=["csv", "json"],
         default=argparse.SUPPRESS,
         help="Export format (default: csv)",
+    )
+    # Deprecated alias for --to. Kept working so existing scripts do not break,
+    # but hidden because it collides with the global --format.
+    parser.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--table",
@@ -86,17 +94,11 @@ def run(args: Namespace) -> int:
     output_path: Path | None = getattr(args, "output", None)
     force: bool = getattr(args, "force", False)
 
-    # Resolve export format
-    fmt = getattr(args, "format", "text")
-    if fmt == "text":
-        fmt = "csv"
-    elif fmt not in ("csv", "json"):
-        print(
-            f"Error: --format {fmt} is not valid for the export command. "
-            "Use --format csv or --format json.",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE_ERROR
+    # Resolve export format: --to wins, then --format (subparser alias or the
+    # global flag, which share one Namespace slot), then csv. A global
+    # "--format text" means "unspecified" here — export has no text output.
+    requested = getattr(args, "to", None) or getattr(args, "format", None)
+    fmt: str = requested if requested in ("csv", "json") else "csv"
 
     if err := validate_input_file(file_path):
         return err
@@ -149,8 +151,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
         return EXIT_ERROR

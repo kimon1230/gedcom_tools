@@ -19,6 +19,8 @@ gedcom-tools languages <file> [options]
 | `--min-length N` | Minimum text length for detection (default: 10). Shorter texts are skipped as unreliable |
 | `--language LANG` | Show records in a specific language (name or ISO 639-1 code) |
 | `--show-text` | Show the detected text for each match (requires `--language`) |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ## Modes
 

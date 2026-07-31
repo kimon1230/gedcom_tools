@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import sys
 from typing import TYPE_CHECKING
@@ -21,7 +22,7 @@ from gedcom_tools.commands import (
     stats,
     validate,
 )
-from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import set_ascii_mode
 
 if TYPE_CHECKING:
@@ -175,14 +176,39 @@ def _run_command(args: Namespace) -> int:
     }
 
     try:
-        return handlers[args.command](args)
+        exit_code = handlers[args.command](args)
+        # stdout is block-buffered when piped, so a closed reader normally only
+        # surfaces during the interpreter's own shutdown flush - too late to
+        # handle, and worth exit status 120. Flushing here moves the failure
+        # into this try block.
+        sys.stdout.flush()
+        return exit_code
+    except BrokenPipeError:
+        # `gedcom-tools ... | head` is a normal way to use the tool, not an
+        # error. Point the fd at devnull so the shutdown flush has somewhere
+        # harmless to go.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(devnull, sys.stdout.fileno())
+            finally:
+                os.close(devnull)
+        except (OSError, ValueError, io.UnsupportedOperation):
+            # No real fd behind stdout (pytest capture, for one). The shutdown
+            # flush cannot hit a pipe either, so there is nothing to protect.
+            pass
+        return EXIT_SUCCESS
     except Exception as e:
         if args.verbose:
             # Note: --verbose shows file paths in traceback, acceptable for local CLI
             raise
         from gedcom_tools.utils import sanitize_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        print(
+            f"Error: {type(e).__name__}: {sanitize_error(str(e))}",
+            file=sys.stderr,
+        )
+        print("Re-run with --verbose for a full traceback.", file=sys.stderr)
         return EXIT_ERROR
 
 

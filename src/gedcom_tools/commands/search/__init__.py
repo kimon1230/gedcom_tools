@@ -123,7 +123,9 @@ def run(args: Namespace) -> int:
             phonetic_algo=phonetic,
         )
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(exc))}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
     # Determine phase count for progress tracking

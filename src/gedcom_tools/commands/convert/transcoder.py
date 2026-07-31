@@ -112,8 +112,28 @@ def resolve_target_codec(target: str) -> str:
     return GEDCOM_CHARSETS[target]
 
 
-_CHAR_RE = re.compile(r"^1 CHAR(?:$| [^\r\n]*)", re.MULTILINE)
-_HEAD_RE = re.compile(r"^0 HEAD[^\r\n]*", re.MULTILINE)
+# Line anchors are EOL-agnostic: MULTILINE ^ handles LF and CRLF, the lookbehind
+# handles classic Mac CR-only files. Terminators are matched the same way so a
+# valueless "1 CHAR" is recognised regardless of the line ending that follows it.
+_LINE_START = r"(?:^|(?<=\r))"
+_CHAR_RE = re.compile(
+    _LINE_START + r"1 CHAR(?:(?=[\r\n])|$| [^\r\n]*)",
+    re.MULTILINE,
+)
+# Group 1 captures HEAD's own terminator (absent when HEAD is the final line).
+# The CRLF alternative must come first, otherwise a bare \r splits the pair.
+_HEAD_RE = re.compile(
+    _LINE_START + r"0 HEAD[^\r\n]*(\r\n|\r|\n)?",
+    re.MULTILINE,
+)
+
+
+def _dominant_eol(text: str) -> str:
+    if "\r\n" in text:
+        return "\r\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
 
 
 def update_char_header(text: str, new_char: str) -> str:
@@ -123,14 +143,19 @@ def update_char_header(text: str, new_char: str) -> str:
     if count > 0:
         return updated
 
-    eol = "\r\n" if "\r\n" in text else "\n"
     head_match = _HEAD_RE.search(text)
     if head_match is None:
         msg = "No HEAD record found -- not a valid GEDCOM file"
         raise ValueError(msg)
 
     insert_pos = head_match.end()
-    return text[:insert_pos] + eol + replacement + eol + text[insert_pos + len(eol) :]
+    eol = head_match.group(1)
+    if eol is None:
+        # HEAD is the last line and carries no terminator; supply one.
+        eol = _dominant_eol(text)
+        return text[:insert_pos] + eol + replacement + eol + text[insert_pos:]
+
+    return text[:insert_pos] + replacement + eol + text[insert_pos:]
 
 
 def count_long_lines(text: str, codec_name: str) -> tuple[int, int]:

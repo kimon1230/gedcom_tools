@@ -7,14 +7,33 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from fast_langdetect import (  # type: ignore[import-untyped]
-    LangDetectConfig,
-    LangDetector,
-)
-
 MIN_TEXT_LENGTH_DEFAULT = 10
 CONFIDENCE_FLOOR = 0.4
 MARGIN_THRESHOLD = 0.15
+
+# fast-langdetect drags in requests/urllib3 and costs a couple hundred
+# milliseconds to import, which every CLI invocation would otherwise pay.
+# The handles are resolved on first use and cached here as module attributes
+# so callers (and tests) can still reach them by name.
+LangDetectConfig: Any = None
+LangDetector: Any = None
+
+
+def _load_backend() -> None:
+    """Import fast-langdetect on first use and cache the handles."""
+    global LangDetectConfig, LangDetector
+    if LangDetectConfig is not None and LangDetector is not None:
+        return
+    from fast_langdetect import (  # type: ignore[import-untyped]
+        LangDetectConfig as _Config,
+    )
+    from fast_langdetect import LangDetector as _Detector
+
+    if LangDetectConfig is None:
+        LangDetectConfig = _Config
+    if LangDetector is None:
+        LangDetector = _Detector
+
 
 # fasttext returns "no" for Norwegian; we normalise to Bokmål.
 FASTTEXT_CODE_MAP: dict[str, str] = {
@@ -82,6 +101,7 @@ LANGUAGE_NAMES: dict[str, str] = {
 
 def _full_model_cache_dir() -> Path:
     """Return the cache directory that fast-langdetect actually uses."""
+    _load_backend()
     return Path(LangDetectConfig().cache_dir)
 
 
@@ -100,6 +120,7 @@ def _ensure_full_model(stream: Any = None) -> None:
         file=out,
         flush=True,
     )
+    _load_backend()
     config = LangDetectConfig(model="full", max_input_length=100)
     detector = LangDetector(config)
     detector.detect("test", k=1)  # triggers download
@@ -116,6 +137,7 @@ class GedcomLanguageDetector:
     ) -> None:
         self.min_length = min_length
         _ensure_full_model(stream)
+        _load_backend()
         config = LangDetectConfig(model="full", max_input_length=2000)
         self._detector = LangDetector(config)
 

@@ -156,12 +156,14 @@ def run(args: Namespace) -> int:
         print("Error: At least one filter option is required.", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    safety_err = check_output_safety(file_path, output, force=force, dry_run=dry_run)
+    safety_err = check_output_safety(
+        file_path, output, force=force, dry_run=dry_run, command="Filter"
+    )
     if safety_err is not None:
         print(safety_err, file=sys.stderr)
         return EXIT_ERROR
 
-    colors = Colors(sys.stderr, force_disable=no_color)
+    colors = Colors(sys.stdout, force_disable=no_color)
     tracker = PhaseTracker(
         4, stream=sys.stderr, no_color=no_color, quiet=quiet, verbose=verbose
     )

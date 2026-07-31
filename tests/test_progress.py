@@ -37,6 +37,11 @@ def _make_tty_stream():
     return stream
 
 
+@pytest.fixture
+def force_ascii(monkeypatch):
+    monkeypatch.setattr(progress, "_ascii_forced", True)
+
+
 @pytest.fixture(autouse=True)
 def _no_leaked_spinner_threads():
     yield
@@ -423,6 +428,18 @@ class TestAsciiMode:
         spinner._stop_event.wait = _controlled_wait(12)
         spinner._animate()
         assert set(stream.getvalue()) & set(ASCII_GLYPHS.frames)
+
+    def test_animate_renders_ascii_frames(self, force_ascii):
+        """The rendered frames come from self.glyphs, not the class-level
+        FRAMES constant, so --ascii is only proven by what hits the stream:
+        the braille set must be absent and the ASCII set must be cycling."""
+        stream = _make_tty_stream()
+        spinner = Spinner("Working", stream=stream)
+        spinner._stop_event.wait = _controlled_wait(4)
+        spinner._animate()
+        output = stream.getvalue()
+        assert len({c for c in output if c in ASCII_GLYPHS.frames}) >= 2
+        assert not set(output) & set(UNICODE_GLYPHS.frames)
 
     def test_ascii_output_encodes_to_ascii(self):
         set_ascii_mode(True)

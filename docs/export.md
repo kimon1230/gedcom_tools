@@ -7,7 +7,7 @@ tools.
 This is a **data extraction** command, distinct from the per-command
 `--format json` which formats command results. The export command produces raw
 tabular or structured data. For example, `gedcom-tools --format json stats`
-formats stats output as JSON, while `gedcom-tools export --format json` exports
+formats stats output as JSON, while `gedcom-tools export --to json` exports
 the raw individual and family records as a JSON document.
 
 ## Usage
@@ -20,7 +20,8 @@ gedcom-tools export <file> [options]
 
 | Option | Description |
 |--------|-------------|
-| `--format {csv,json}` | Export format (default: csv) |
+| `--to {csv,json}` | Export format (default: csv) |
+| `--format {csv,json}` | Deprecated alias for `--to`; still accepted |
 | `--table {individuals,families}` | Table to export in CSV mode (default: individuals; ignored for JSON) |
 | `--no-bom` | Omit UTF-8 BOM when writing CSV to a file |
 | `-o, --output FILE` | Write to file instead of stdout |
@@ -31,6 +32,13 @@ gedcom-tools export <file> [options]
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
 | `--ascii` | ASCII-only progress decorations (`[OK]`, `[!]`) |
+
+Use `--to` to choose the export format. `--format` is kept as an alias so
+existing scripts keep working, but it collides with the global `--format`, which
+only accepts `text` and `json` — so `gedcom-tools --format csv export` is a usage
+error while `gedcom-tools export --to csv` is not. When both are given, `--to`
+wins. A global `--format text` is treated as "unspecified" here, since export has
+no text form; CSV is its human-readable output.
 
 ### Examples
 
