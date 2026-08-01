@@ -11,7 +11,10 @@ from gedcom_tools.progress import Colors, glyphs
 UNLIMITED_DEPTH: int = 2**20
 
 
-@dataclass
+# GedcomLine and GedcomRecord are allocated once per input line/record, so
+# slots=True is worth roughly 30% of the parsed-file footprint. The remaining
+# models are slotted for consistency, not for the memory.
+@dataclass(slots=True)
 class GedcomLine:
     level: int
     xref: str | None
@@ -21,7 +24,7 @@ class GedcomLine:
     line_number: int
 
 
-@dataclass
+@dataclass(slots=True)
 class GedcomRecord:
     header: GedcomLine
     children: list[GedcomLine]
@@ -35,7 +38,11 @@ class GedcomRecord:
         return self.header.tag
 
 
-@dataclass
+# parser.count_records() bumps these fields via setattr() driven by
+# _TAG_TO_FIELD. Under slots that only works while every value in that mapping
+# names a field declared here -- adding a key without its field raises
+# AttributeError instead of silently creating one.
+@dataclass(slots=True)
 class RecordCounts:
     indi: int = 0
     fam: int = 0
@@ -60,7 +67,7 @@ class RecordCounts:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class FilterSpec:
     strip_custom_tags: bool = False
     strip_notes: bool = False
@@ -73,7 +80,7 @@ class FilterSpec:
     include_spouses: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class FilterResult:
     source_path: str
     output_path: str

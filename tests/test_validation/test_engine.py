@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from gedcom_tools.validation import validate_file
+from gedcom_tools.validation.engine import ValidationEngine
 from gedcom_tools.validation.issues import ErrorCode
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -672,6 +673,164 @@ class TestSexRoleMismatchIntegration:
         assert len(w029) == 1
         assert "HUSB" in w029[0].message
         assert "SEX=F" in w029[0].message
+
+
+class TestReservedEscapes:
+    """@#DGREGORIAN@ and @@ are escapes, not pointers — see GEDCOM 5.5.1 escape."""
+
+    def test_fixture_has_no_unresolved_xref_errors(self):
+        result = validate_file(
+            FIXTURES / "reserved_escape.ged", mode="full", quiet=True
+        )
+        xref_errors = [
+            i for i in result.issues if i.code == ErrorCode.E001_UNRESOLVED_XREF
+        ]
+        assert xref_errors == []
+
+    def test_fixture_validates_clean(self):
+        result = validate_file(
+            FIXTURES / "reserved_escape.ged", mode="full", quiet=True
+        )
+        assert result.success is True
+
+    def test_calendar_escape_nested_under_event(self, tmp_path):
+        ged = tmp_path / "cal_escape.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME T /P/\n"
+            "1 EVEN\n"
+            "2 TYPE @#DGREGORIAN@\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        assert [
+            i for i in result.issues if i.code == ErrorCode.E001_UNRESOLVED_XREF
+        ] == []
+
+    def test_escaped_at_sign_directly_under_indi(self, tmp_path):
+        # Level 1 NOTE takes the dedicated branch, not the recursive collector
+        ged = tmp_path / "at_escape.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME T /P/\n"
+            "1 NOTE @@\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        assert [
+            i for i in result.issues if i.code == ErrorCode.E001_UNRESOLVED_XREF
+        ] == []
+
+    def test_escaped_at_sign_directly_under_fam(self, tmp_path):
+        ged = tmp_path / "fam_at_escape.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME T /P/\n"
+            "1 FAMS @F1@\n"
+            "0 @F1@ FAM\n"
+            "1 HUSB @I1@\n"
+            "1 NOTE @@\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        assert [
+            i for i in result.issues if i.code == ErrorCode.E001_UNRESOLVED_XREF
+        ] == []
+
+    def test_real_xrefs_alongside_escapes_still_resolve(self):
+        # No W014 means the FAMS/HUSB/WIFE pointers were collected as usages
+        result = validate_file(
+            FIXTURES / "reserved_escape.ged", mode="full", quiet=True
+        )
+        assert [
+            i for i in result.issues if i.code == ErrorCode.W014_ISOLATED_INDI
+        ] == []
+
+    def test_genuinely_unresolved_reference_still_errors(self, tmp_path):
+        ged = tmp_path / "mixed.ged"
+        ged.write_text(
+            "0 HEAD\n"
+            "1 SOUR Test\n"
+            "1 GEDC\n"
+            "2 VERS 5.5.1\n"
+            "1 CHAR UTF-8\n"
+            "0 @I1@ INDI\n"
+            "1 NAME T /P/\n"
+            "1 NOTE @@\n"
+            "1 NOTE @N9@\n"
+            "1 EVEN\n"
+            "2 TYPE @#DGREGORIAN@\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        xref_errors = [
+            i for i in result.issues if i.code == ErrorCode.E001_UNRESOLVED_XREF
+        ]
+        assert len(xref_errors) == 1
+        assert "@N9@" in xref_errors[0].message
+
+
+class TestExtractXrefGuard:
+    def test_calendar_escape_rejected(self):
+        assert ValidationEngine._extract_xref("@#DGREGORIAN@") is None
+
+    def test_alternate_calendar_escapes_rejected(self):
+        for escape in ("@#DJULIAN@", "@#DHEBREW@", "@#DFRENCH R@", "@#DROMAN@"):
+            assert ValidationEngine._extract_xref(escape) is None
+
+    def test_double_at_rejected(self):
+        assert ValidationEngine._extract_xref("@@") is None
+
+    def test_bare_at_rejected(self):
+        assert ValidationEngine._extract_xref("@") is None
+
+    def test_empty_string_rejected(self):
+        assert ValidationEngine._extract_xref("") is None
+
+    def test_individual_pointer_passes(self):
+        assert ValidationEngine._extract_xref("@I1@") == "@I1@"
+
+    def test_family_pointer_passes(self):
+        assert ValidationEngine._extract_xref("@F1@") == "@F1@"
+
+    def test_single_character_pointer_passes(self):
+        assert ValidationEngine._extract_xref("@N@") == "@N@"
+
+    def test_none_passes_through(self):
+        # ged4py yields None for BIRT/DEAT/BURI values
+        assert ValidationEngine._extract_xref(None) is None
+
+    def test_name_tuple_passes_through(self):
+        # ged4py yields (given, surname, suffix) for NAME
+        assert ValidationEngine._extract_xref(("Robert Eugene", "Williams", "")) is None
+
+    def test_plain_text_value_passes_through(self):
+        assert ValidationEngine._extract_xref("Cited in the baptism entry.") is None
+
+    def test_object_with_xref_id_still_resolved(self):
+        class Pointer:
+            xref_id = "@S1@"
+
+        assert ValidationEngine._extract_xref(Pointer()) == "@S1@"
 
 
 class TestEncodingErrors:

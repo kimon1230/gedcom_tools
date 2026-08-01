@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from functools import lru_cache
 
 from gedcom_tools.commands.search.models import (
@@ -13,6 +14,23 @@ from gedcom_tools.commands.search.models import (
 from gedcom_tools.utils import normalize_compare
 
 _RELATIONSHIP_FIELDS = frozenset({"ancestor", "descendant"})
+
+
+def _fold_marks(text: str) -> str:
+    """Strip combining marks so a pattern lines up with normalize_compare().
+
+    Case is deliberately left alone — the regex is compiled with IGNORECASE,
+    and lowercasing here would turn negated classes such as \\S or \\W into
+    their positive counterparts.
+
+    Folding rewrites character-class endpoints as well as literals, so a range
+    with accented bounds may end up invalid ([é-Ā] -> [e-A]) or silently
+    narrowed ([à-å] -> [a-a]). The narrowing is an accepted trade-off; callers
+    must fall back to the unfolded pattern when the folded one will not
+    compile.
+    """
+    nfd = unicodedata.normalize("NFD", unicodedata.normalize("NFC", text))
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn")
 
 
 @lru_cache(maxsize=256)
@@ -32,7 +50,14 @@ def _wildcard_to_regex(pattern: str) -> re.Pattern[str]:
 
 @lru_cache(maxsize=256)
 def _compile_regex(pattern: str) -> re.Pattern[str]:
-    return re.compile(pattern, re.IGNORECASE)
+    """Compile a user regex against diacritic-folded haystacks.
+
+    Cached on the raw pattern, so folded and unfolded forms never collide.
+    """
+    try:
+        return re.compile(_fold_marks(pattern), re.IGNORECASE)
+    except re.error:
+        return re.compile(pattern, re.IGNORECASE)
 
 
 def _get_match_type(term: SearchTerm, query: SearchQuery) -> str:

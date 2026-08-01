@@ -413,3 +413,38 @@ class TestSanitizeError:
         assert "\x00" not in result
         assert "\u202e" not in result
         assert "\u200e" not in result
+
+
+class TestReportError:
+    def _report(self, e: Exception, capsys) -> str:
+        from gedcom_tools.utils import report_error
+
+        report_error(e)
+        return capsys.readouterr().err
+
+    def test_names_the_exception_type(self, capsys) -> None:
+        err = self._report(ValueError("bad year"), capsys)
+        assert err.splitlines()[0] == "Error: ValueError: bad year"
+
+    def test_key_error_repr_is_still_readable(self, capsys) -> None:
+        # str(KeyError) quotes the key, so a bare "Error: 'x'" would be useless.
+        err = self._report(KeyError("indi_count"), capsys)
+        assert err.splitlines()[0] == "Error: KeyError: 'indi_count'"
+
+    def test_verbose_hint_follows(self, capsys) -> None:
+        err = self._report(RuntimeError("nope"), capsys)
+        assert err.splitlines()[1] == "Re-run with --verbose for a full traceback."
+
+    def test_message_is_sanitized(self, capsys) -> None:
+        err = self._report(ValueError("\x1b[31mred\x00\u202eflip"), capsys)
+        assert err.splitlines()[0] == "Error: ValueError: redflip"
+
+    def test_empty_message(self, capsys) -> None:
+        err = self._report(RuntimeError(), capsys)
+        assert err.splitlines()[0] == "Error: RuntimeError: "
+
+    def test_nothing_goes_to_stdout(self, capsys) -> None:
+        from gedcom_tools.utils import report_error
+
+        report_error(ValueError("boom"))
+        assert capsys.readouterr().out == ""

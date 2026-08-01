@@ -118,15 +118,22 @@ def run(args: Namespace) -> int:
 
     # Same-file detection
     try:
-        if os.path.samefile(file_a, file_b):
+        same = os.path.samefile(file_a, file_b)
+    except OSError:
+        same = False  # Files may not exist yet (handled by validate above)
+    if same:
+        # Only samefile() belongs in a try here. BrokenPipeError is an OSError,
+        # so widening it to cover the print would drop the return with it and
+        # compare a file against itself.
+        try:
             print(
                 "Error: Both arguments point to the same file. "
                 "Did you mean to compare two different files?",
                 file=sys.stderr,
             )
-            return EXIT_USAGE_ERROR
-    except OSError:
-        pass  # Files may not exist yet (handled by validate above)
+        except OSError:
+            pass  # Dead stderr does not change the verdict.
+        return EXIT_USAGE_ERROR
 
     try:
         tracker = PhaseTracker(
@@ -222,7 +229,7 @@ def run(args: Namespace) -> int:
     except Exception as e:
         if verbose:
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR

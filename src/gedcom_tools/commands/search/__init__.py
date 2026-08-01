@@ -223,10 +223,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR

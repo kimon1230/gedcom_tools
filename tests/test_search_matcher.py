@@ -367,6 +367,48 @@ class TestRegexMatch:
         result = match_individual(ind, q)
         assert result is not None
 
+    def test_accented_pattern_agrees_with_substring_mode(self) -> None:
+        ind = _make_individual(given="Hans", surname="Müller")
+        term = _term(field="surname", value="Müller")
+        plain = match_individual(ind, _query([term]))
+        regexed = match_individual(ind, _query([term], regex_mode=True))
+        assert plain is not None
+        assert regexed is not None
+        assert regexed.details[0].matched_value == plain.details[0].matched_value
+
+    def test_accented_pattern_anchored(self) -> None:
+        ind = _make_individual(surname="Müller")
+        q = _query([_term(field="surname", value="^Müller$")], regex_mode=True)
+        assert match_individual(ind, q) is not None
+
+    def test_accented_pattern_no_false_positive(self) -> None:
+        ind = _make_individual(surname="Muller")
+        q = _query([_term(field="surname", value="^Mörser$")], regex_mode=True)
+        assert match_individual(ind, q) is None
+
+    def test_negated_class_survives_folding(self) -> None:
+        # Lowercasing the pattern would flip \S into \s and kill the match.
+        ind = _make_individual(surname="Müller")
+        q = _query([_term(field="surname", value=r"\S+")], regex_mode=True)
+        assert match_individual(ind, q) is not None
+
+    def test_uppercase_class_survives_folding(self) -> None:
+        ind = _make_individual(surname="Müller")
+        q = _query([_term(field="surname", value="[A-Z]uller")], regex_mode=True)
+        assert match_individual(ind, q) is not None
+
+    def test_accented_character_range_does_not_crash(self) -> None:
+        # Folding turns [é-Ā] into the invalid range [e-A]; the raw pattern
+        # must be used instead of raising out of the matcher.
+        ind = _make_individual(surname="Smith")
+        q = _query([_term(field="surname", value="[é-Ā]")], regex_mode=True)
+        assert match_individual(ind, q) is None
+
+    def test_accented_character_range_still_matches_raw(self) -> None:
+        ind = _make_individual(surname="Smith")
+        q = _query([_term(field="surname", value="[é-Ā]|smith")], regex_mode=True)
+        assert match_individual(ind, q) is not None
+
 
 # ---------------------------------------------------------------------------
 # Date range matching

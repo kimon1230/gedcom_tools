@@ -526,15 +526,16 @@ class LanguagesCollector:
         note_lookup: dict[str, str] = {}
         referenced_xrefs: set[str] = set()
 
-        with tracker.phase("Building note index"):
-            with GedcomReader(str(self.file_path)) as reader:
+        # One reader serves both passes — ged4py's index is lazy and seekable,
+        # so repeated records0() calls reuse it instead of re-scanning the file.
+        with GedcomReader(str(self.file_path)) as reader:
+            with tracker.phase("Building note index"):
                 for rec in reader.records0("NOTE"):
                     if rec.xref_id and rec.value:
                         note_lookup[rec.xref_id] = str(rec.value)
 
-        # Main pass: iterate INDI and FAM records
-        with tracker.phase("Analyzing text content"):
-            with GedcomReader(str(self.file_path)) as reader:
+            # Main pass: iterate INDI and FAM records
+            with tracker.phase("Analyzing text content"):
                 for rec in reader.records0("INDI"):
                     # Extract person name for filter mode
                     if self._language_filter and rec.xref_id:
@@ -774,7 +775,7 @@ def run(args: Namespace) -> int:
     except Exception as e:
         if verbose:
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR

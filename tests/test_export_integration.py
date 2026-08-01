@@ -185,6 +185,41 @@ class TestFileOutput:
         content = out_file.read_text(encoding="utf-8")
         assert "xref" in content
 
+    def test_output_onto_input_leaves_source_intact(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # --force must not let the export clobber the genealogy file it reads.
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        original = ged.read_bytes()
+        code = run(_make_args(ged, output=ged, force=True))
+        assert code == EXIT_ERROR
+        assert ged.read_bytes() == original
+        err = capsys.readouterr().err
+        assert "resolves to the input file" in err
+        assert "Export always produces a new file." in err
+        assert "Error: Error:" not in err
+
+    def test_output_onto_input_via_relative_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same file reached by a different spelling still has to be caught.
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        original = ged.read_bytes()
+        monkeypatch.chdir(tmp_path)
+        code = run(_make_args(ged, output=Path("test.ged"), force=True))
+        assert code == EXIT_ERROR
+        assert ged.read_bytes() == original
+
+    def test_missing_output_directory(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        missing_dir = tmp_path / "nope"
+        code = run(_make_args(ged, output=missing_dir / "out.csv"))
+        assert code == EXIT_ERROR
+        err = capsys.readouterr().err
+        assert f"Error: Directory {missing_dir} does not exist" in err
+
 
 class TestRedaction:
     def test_redact_living(
@@ -362,3 +397,53 @@ class TestFormatResolution:
         assert main(["--format", "text", "export", str(ged)]) == EXIT_SUCCESS
         rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
         assert rows[0][0] == "xref"
+
+    def test_subparser_format_text_accepted(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The alias used to reject "text" with a usage error, naming an option
+        # --help does not even show.
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        assert main(["export", str(ged), "--format", "text"]) == EXIT_SUCCESS
+        rows = list(csv.reader(io.StringIO(capsys.readouterr().out)))
+        assert rows[0][0] == "xref"
+
+    def test_format_text_matches_format_csv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+
+        assert main(["export", str(ged), "--format", "csv"]) == EXIT_SUCCESS
+        as_csv = capsys.readouterr().out
+
+        assert main(["export", str(ged), "--format", "text"]) == EXIT_SUCCESS
+        assert capsys.readouterr().out == as_csv
+
+    def test_both_format_positions_land_on_csv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Global and alias positions share one Namespace slot; the fold in run()
+        # is what makes them agree.
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+
+        assert main(["--format", "text", "export", str(ged)]) == EXIT_SUCCESS
+        global_position = capsys.readouterr().out
+
+        assert main(["export", str(ged), "--format", "text"]) == EXIT_SUCCESS
+        assert capsys.readouterr().out == global_position
+
+    def test_to_still_rejects_text(self, tmp_path: Path) -> None:
+        # --to is the visible option and text is not an export format; only the
+        # hidden alias tolerates it.
+        from gedcom_tools.cli import main
+
+        ged = _write_ged(tmp_path, MINIMAL_GED)
+        with pytest.raises(SystemExit) as exc:
+            main(["export", str(ged), "--to", "text"])
+        assert exc.value.code == 2

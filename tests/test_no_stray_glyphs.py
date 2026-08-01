@@ -25,8 +25,8 @@ ALLOWED: frozenset[tuple[str, str]] = frozenset(
         ("progress.py", "\u2500"),
         ("progress.py", "\u00d7"),
         ("progress.py", "\u2014"),
-        # Message content, emitted verbatim by format_json(). A display-only
-        # flag must never change machine-readable output.
+        # Message content, rendered in both text and JSON. A display-only flag
+        # must never change machine-readable output.
         ("validation/semantic.py", " \u2192 "),
         # BOM. Data, not decoration.
         ("commands/export/formatters.py", "\ufeff"),

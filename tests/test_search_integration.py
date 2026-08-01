@@ -796,3 +796,19 @@ class TestExitCodes:
         missing = tmp_path / "gone.ged"
         rc = main(["--no-color", "search", str(missing), "Smith"])
         assert rc != EXIT_SUCCESS
+
+    def test_broken_pipe_propagates_out_of_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `search ... | head` closes the pipe mid-write. Only cli._run_command
+        # gets to decide what that means, so run() must not absorb it.
+        from gedcom_tools.commands import search
+
+        ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME John /Smith/\n")
+
+        def burst(*args: object, **kwargs: object) -> None:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        monkeypatch.setattr(search, "collect_individuals", burst)
+        with pytest.raises(BrokenPipeError):
+            run(_args(ged, "Smith"))

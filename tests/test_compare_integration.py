@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import sys
 from pathlib import Path
 
 from gedcom_tools.commands.compare import register_subcommand, run
@@ -148,6 +150,23 @@ def _create_pair(tmp_path: Path) -> tuple[Path, Path]:
     return file_a, file_b
 
 
+class _DeadStream:
+    """A stderr whose every write fails the way a closed pipe does."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def write(self, text: str) -> int:
+        self.attempts += 1
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self) -> None:
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def isatty(self) -> bool:
+        return False
+
+
 class TestRegisterSubcommand:
     def test_parser_created(self) -> None:
         parser = argparse.ArgumentParser()
@@ -199,6 +218,31 @@ class TestValidation:
         args = _make_args(f, f)
         assert run(args) == EXIT_USAGE_ERROR
         assert "same file" in capsys.readouterr().err.lower()
+
+    def test_same_file_verdict_survives_a_dead_stderr(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # quiet=True is load-bearing: without it PhaseTracker's first write hits
+        # the closed pipe and aborts run() before it can self-compare, so the
+        # test would pass for the wrong reason.
+        f = _write_gedcom(tmp_path / "same.ged", _FILE_A_INDIVIDUALS)
+        monkeypatch.setattr(sys, "stderr", _DeadStream())
+        args = _make_args(f, f, quiet=True)
+        assert run(args) == EXIT_USAGE_ERROR
+
+    def test_dead_stderr_swallows_only_the_message(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # The guard must not reach further than the print: a comparison that
+        # never happened cannot have written to stdout.
+        f = _write_gedcom(tmp_path / "same.ged", _FILE_A_INDIVIDUALS)
+        stderr = _DeadStream()
+        monkeypatch.setattr(sys, "stderr", stderr)
+        with io.StringIO() as stdout:
+            monkeypatch.setattr(sys, "stdout", stdout)
+            assert run(_make_args(f, f, quiet=True)) == EXIT_USAGE_ERROR
+            assert stdout.getvalue() == ""
+        assert stderr.attempts == 1
 
     def test_invalid_certain_threshold(self, tmp_path: Path) -> None:
         a, b = _create_pair(tmp_path)

@@ -11,7 +11,7 @@ from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_csv, format_json
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.utils import validate_input_file
+from gedcom_tools.utils import check_output_safety, validate_input_file
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -39,10 +39,12 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         help="Export format (default: csv)",
     )
     # Deprecated alias for --to. Kept working so existing scripts do not break,
-    # but hidden because it collides with the global --format.
+    # but hidden because it collides with the global --format. It accepts the
+    # global vocabulary -- including "text" -- because both positions share one
+    # Namespace slot; run() folds "text" onto csv.
     parser.add_argument(
         "--format",
-        choices=["csv", "json"],
+        choices=["csv", "json", "text"],
         default=argparse.SUPPRESS,
         help=argparse.SUPPRESS,
     )
@@ -103,13 +105,13 @@ def run(args: Namespace) -> int:
     if err := validate_input_file(file_path):
         return err
 
-    # Overwrite protection
-    if output_path and output_path.exists() and not force:
-        print(
-            f"Error: {output_path} already exists. Use --force to overwrite.",
-            file=sys.stderr,
+    if output_path is not None:
+        safety_err = check_output_safety(
+            file_path, output_path, force=force, dry_run=False, command="Export"
         )
-        return EXIT_ERROR
+        if safety_err is not None:
+            print(safety_err, file=sys.stderr)
+            return EXIT_ERROR
 
     try:
         tracker = PhaseTracker(
@@ -158,7 +160,7 @@ def run(args: Namespace) -> int:
     except Exception as e:
         if verbose:
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR

@@ -6,6 +6,7 @@ import argparse
 import io
 import os
 import sys
+from types import ModuleType
 from typing import TYPE_CHECKING
 
 from gedcom_tools import __version__
@@ -27,6 +28,25 @@ from gedcom_tools.progress import set_ascii_mode
 
 if TYPE_CHECKING:
     from argparse import Namespace
+
+
+# Subcommand name -> the module that owns it. Modules, not the bound `run`
+# functions: binding at import time would defeat the monkeypatching that the
+# CLI tests rely on, and a module is also what static checks over the command
+# surface need in order to find the source file.
+_HANDLERS: dict[str, ModuleType] = {
+    "validate": validate,
+    "stats": stats,
+    "isolated": isolated,
+    "languages": languages,
+    "compare": compare,
+    "search": search,
+    "relationship": relationship,
+    "duplicates": duplicates,
+    "export": export,
+    "convert": convert,
+    "filter": filter,
+}
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -160,55 +180,53 @@ def main(argv: list[str] | None = None) -> int:
     return _run_command(args)
 
 
-def _run_command(args: Namespace) -> int:
-    handlers = {
-        "validate": validate.run,
-        "stats": stats.run,
-        "isolated": isolated.run,
-        "languages": languages.run,
-        "compare": compare.run,
-        "search": search.run,
-        "relationship": relationship.run,
-        "duplicates": duplicates.run,
-        "export": export.run,
-        "convert": convert.run,
-        "filter": filter.run,
-    }
+def _silence_stdout() -> None:
+    """Point stdout's fd at devnull so the shutdown flush lands harmlessly.
 
+    Buffered output is still pending whenever a pipe breaks, and the
+    interpreter's own flush on the way out would hit the closed reader and
+    turn a clean exit into status 120.
+    """
     try:
-        exit_code = handlers[args.command](args)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, sys.stdout.fileno())
+        finally:
+            os.close(devnull)
+    except (OSError, ValueError, io.UnsupportedOperation):
+        # No real fd behind stdout (pytest capture, for one). The shutdown
+        # flush cannot hit a pipe either, so there is nothing to protect.
+        pass
+
+
+def _run_command(args: Namespace) -> int:
+    try:
+        # Annotated because attribute access on a module is Any to mypy.
+        exit_code: int = _HANDLERS[args.command].run(args)
         # stdout is block-buffered when piped, so a closed reader normally only
         # surfaces during the interpreter's own shutdown flush - too late to
         # handle, and worth exit status 120. Flushing here moves the failure
         # into this try block.
-        sys.stdout.flush()
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # The command already reached a verdict; a reader that walked away
+            # afterwards does not change it.
+            _silence_stdout()
         return exit_code
     except BrokenPipeError:
+        # The pipe closed mid-write, so the command never reached a verdict.
         # `gedcom-tools ... | head` is a normal way to use the tool, not an
-        # error. Point the fd at devnull so the shutdown flush has somewhere
-        # harmless to go.
-        try:
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            try:
-                os.dup2(devnull, sys.stdout.fileno())
-            finally:
-                os.close(devnull)
-        except (OSError, ValueError, io.UnsupportedOperation):
-            # No real fd behind stdout (pytest capture, for one). The shutdown
-            # flush cannot hit a pipe either, so there is nothing to protect.
-            pass
+        # error.
+        _silence_stdout()
         return EXIT_SUCCESS
     except Exception as e:
         if args.verbose:
             # Note: --verbose shows file paths in traceback, acceptable for local CLI
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(
-            f"Error: {type(e).__name__}: {sanitize_error(str(e))}",
-            file=sys.stderr,
-        )
-        print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR
 
 

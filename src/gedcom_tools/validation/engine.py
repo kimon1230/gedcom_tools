@@ -591,6 +591,17 @@ class ValidationEngine:
 
     @staticmethod
     def _extract_xref(value: Any) -> str | None:
+        """Extract an xref pointer, ignoring reserved GEDCOM escapes.
+
+        Values such as ``@#DGREGORIAN@`` (calendar escape) and ``@@`` (an
+        escaped literal ``@``) are delimited like pointers but are not
+        references, so treating them as one produces a spurious E001.
+        Non-string values are passed through untouched — ged4py hands us
+        tuples for NAME and None for event tags, and pointer objects still
+        need their ``xref_id`` resolved.
+        """
+        if isinstance(value, str) and (len(value) < 3 or value[1] in "#@"):
+            return None
         return extract_xref(value)
 
     def _extract_year(self, record: Record, path: str) -> int | None:

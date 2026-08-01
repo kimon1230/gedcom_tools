@@ -1,0 +1,24 @@
+0 HEAD
+1 SOUR gedcom_tools
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+1 SUBM @U1@
+0 @U1@ SUBM
+1 NAME Test Submitter
+0 @I1@ INDI
+1 NAME Test /Person/
+1 SEX M
+1 EVEN
+2 TYPE @#DGREGORIAN@
+1 NOTE @@
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Other /Person/
+1 SEX F
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+0 TRLR

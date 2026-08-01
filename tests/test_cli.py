@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gedcom_tools import __version__
+from gedcom_tools import __version__, cli
 from gedcom_tools.cli import main
 from gedcom_tools.commands import stats
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
@@ -321,6 +321,68 @@ def test_broken_pipe_handler_survives_fdless_stdout(monkeypatch, tmp_path):
     assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_SUCCESS
 
 
+class _FlushBreaksStdout(io.StringIO):
+    """A stdout whose buffered writes only fail once the reader is gone.
+
+    Subclassing StringIO rather than mocking is deliberate: the devnull
+    redirect calls `fileno()`, and StringIO raises the
+    `io.UnsupportedOperation` that redirect already swallows.
+    """
+
+    def flush(self) -> None:
+        raise BrokenPipeError(32, "Broken pipe")
+
+
+def test_flush_broken_pipe_keeps_the_commands_exit_code(monkeypatch, tmp_path):
+    """A verdict the handler already reached must survive a closed pipe."""
+
+    def failed(args):
+        return EXIT_ERROR
+
+    monkeypatch.setattr(stats, "run", failed)
+    monkeypatch.setattr(sys, "stdout", _FlushBreaksStdout())
+    assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_ERROR
+
+
+def test_flush_broken_pipe_silences_stdout(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli, "_silence_stdout", lambda: calls.append("flush"))
+    monkeypatch.setattr(stats, "run", lambda args: EXIT_SUCCESS)
+    monkeypatch.setattr(sys, "stdout", _FlushBreaksStdout())
+
+    assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_SUCCESS
+    assert calls == ["flush"]
+
+
+def test_handler_broken_pipe_silences_stdout(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli, "_silence_stdout", lambda: calls.append("handler"))
+
+    def burst(args):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(stats, "run", burst)
+
+    assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_SUCCESS
+    assert calls == ["handler"]
+
+
+def test_flush_failure_that_is_not_a_broken_pipe_is_reported(
+    monkeypatch, tmp_path, capsys
+):
+    """Only EPIPE is benign; other flush failures still get the error path."""
+
+    class _FlushRaisesEncodingError(io.StringIO):
+        def flush(self) -> None:
+            raise UnicodeEncodeError("utf-8", "x", 0, 1, "nope")
+
+    monkeypatch.setattr(stats, "run", lambda args: EXIT_SUCCESS)
+    monkeypatch.setattr(sys, "stdout", _FlushRaisesEncodingError())
+
+    assert main(["stats", str(tmp_path / "any.ged")]) == EXIT_ERROR
+    assert "UnicodeEncodeError" in capsys.readouterr().err
+
+
 def test_unexpected_error_names_the_exception(monkeypatch, sample_gedcom_path, capsys):
     def boom(args):
         raise KeyError("indi_count")
@@ -331,3 +393,30 @@ def test_unexpected_error_names_the_exception(monkeypatch, sample_gedcom_path, c
     err = capsys.readouterr().err
     assert "KeyError: 'indi_count'" in err
     assert "--verbose" in err
+
+
+def test_handler_and_cli_render_an_error_identically(
+    monkeypatch, sample_gedcom_path, capsys
+):
+    """The same exception must look the same whoever reports it.
+
+    Which layer catches a failure is an implementation detail; a user typing
+    `stats` and a user typing anything routed through cli.py should not see
+    two different renderings of one error.
+    """
+
+    def boom(*args, **kwargs):
+        raise KeyError("indi_count")
+
+    # Reported by the command handler: stats catches it before cli.py sees it.
+    monkeypatch.setattr(stats, "StatsCollector", boom)
+    assert main(["stats", str(sample_gedcom_path)]) == EXIT_ERROR
+    handler_err = capsys.readouterr().err
+
+    # Reported by cli.py: the whole handler is gone, so nothing catches it first.
+    monkeypatch.setattr(stats, "run", boom)
+    assert main(["stats", str(sample_gedcom_path)]) == EXIT_ERROR
+    cli_err = capsys.readouterr().err
+
+    assert handler_err == cli_err
+    assert "KeyError: 'indi_count'" in handler_err

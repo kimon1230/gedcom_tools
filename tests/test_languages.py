@@ -2177,3 +2177,143 @@ class TestEncodingDetectionFailure:
             min_length=10,
         )
         assert run(args) != EXIT_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Shared-reader behaviour
+# ---------------------------------------------------------------------------
+
+NOTE_LANGUAGES_GED = FIXTURES_DIR / "note_languages.ged"
+
+
+class TestSharedReader:
+    """collect() drives the NOTE pre-pass and the INDI/FAM pass off one reader.
+
+    royal92.ged and 555sample.ged contain no NOTE lines whatsoever, so neither
+    regression corpus puts a single byte through the pre-pass. This fixture is
+    the only one that does, which makes it the guard for the merged loop.
+    """
+
+    def _collect(self, **kwargs):
+        defaults = {"quiet": True, "no_color": True}
+        defaults.update(kwargs)
+        return LanguagesCollector(NOTE_LANGUAGES_GED, **defaults).collect()
+
+    def test_regression_corpus_has_no_notes(self):
+        for name in ("royal92.ged", "555sample.ged"):
+            path = FIXTURES_DIR / name
+            if not path.exists():
+                pytest.skip(f"{name} not in fixtures")
+            assert "NOTE" not in path.read_bytes().decode("latin-1")
+
+    def test_fixture_has_level_zero_notes(self):
+        lines = NOTE_LANGUAGES_GED.read_text(encoding="utf-8").splitlines()
+        level0_notes = [ln for ln in lines if ln.startswith("0 @") and " NOTE" in ln]
+        assert len(level0_notes) == 8
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_collect_opens_one_reader(self, monkeypatch):
+        """Two of the three readers are merged. detect_encoding still opens its
+        own via utils, which this patch deliberately does not intercept."""
+        from gedcom_tools.commands import languages as languages_mod
+
+        real_reader = languages_mod.GedcomReader
+        opened: list[str] = []
+
+        def counting_reader(path, *args, **kwargs):
+            opened.append(path)
+            return real_reader(path, *args, **kwargs)
+
+        monkeypatch.setattr(languages_mod, "GedcomReader", counting_reader)
+        self._collect()
+        assert len(opened) == 1
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_note_index_survives_second_records0_call(self, monkeypatch):
+        """The pre-pass consumes records0("NOTE") first. If the shared reader
+        could not be re-iterated, the INDI/FAM pass would come back empty."""
+        result = self._collect()
+        assert result.total_texts > 0
+
+    def test_aggregate_counts(self):
+        result = self._collect()
+        assert result.total_texts == 9
+        assert result.skipped_short == 1
+        assert result.distinct_languages == 4
+        by_code = {row.code: row for row in result.rows}
+        assert by_code["en"].notes == 1
+        assert by_code["en"].stories == 2
+        assert by_code["en"].events == 1
+        assert by_code["el"].notes == 1
+        assert by_code["el"].stories == 1
+        assert by_code["el"].events == 0
+        assert by_code["de"].events == 2
+        assert by_code["fr"].events == 1
+
+    def test_pointer_notes_resolve_through_the_lookup(self):
+        """@N1@ lives after the INDI that points at it, so a story only lands
+        in the totals if the pre-pass ran to completion first."""
+        result = self._collect()
+        assert sum(row.stories for row in result.rows) == 3
+
+    def test_unreferenced_notes_classified_as_notes(self):
+        result = self._collect(language_filter="en")
+        assert result.note_xrefs == ["@N6@"]
+
+    def test_greek_filter_matches(self):
+        result = self._collect(language_filter="el")
+        assert result.person_xrefs == [("@I2@", "Ελένη Παπαδάκη")]
+        assert result.note_xrefs == ["@N7@"]
+        assert result.event_matches == []
+
+    def test_german_filter_spans_indi_and_fam(self):
+        result = self._collect(language_filter="de")
+        assert [(m.parent_xref, m.event_tag) for m in result.event_matches] == [
+            ("@F1@", None),
+            ("@I2@", "RESI"),
+        ]
+
+    def test_dangling_pointer_contributes_nothing(self):
+        """The DIV event points at @N99@, which no record ever defines. The
+        pointer is still marked referenced, so it must not resurface as an
+        unreferenced standalone note in the post-pass either."""
+        result = self._collect()
+        assert sum(row.events for row in result.rows) == 4
+        assert sum(row.notes for row in result.rows) == 2
+
+    def test_text_output_snapshot(self):
+        result = self._collect()
+        out = result.format_text(Colors(None, force_disable=True))
+        assert "Texts analyzed: 9 (1 skipped, too short)" in out
+        assert "Distinct languages: 4 (excluding unknown)" in out
+        for language in ("English", "Greek", "German", "French"):
+            assert language in out
+
+    def test_json_output_snapshot(self):
+        payload = json.loads(self._collect().format_json())
+        assert payload["mode"] == "aggregate"
+        assert payload["encoding"]["detected"] == "UTF-8"
+        assert payload["summary"] == {
+            "total_texts": 9,
+            "skipped_short": 1,
+            "distinct_languages": 4,
+            "min_length": MIN_TEXT_LENGTH_DEFAULT,
+        }
+        assert [row["code"] for row in payload["languages"]] == ["en", "el", "de", "fr"]
+
+    def test_cli_end_to_end(self):
+        assert main(["languages", str(NOTE_LANGUAGES_GED)]) == EXIT_SUCCESS
+
+    def test_verbose_reports_all_five_phases(self, capsys):
+        LanguagesCollector(
+            NOTE_LANGUAGES_GED, quiet=False, verbose=True, no_color=True
+        ).collect()
+        err = capsys.readouterr().err
+        for phase in (
+            "Detecting encoding",
+            "Loading language model",
+            "Building note index",
+            "Analyzing text content",
+            "Classifying unreferenced notes",
+        ):
+            assert phase in err

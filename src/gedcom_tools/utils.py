@@ -101,6 +101,17 @@ def sanitize_error(msg: str) -> str:
     return "".join(c for c in result if c not in _BIDI_CHARS)
 
 
+def report_error(e: Exception) -> None:
+    """Print an unexpected exception to stderr in the one house format.
+
+    Every generic ``except Exception`` handler routes through here so the same
+    failure reads the same way whichever command hit it. The type name matters:
+    a bare ``Error: 'foo'`` from a KeyError tells the user nothing.
+    """
+    print(f"Error: {type(e).__name__}: {sanitize_error(str(e))}", file=sys.stderr)
+    print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+
+
 def check_output_safety(
     input_path: Path,
     output_path: Path,
