@@ -106,7 +106,7 @@ jobs:
         run: |
           import pathlib, sys
 
-          expected = "Ανδρέου"  # Andreou in Greek
+          expected = "Ζωγράφου"  # a Greek surname, outside cp1252
           for name in ("out.txt", "out.json"):
               text = pathlib.Path(name).read_text(encoding="utf-8")
               if expected not in text:

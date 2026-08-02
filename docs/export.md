@@ -27,7 +27,7 @@ gedcom-tools export <file> [options]
 | `-o, --output FILE` | Write to file instead of stdout |
 | `--force` | Overwrite output file if it already exists |
 | `--redact-living` | Replace names and dates of estimated-living individuals |
-| `--max-age N` | Maximum age for living estimation (default: 110) |
+| `--max-age N` | Maximum plausible lifespan in years for living estimation (default: 110, minimum: 1) |
 | `-v, --verbose` | Show progress phases with timing |
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
@@ -146,7 +146,8 @@ JSON output always includes both individuals and families regardless of the
     "gedcom_tools_version": "1.0.0",
     "individual_count": 150,
     "family_count": 45,
-    "redacted_living": false
+    "redacted_living": false,
+    "redacted_count": 0
   },
   "individuals": [
     {
@@ -213,7 +214,12 @@ These fields appear in JSON but not in CSV:
 - `meta.gedcom_tools_version`: Always reflects the running version (never
   hardcoded).
 - `meta.redacted_living`: `true` when `--redact-living` was active, `false`
-  otherwise.
+  otherwise. It reports the flag, not the outcome — a file in which nobody is
+  estimated living exports `true` with nothing redacted.
+- `meta.redacted_count`: how many individuals were actually replaced with
+  `Living` placeholders. `0` when `--redact-living` was not given. Check this,
+  not `redacted_living`, to confirm redaction had an effect before publishing
+  an export.
 
 ## Living Person Estimation
 
@@ -233,16 +239,30 @@ individuals. When present, these tags override all date-based inference:
 | `_CONF_FLAG` | Personal Ancestral File (PAF) | Living (confidential) |
 | `_NLIV` | Brother's Keeper | Not living |
 
+A living tag is taken at face value, since believing it can only over-redact.
+`_NLIV` is honoured only when the same record carries independent death
+evidence — it comes from a file the tool did not write, and would otherwise be
+a switch for turning redaction off wholesale.
+
 ### Date-Based Inference
 
-When no custom tag is present, estimation falls back to dates:
+When no custom tag decides the matter, estimation falls back to dates:
 
-1. **Has death year or burial date** → not living
-2. **Birth year ≤ max_age years ago AND no death** → estimated living
-3. **Everything else** (no dates, ancient dates, unknown) → **not redacted**
+1. **Birth year more than max_age years ago** → not living, whether or not the
+   record has a death date
+2. **Has death year or burial date** → not living
+3. **Everything else, including an absent or unparseable birth date** →
+   estimated living, so **redacted**
 
-The `--max-age` option controls the threshold (default: 110 years, inclusive).
-A person born exactly `max_age` years ago is still considered possibly living.
+The `--max-age` option controls the threshold (default: 110 years, inclusive;
+minimum 1). A person born exactly `max_age` years ago is still considered
+possibly living. Values below 1 are refused: they would put every dated
+individual past the plausible lifespan and silently disable redaction.
+
+For a birth date that is a range or period (`BET 1900 AND 1995`), the **latest**
+bound drives the decision, since that is the reading under which the person may
+still be alive. The exported `birth_year` column is unaffected and keeps
+reporting the earliest bound.
 
 ### What Gets Redacted
 
@@ -250,7 +270,7 @@ A person born exactly `max_age` years ago is still considered possibly living.
 - `given_name` → `"Living"`
 - `surname`, `suffix`, dates, places, occupations → cleared (empty)
 - `alt_names`, `notes` → cleared (JSON only)
-- `xref`, `sex`, `source_count`, `famc_xref`, `fams_xrefs` → preserved
+- `xref`, `sex`, `source_count` → preserved
 - Cross-reference IDs (`famc_xref`, `fams_xrefs`) are cleared in CSV and JSON
   to prevent correlation attacks via family links
 
@@ -258,13 +278,21 @@ A person born exactly `max_age` years ago is still considered possibly living.
 - When a spouse is estimated living, their denormalized `husband_name` or
   `wife_name` is replaced with `"Living"`. Spouse xrefs (`husband_xref`,
   `wife_xref`) are cleared when the referenced individual is living.
+- `marriage_date`, `marriage_year` and `marriage_place` are cleared when
+  **either** spouse is living. One is enough: a wedding date and a named venue
+  identify the couple that married there, so leaving them next to a `"Living"`
+  placeholder — plus any unredacted child's `famc_xref` and surname — hands the
+  redacted parents straight back.
+- Child xrefs are cleared individually for children who are themselves living.
 
 ### Design Note
 
-Individuals with no birth year and no death record are **not** redacted. This
-avoids blanket-redacting poorly-sourced historical individuals (the majority of
-records in many files). If you need stricter privacy, filter by birth year in
-your downstream processing.
+Unknown means living. A wrong "living" over-redacts one row; a wrong "not
+living" publishes a real person's details, so an individual with no usable birth
+date and no death record **is** redacted. Expect substantially more redaction on
+poorly-sourced files than a birth-year-only rule would produce. If you need the
+undated rows, export without `--redact-living` and apply your own policy
+downstream.
 
 ## Date String Format
 
@@ -292,9 +320,9 @@ file permissions are managed by the OS and this step is skipped.
 ## Known Limitations
 
 - Date strings are ged4py's canonical form, not verbatim original GEDCOM text
-- `--redact-living` requires either a custom living tag or a birth year to
-  estimate living status; individuals with no birth year, no custom tag, and no
-  death year are not redacted
+- `--redact-living` errs toward redaction: an individual with no custom tag, no
+  usable birth year and no death record is redacted, so a file thin on dates
+  loses more rows than one might expect
 - Only inline NOTE text is exported; pointer-referenced notes (`NOTE @N1@`) are
   skipped
 - `--table` is ignored for JSON format (always includes both individuals and

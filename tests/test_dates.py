@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from ged4py.date import DateValue
 from ged4py.parser import GedcomReader
 
 from gedcom_tools.dates import (
@@ -11,6 +12,7 @@ from gedcom_tools.dates import (
     classify_date_precision,
     extract_month,
     extract_year_from_date,
+    extract_year_latest_from_date,
     get_century,
     is_phrase_date,
 )
@@ -137,6 +139,64 @@ class TestExtractYearFromDate:
             assert extract_year_from_date(mock_date) is None
         except ImportError:
             pytest.skip("ged4py not available")
+
+
+class _Bound:
+    def __init__(self, year: object) -> None:
+        self.year = year
+
+
+class _RangeStub:
+    """Stands in for a ged4py Range whose upper bound is unusable."""
+
+    def __init__(self, date2_year: object) -> None:
+        self.date1 = _Bound(1900)
+        self.date2 = _Bound(date2_year)
+
+
+class TestExtractYearLatest:
+    def test_none(self) -> None:
+        assert extract_year_latest_from_date(None) is None
+
+    def test_phrase_date(self) -> None:
+        assert (
+            extract_year_latest_from_date(DateValue.parse("(during the war)")) is None
+        )
+
+    def test_simple_date(self) -> None:
+        assert extract_year_latest_from_date(DateValue.parse("15 JAN 1850")) == 1850
+
+    def test_approximate_date(self) -> None:
+        assert extract_year_latest_from_date(DateValue.parse("ABT 1850")) == 1850
+
+    def test_range(self) -> None:
+        assert (
+            extract_year_latest_from_date(DateValue.parse("BET 1900 AND 1995")) == 1995
+        )
+
+    def test_period(self) -> None:
+        assert (
+            extract_year_latest_from_date(DateValue.parse("FROM 1900 TO 1995")) == 1995
+        )
+
+    def test_open_ended_period(self) -> None:
+        # "FROM 1900" has no upper bound at all
+        assert extract_year_latest_from_date(DateValue.parse("FROM 1900")) == 1900
+
+    def test_earliest_extractor_unchanged_for_range(self) -> None:
+        assert extract_year_from_date(DateValue.parse("BET 1900 AND 1995")) == 1900
+
+    def test_plain_string_range_takes_last_year(self) -> None:
+        assert extract_year_latest_from_date("BET 1900 AND 1995") == 1995
+
+    def test_plain_string_without_year(self) -> None:
+        assert extract_year_latest_from_date("sometime long ago") is None
+
+    def test_upper_bound_missing_year_falls_back(self) -> None:
+        assert extract_year_latest_from_date(_RangeStub(None)) == 1900
+
+    def test_upper_bound_unparseable_year_falls_back(self) -> None:
+        assert extract_year_latest_from_date(_RangeStub("not-a-year")) == 1900
 
 
 class TestExtractMonth:

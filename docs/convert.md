@@ -218,11 +218,17 @@ Appends `(dry run -- no file written)` to the output. No file is created.
 ## Safety
 
 - **File size limit** — input files larger than 500 MB are rejected with an
-  actionable error message showing the actual size and the limit.
+  actionable error message showing the actual size and the limit. That figure is
+  a backstop against absurd input rather than a supported size; `convert` holds
+  the whole file in memory twice over (raw bytes and decoded text), so very
+  large files will exhaust memory before reaching the limit.
 - **Output file required** — `-o` is mandatory. No stdout output for UTF-16
   targets (which are binary).
 - **Overwrite protection** — refuses to overwrite an existing file unless
   `--force` is specified.
+- **Symlink refusal** — a symlink at the output path is refused, even with
+  `--force`. Writing through a link would let a pre-planted link redirect the
+  output somewhere the user did not name. Write to the real path instead.
 - **Same-file protection** — detects when input and output are the same file
   (including via symlinks and hardlinks) and refuses. In-place conversion is
   not supported.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unicodedata
 from pathlib import Path
@@ -99,10 +100,26 @@ LANGUAGE_NAMES: dict[str, str] = {
 }
 
 
+def _cache_dir() -> Path:
+    """Return the per-user directory the language model is cached in.
+
+    fast-langdetect defaults to /tmp/fasttext-langdetect, which on a shared
+    machine any user can write to. The model is a 126 MB binary handed to
+    fasttext's native loader on nothing but a filename check, so a pre-planted
+    file there would be parsed as the real thing. A per-user path removes that.
+
+    Every LangDetectConfig in this module must go through here: the download
+    and the availability probe agreeing on one path is the whole point.
+    """
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
+    path = Path(base) / "gedcom-tools"
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return path
+
+
 def _full_model_cache_dir() -> Path:
     """Return the cache directory that fast-langdetect actually uses."""
-    _load_backend()
-    return Path(LangDetectConfig().cache_dir)
+    return _cache_dir()
 
 
 def _full_model_available() -> bool:
@@ -116,12 +133,14 @@ def _ensure_full_model(stream: Any = None) -> None:
         return
     out = stream or sys.stderr
     print(
-        "Downloading language model (126 MB, one-time)...",
+        f"Downloading language model (126 MB) to {_cache_dir()}...",
         file=out,
         flush=True,
     )
     _load_backend()
-    config = LangDetectConfig(model="full", max_input_length=100)
+    config = LangDetectConfig(
+        model="full", max_input_length=100, cache_dir=str(_cache_dir())
+    )
     detector = LangDetector(config)
     detector.detect("test", k=1)  # triggers download
     print("Download complete.", file=out, flush=True)
@@ -138,7 +157,9 @@ class GedcomLanguageDetector:
         self.min_length = min_length
         _ensure_full_model(stream)
         _load_backend()
-        config = LangDetectConfig(model="full", max_input_length=2000)
+        config = LangDetectConfig(
+            model="full", max_input_length=2000, cache_dir=str(_cache_dir())
+        )
         self._detector = LangDetector(config)
 
     def detect(self, text: str | None) -> tuple[str, bool]:

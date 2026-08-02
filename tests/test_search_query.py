@@ -345,6 +345,54 @@ class TestRegexErrors:
         assert len(q.terms) == 1
 
 
+class TestRegexGuardMatchesCompiledForm:
+    """The guard must inspect the same pattern the matcher ends up compiling."""
+
+    # Combining acute wedged between a quantifier and a paren. Reads as
+    # harmless until the marks are folded away, at which point it becomes the
+    # textbook catastrophic-backtracking pattern (a+)+b.
+    BYPASS = "(a+́)́+b"
+
+    def test_folded_nested_quantifier_rejected(self) -> None:
+        with pytest.raises(ValueError, match="nested quantifiers"):
+            parse_query(f"name:{self.BYPASS}", regex_mode=True)
+
+    def test_rejection_quotes_what_the_user_typed(self) -> None:
+        with pytest.raises(ValueError) as excinfo:
+            parse_query(f"name:{self.BYPASS}", regex_mode=True)
+        message = str(excinfo.value)
+        assert self.BYPASS in message
+        assert "(a+)+b" not in message
+
+    def test_accented_literal_still_accepted(self) -> None:
+        q = parse_query("surname:Müller", regex_mode=True)
+        assert q.terms[0].value == "Müller"
+
+    def test_accented_literal_still_matches(self) -> None:
+        from gedcom_tools.commands.search.matcher import _compile_regex
+        from gedcom_tools.utils import normalize_compare
+
+        q = parse_query("surname:Müller", regex_mode=True)
+        haystack = normalize_compare("Anna Müller")
+        assert _compile_regex(q.terms[0].value).search(haystack)
+
+    def test_range_that_only_compiles_unfolded_accepted(self) -> None:
+        # Folds to the invalid [e-A]; the matcher falls back to the raw
+        # pattern, so the guard has to validate the raw pattern too.
+        q = parse_query("surname:[é-Ā]", regex_mode=True)
+        assert q.terms[0].value == "[é-Ā]"
+
+    def test_range_that_only_compiles_unfolded_does_not_crash(self) -> None:
+        from gedcom_tools.commands.search.matcher import _compile_regex
+
+        q = parse_query("surname:[é-Ā]", regex_mode=True)
+        assert _compile_regex(q.terms[0].value).search("café")
+
+    def test_uncompilable_either_way_still_reports_raw_pattern(self) -> None:
+        with pytest.raises(ValueError, match=re.escape("Invalid regex pattern '[inv")):
+            parse_query("name:[inv́alid", regex_mode=True)
+
+
 class TestWildcardErrors:
     def test_too_broad_pattern(self) -> None:
         with pytest.raises(ValueError, match="too broad"):

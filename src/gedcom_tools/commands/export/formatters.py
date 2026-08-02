@@ -52,23 +52,35 @@ _FAM_CSV_COLUMNS = [
 ]
 
 
+# Leading characters that make a spreadsheet treat a cell as a formula rather
+# than as text. Excel's DDE syntax (=cmd|' /C calc'!A0) turns an exported name
+# into code execution on whoever opens the file, so every cell carrying raw
+# GEDCOM text is prefixed with an apostrophe to force literal interpretation.
+_CSV_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralise a cell that a spreadsheet would otherwise read as a formula."""
+    return "'" + value if value and value[0] in _CSV_TRIGGERS else value
+
+
 def _redact_individual_csv(indi: ExportIndividual) -> list[str]:
     """Build a redacted CSV row for a living individual."""
     return [
         indi.xref,
-        "Living",
-        "",  # surname
-        "",  # suffix
-        indi.sex,
-        "",  # birth_date
-        "",  # birth_year
-        "",  # birth_place
-        "",  # death_date
-        "",  # death_year
-        "",  # death_place
-        "",  # burial_date
-        "",  # burial_place
-        "",  # occupations
+        _csv_safe("Living"),
+        _csv_safe(""),  # surname
+        _csv_safe(""),  # suffix
+        _csv_safe(indi.sex),
+        _csv_safe(""),  # birth_date
+        _csv_safe(""),  # birth_year
+        _csv_safe(""),  # birth_place
+        _csv_safe(""),  # death_date
+        _csv_safe(""),  # death_year
+        _csv_safe(""),  # death_place
+        _csv_safe(""),  # burial_date
+        _csv_safe(""),  # burial_place
+        _csv_safe(""),  # occupations
         str(indi.source_count),
         "",  # famc_xref — redacted
         "",  # fams_xrefs — redacted
@@ -78,23 +90,33 @@ def _redact_individual_csv(indi: ExportIndividual) -> list[str]:
 def _individual_csv_row(indi: ExportIndividual) -> list[str]:
     return [
         indi.xref,
-        indi.given_name,
-        indi.surname,
-        indi.suffix,
-        indi.sex,
-        indi.birth_date,
+        _csv_safe(indi.given_name),
+        _csv_safe(indi.surname),
+        _csv_safe(indi.suffix),
+        _csv_safe(indi.sex),
+        _csv_safe(indi.birth_date),
         str(indi.birth_year) if indi.birth_year is not None else "",
-        indi.birth_place,
-        indi.death_date,
+        _csv_safe(indi.birth_place),
+        _csv_safe(indi.death_date),
         str(indi.death_year) if indi.death_year is not None else "",
-        indi.death_place,
-        indi.burial_date,
-        indi.burial_place,
-        "; ".join(indi.occupations),
+        _csv_safe(indi.death_place),
+        _csv_safe(indi.burial_date),
+        _csv_safe(indi.burial_place),
+        _csv_safe("; ".join(indi.occupations)),
         str(indi.source_count),
         indi.famc_xref,
         ";".join(indi.fams_xrefs),
     ]
+
+
+def _spouse_is_living(fam: ExportFamily, living_xrefs: set[str]) -> bool:
+    """Whether either spouse was redacted.
+
+    One is enough. A wedding date and a named venue identify the couple that
+    married there, so leaving them beside two "Living" placeholders -- plus any
+    unredacted child's famc_xref and surname -- hands back the redacted parents.
+    """
+    return fam.husband_xref in living_xrefs or fam.wife_xref in living_xrefs
 
 
 def _family_csv_row(
@@ -105,6 +127,9 @@ def _family_csv_row(
     wife_xref = fam.wife_xref
     wife_name = fam.wife_name
     children_xrefs = list(fam.children_xrefs)
+    marriage_date = fam.marriage_date
+    marriage_year = fam.marriage_year
+    marriage_place = fam.marriage_place
     if living_xrefs:
         if fam.husband_xref in living_xrefs:
             husband_xref = ""
@@ -113,15 +138,19 @@ def _family_csv_row(
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        if _spouse_is_living(fam, living_xrefs):
+            marriage_date = ""
+            marriage_year = None
+            marriage_place = ""
     return [
         fam.xref,
         husband_xref,
-        husband_name,
+        _csv_safe(husband_name),
         wife_xref,
-        wife_name,
-        fam.marriage_date,
-        str(fam.marriage_year) if fam.marriage_year is not None else "",
-        fam.marriage_place,
+        _csv_safe(wife_name),
+        _csv_safe(marriage_date),
+        str(marriage_year) if marriage_year is not None else "",
+        _csv_safe(marriage_place),
         str(fam.child_count),
         ";".join(children_xrefs),
     ]
@@ -146,7 +175,7 @@ def format_csv(
             indi.xref
             for indi in result.individuals
             if estimate_living(
-                indi.birth_year,
+                indi.liveness_birth_year,
                 indi.death_year,
                 indi.burial_date,
                 max_age=max_age,
@@ -225,6 +254,9 @@ def _family_to_dict(
     wife_xref = fam.wife_xref
     wife_name = fam.wife_name
     children_xrefs = list(fam.children_xrefs)
+    marriage_date = fam.marriage_date
+    marriage_year = fam.marriage_year
+    marriage_place = fam.marriage_place
     if living_xrefs:
         if fam.husband_xref in living_xrefs:
             husband_xref = ""
@@ -233,15 +265,19 @@ def _family_to_dict(
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        if _spouse_is_living(fam, living_xrefs):
+            marriage_date = ""
+            marriage_year = None
+            marriage_place = ""
     return {
         "xref": fam.xref,
         "husband_xref": husband_xref,
         "husband_name": husband_name,
         "wife_xref": wife_xref,
         "wife_name": wife_name,
-        "marriage_date": fam.marriage_date,
-        "marriage_year": fam.marriage_year,
-        "marriage_place": fam.marriage_place,
+        "marriage_date": marriage_date,
+        "marriage_year": marriage_year,
+        "marriage_place": marriage_place,
         "child_count": fam.child_count,
         "children_xrefs": children_xrefs,
     }
@@ -258,7 +294,7 @@ def format_json(
             indi.xref
             for indi in result.individuals
             if estimate_living(
-                indi.birth_year,
+                indi.liveness_birth_year,
                 indi.death_year,
                 indi.burial_date,
                 max_age=max_age,
@@ -274,7 +310,10 @@ def format_json(
             "gedcom_tools_version": __version__,
             "individual_count": result.individual_count,
             "family_count": result.family_count,
+            # redacted_living says the flag was on; redacted_count says what it
+            # actually did. The two diverge when the estimator redacts nobody.
             "redacted_living": redact_living,
+            "redacted_count": len(living_xrefs) if living_xrefs is not None else 0,
         },
         "individuals": [
             _individual_to_dict(

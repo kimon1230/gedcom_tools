@@ -624,7 +624,7 @@ Encoding: UTF-8
 
   Persons with biographical notes (2):
     Eleni Papadopoulos (@I5@)
-    Nikolaos Andreou (@I12@)
+    Theodora Zografou (@I12@)
 
   Standalone notes (1):
     @N7@
@@ -1062,7 +1062,8 @@ $ gedcom-tools export family.ged --format json
     "gedcom_tools_version": "1.0.0",
     "individual_count": 150,
     "family_count": 45,
-    "redacted_living": false
+    "redacted_living": false,
+    "redacted_count": 0
   },
   "individuals": [
     {
@@ -1093,7 +1094,7 @@ $ gedcom-tools export family.ged --format json
 | `-o, --output FILE` | Write to file instead of stdout |
 | `--force` | Overwrite output file if it already exists |
 | `--redact-living` | Replace names and dates of estimated-living individuals |
-| `--max-age N` | Maximum age for living estimation (default: 110) |
+| `--max-age N` | Maximum plausible lifespan in years for living estimation (default: 110, minimum: 1) |
 
 **Note on `--format`:** For most commands, `--format json` means "format
 command results as JSON." For `export`, `--format json` means "export data as
@@ -1106,9 +1107,10 @@ in a specific format. See [Export Command](docs/export.md) for full details.
 - See [Export Command](docs/export.md) for full column reference.
 
 **Living estimation:**
-- Uses birth year and death records to estimate whether someone is living
-- Only individuals with a birth year within `--max-age` years and no death record are redacted
-- Individuals with no birth year are not redacted (conservative default)
+- Uses birth year, death records, and any custom living tags in the file to estimate whether someone is living
+- Unknown means living: an individual with no usable birth date and no death record **is** redacted, so a file thin on dates loses more rows than a birth-year-only rule would take
+- A living couple's `marriage_date`, `marriage_year` and `marriage_place` are cleared too — one living spouse is enough, since a wedding date and venue re-identify the pair
+- `meta.redacted_count` in JSON reports how many individuals were actually redacted; `meta.redacted_living` only reports that the flag was set
 
 #### convert
 

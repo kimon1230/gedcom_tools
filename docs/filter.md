@@ -301,11 +301,18 @@ Appends `(dry run -- no file written)` to the output. No file is created.
 ## Safety
 
 - **File size limit** — input files larger than 500 MB are rejected with an
-  actionable error message showing the actual size and the limit.
+  actionable error message showing the actual size and the limit. That figure is
+  a backstop against absurd input, not a supported size: `filter` builds an
+  in-memory representation around 25 times the file size, so the practical
+  ceiling on an ordinary machine is nearer **50-80 MB**. Beyond that the command
+  will exhaust memory rather than reach the limit.
 - **Output file required** — `-o` is mandatory. The original file is never
   modified.
 - **Overwrite protection** — refuses to overwrite an existing file unless
   `--force` is specified.
+- **Symlink refusal** — a symlink at the output path is refused, even with
+  `--force`. Writing through a link would let a pre-planted link redirect the
+  output somewhere the user did not name. Write to the real path instead.
 - **Same-file protection** — detects when input and output are the same file
   (including via symlinks and hardlinks) and refuses. In-place filtering is not
   supported.

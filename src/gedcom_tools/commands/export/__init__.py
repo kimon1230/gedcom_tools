@@ -9,9 +9,13 @@ from typing import TYPE_CHECKING
 
 from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_csv, format_json
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
+from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.utils import check_output_safety, validate_input_file
+from gedcom_tools.utils import (
+    check_output_safety,
+    validate_input_file,
+    write_output_securely,
+)
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -80,7 +84,8 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         "--max-age",
         type=int,
         default=110,
-        help="Maximum age for living estimation (default: 110)",
+        help="Maximum plausible lifespan in years for living estimation "
+        "(default: 110, minimum: 1)",
     )
 
 
@@ -101,6 +106,17 @@ def run(args: Namespace) -> int:
     # "--format text" means "unspecified" here — export has no text output.
     requested = getattr(args, "to", None) or getattr(args, "format", None)
     fmt: str = requested if requested in ("csv", "json") else "csv"
+
+    # A ceiling below one year puts every dated individual past the plausible
+    # lifespan, so nobody is estimated living and --redact-living quietly does
+    # nothing while the JSON metadata still reports it as active.
+    if max_age < 1:
+        print(
+            f"Error: argument --max-age: must be at least 1 (got {max_age}). "
+            "It is the maximum plausible lifespan in years.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
 
     if err := validate_input_file(file_path):
         return err
@@ -138,14 +154,12 @@ def run(args: Namespace) -> int:
                 )
 
         if output_path:
-            output_path.write_text(output, encoding="utf-8")
-            if sys.platform != "win32":
-                try:
-                    import os
-
-                    os.chmod(output_path, 0o600)
-                except OSError:
-                    pass
+            write_err = write_output_securely(
+                output_path, output, force=force, encoding="utf-8"
+            )
+            if write_err is not None:
+                print(write_err, file=sys.stderr)
+                return EXIT_ERROR
             if not quiet:
                 print(f"Exported to {output_path}", file=sys.stderr)
         else:

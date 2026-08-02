@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import errno
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,6 +15,7 @@ from gedcom_tools.utils import (
     extract_xref,
     parse_name_record,
     validate_input_file,
+    write_output_securely,
 )
 
 
@@ -448,3 +451,165 @@ class TestReportError:
 
         report_error(ValueError("boom"))
         assert capsys.readouterr().out == ""
+
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="O_NOFOLLOW and file modes are POSIX-only guarantees",
+)
+
+
+def _spy_on_os_open(
+    monkeypatch: pytest.MonkeyPatch, target: Path
+) -> list[tuple[int, int]]:
+    """Record (flags, mode) for every os.open of `target`."""
+    calls: list[tuple[int, int]] = []
+    real_open = os.open
+
+    def recording_open(path, flags, mode=0o777, **kwargs):  # type: ignore[no-untyped-def]
+        if Path(path) == target:
+            calls.append((flags, mode))
+        return real_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    return calls
+
+
+class TestWriteOutputSecurely:
+    def test_writes_bytes(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.ged"
+        assert write_output_securely(out, b"0 HEAD\n", force=False) is None
+        assert out.read_bytes() == b"0 HEAD\n"
+
+    def test_writes_text_in_the_given_encoding(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.csv"
+        assert write_output_securely(out, "Ångström", force=False) is None
+        assert out.read_text(encoding="utf-8") == "Ångström"
+
+    def test_non_utf8_encoding_is_honoured(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.csv"
+        write_output_securely(out, "café", force=False, encoding="latin-1")
+        assert out.read_bytes() == b"caf\xe9"
+
+    def test_existing_file_without_force_is_refused(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.ged"
+        out.write_text("keep me", encoding="utf-8")
+        result = write_output_securely(out, b"new", force=False)
+        assert result is not None
+        assert "already exists" in result
+        assert "--force" in result
+        assert out.read_text(encoding="utf-8") == "keep me"
+
+    def test_force_overwrites_a_regular_file(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.ged"
+        out.write_text("stale and much longer than the replacement", encoding="utf-8")
+        assert write_output_securely(out, b"new", force=True) is None
+        assert out.read_bytes() == b"new"
+
+    def test_unexpected_oserror_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Anything that is not "exists" or "is a symlink" is a real failure and
+        # must not be flattened into a returned message.
+        out = tmp_path / "out.ged"
+
+        def failing_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise OSError(errno.EIO, "disk fell over")
+
+        monkeypatch.setattr(os, "open", failing_open)
+        with pytest.raises(OSError, match="disk fell over"):
+            write_output_securely(out, b"data", force=False)
+
+    def test_non_regular_target_is_written_through(self, tmp_path: Path) -> None:
+        # /dev/null cannot be created, truncated or chmod-ed; the atomic path
+        # would refuse it, so it takes the plain one.
+        devnull = Path(os.devnull)
+        assert write_output_securely(devnull, b"data", force=False) is None
+
+    @posix_only
+    def test_non_regular_target_accepts_text_too(self, tmp_path: Path) -> None:
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            assert write_output_securely(fifo, "hello", force=False) is None
+            assert os.read(reader, 16) == b"hello"
+        finally:
+            os.close(reader)
+
+    @posix_only
+    def test_dangling_symlink_is_refused(self, tmp_path: Path) -> None:
+        target = tmp_path / "elsewhere" / "stolen.csv"
+        target.parent.mkdir()
+        link = tmp_path / "out.csv"
+        link.symlink_to(target)
+
+        result = write_output_securely(link, b"private data", force=False)
+
+        assert result == "Error: Output path is a symlink; refusing to follow it."
+        assert not target.exists()
+
+    @posix_only
+    def test_symlink_with_force_is_refused_too(self, tmp_path: Path) -> None:
+        victim = tmp_path / "important.txt"
+        victim.write_text("someone else's file", encoding="utf-8")
+        victim.chmod(0o644)
+        link = tmp_path / "out.ged"
+        link.symlink_to(victim)
+
+        result = write_output_securely(link, b"private data", force=True)
+
+        # Deliberately not the "use --force" message: --force is not the answer.
+        assert result == "Error: Output path is a symlink; refusing to follow it."
+        assert victim.read_text(encoding="utf-8") == "someone else's file"
+        assert victim.stat().st_mode & 0o777 == 0o644
+
+    @posix_only
+    def test_created_file_is_owner_only(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "out.ged"
+        calls = _spy_on_os_open(monkeypatch, out)
+        monkeypatch.setattr(
+            os, "chmod", lambda *a, **kw: pytest.fail("os.chmod widened the window")
+        )
+
+        assert write_output_securely(out, b"private data", force=False) is None
+
+        assert len(calls) == 1
+        flags, mode = calls[0]
+        assert flags & os.O_EXCL
+        assert flags & os.O_NOFOLLOW
+        assert not flags & os.O_TRUNC
+        assert mode == 0o600
+        assert out.stat().st_mode & 0o777 == 0o600
+        assert out.read_bytes() == b"private data"
+
+    @posix_only
+    def test_force_reopens_with_truncate_and_tightens_the_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # O_TRUNC keeps whatever mode the file already had, so a loose one has
+        # to be tightened through the descriptor.
+        out = tmp_path / "out.ged"
+        out.write_text("world readable", encoding="utf-8")
+        out.chmod(0o644)
+        calls = _spy_on_os_open(monkeypatch, out)
+
+        assert write_output_securely(out, b"private data", force=True) is None
+
+        flags, mode = calls[0]
+        assert flags & os.O_TRUNC
+        assert not flags & os.O_EXCL
+        assert flags & os.O_NOFOLLOW
+        assert out.stat().st_mode & 0o777 == 0o600
+
+    def test_flag_lookup_survives_a_platform_without_o_nofollow(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Windows has no O_NOFOLLOW; the getattr fallbacks are what keep the
+        # CI matrix from raising AttributeError on every file-output run.
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+        out = tmp_path / "out.ged"
+        assert write_output_securely(out, b"data", force=False) is None
+        assert out.read_bytes() == b"data"

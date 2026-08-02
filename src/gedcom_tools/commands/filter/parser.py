@@ -68,13 +68,19 @@ def parse_line(raw: str, line_number: int) -> GedcomLine:
 def parse_lines(text: str) -> list[GedcomLine]:
     """Parse GEDCOM text into a list of GedcomLine objects.
 
-    Uses str.splitlines() which handles \\r\\n, \\r, and \\n uniformly.
+    Splits on exactly the three GEDCOM line terminators: \\r\\n, \\r and \\n.
+    str.splitlines() is deliberately NOT used -- it also breaks on VT, FF, FS,
+    GS, RS, NEL, LS and PS, none of which terminate a line in GEDCOM. Treating
+    those as terminators lets a value containing one be promoted to a top-level
+    record on output, so a NOTE payload could smuggle in a forged INDI.
     Each GedcomLine.raw stores the content without trailing line endings.
     """
-    result: list[GedcomLine] = []
-    for i, raw in enumerate(text.splitlines(), start=1):
-        result.append(parse_line(raw, i))
-    return result
+    pieces = re.split(r"\r\n|\r|\n", text)
+    # re.split yields a trailing "" when text ends with a terminator (splitlines
+    # does not). Left in, it serializes back out as a spurious blank line.
+    if pieces and pieces[-1] == "":
+        pieces.pop()
+    return [parse_line(raw, i) for i, raw in enumerate(pieces, start=1)]
 
 
 def group_records(lines: list[GedcomLine]) -> list[GedcomRecord]:

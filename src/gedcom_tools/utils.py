@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import sys
 import unicodedata
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -124,8 +126,10 @@ def check_output_safety(
 
     `command` names the caller ("Convert", "Filter") for the error text.
 
-    Note: TOCTOU race between this check and the caller's write.
-    Acceptable for a local CLI tool — not practically exploitable.
+    This runs before any work starts so a doomed run fails fast with a useful
+    message. It is not the security boundary: the path can change underneath
+    us between here and the write. `write_output_securely` is what actually
+    decides whether the bytes land.
     """
     parent = output_path.parent
     if not parent.exists():
@@ -145,6 +149,77 @@ def check_output_safety(
 
     if not dry_run and output_path.exists() and not force:
         return f"Error: {output_path} already exists. Use --force to overwrite."
+
+    return None
+
+
+SYMLINK_OUTPUT_ERROR = "Output path is a symlink; refusing to follow it."
+
+
+def write_output_securely(
+    path: Path,
+    data: str | bytes,
+    *,
+    force: bool,
+    encoding: str = "utf-8",
+) -> str | None:
+    """Write `data` to `path` through a single create-or-fail open.
+
+    Returns an error message for the caller to print, or None on success.
+    `encoding` applies to str data only; bytes go out untouched.
+
+    One `os.open` does the work that a `write_bytes` + `chmod` pair used to:
+    the file is created 0600 (never briefly world-readable), symlinks are
+    refused instead of followed, and there is no window between deciding the
+    path is safe and writing to it.
+
+    Platform split: O_NOFOLLOW and the creation mode are POSIX-only. On
+    Windows both flags are absent, so the open is still atomically
+    create-or-fail but symlinks are followed and the mode is ignored — the
+    same concession the `sys.platform != "win32"` chmod guard already made.
+    """
+    if path.exists() and not path.is_file():
+        # /dev/null, /dev/stdout, FIFOs: nothing to create, nothing to
+        # truncate, and no mode worth setting. Write them the plain way.
+        if isinstance(data, str):
+            path.write_text(data, encoding=encoding)
+        else:
+            path.write_bytes(data)
+        return None
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)  # POSIX only; absent on Windows
+        | getattr(os, "O_BINARY", 0)  # Windows only; no newline translation
+        | (os.O_TRUNC if force else os.O_EXCL)
+    )
+
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as e:
+        # O_NOFOLLOW gives ELOOP on a live symlink; O_EXCL gives EEXIST on a
+        # dangling one, which is why islink is checked too. Either way the
+        # answer is not "use --force" — that path is refused as well.
+        if e.errno == errno.ELOOP or path.is_symlink():
+            return f"Error: {SYMLINK_OUTPUT_ERROR}"
+        if isinstance(e, FileExistsError):
+            return f"Error: {path} already exists. Use --force to overwrite."
+        raise
+
+    if force:
+        # O_TRUNC reuses the existing file's mode, so an overwrite of a
+        # world-readable file would stay world-readable. fchmod acts on the
+        # open descriptor, so no path lookup and nothing to race.
+        with suppress(OSError, AttributeError):
+            os.fchmod(fd, 0o600)
+
+    if isinstance(data, str):
+        with os.fdopen(fd, "w", encoding=encoding) as text_out:
+            text_out.write(data)
+    else:
+        with os.fdopen(fd, "wb") as byte_out:
+            byte_out.write(data)
 
     return None
 

@@ -39,6 +39,7 @@ from gedcom_tools.utils import (
     resolve_source_codec,
     strip_bom,
     validate_input_file,
+    write_output_securely,
 )
 
 if TYPE_CHECKING:
@@ -237,20 +238,18 @@ def run(args: Namespace) -> int:
         other=source_counts.other - output_counts.other,
     )
 
+    write_err: str | None = None
     with tracker.phase("Writing output"):
         if not dry_run:
             out_text = serialize_records(records, line_ending)
             out_bytes = out_text.encode(source_codec)
             if bom_type is not None:
                 out_bytes = BOMS[bom_type] + out_bytes
-            output.write_bytes(out_bytes)
-            if sys.platform != "win32":
-                try:
-                    import os
+            write_err = write_output_securely(output, out_bytes, force=force)
 
-                    os.chmod(output, 0o600)
-                except OSError:
-                    pass
+    if write_err is not None:
+        print(write_err, file=sys.stderr)
+        return EXIT_ERROR
 
     result = FilterResult(
         source_path=str(file_path),

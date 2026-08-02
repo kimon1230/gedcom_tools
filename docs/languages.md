@@ -101,7 +101,7 @@ Encoding: UTF-8
 
   Persons with biographical notes (3):
     Eleni Papadopoulos (@I5@)
-    Nikolaos Andreou (@I12@)
+    Theodora Zografou (@I12@)
     Maria Konstantinou (@I44@)
 
   Standalone notes (1):
@@ -131,7 +131,7 @@ Encoding: UTF-8
   Persons with biographical notes (2):
     Eleni Papadopoulos (@I5@)
       Γεννήθηκε στην Αθήνα και μεγάλωσε στη Θεσσαλονίκη
-    Nikolaos Andreou (@I12@)
+    Theodora Zografou (@I12@)
       Σπούδασε ιατρική στο Πανεπιστήμιο Αθηνών
 
   Events with notes (1):
@@ -170,7 +170,7 @@ Encoding: UTF-8
   "code": "el",
   "persons": [
     { "xref": "@I5@", "name": "Eleni Papadopoulos" },
-    { "xref": "@I12@", "name": "Nikolaos Andreou" },
+    { "xref": "@I12@", "name": "Theodora Zografou" },
     { "xref": "@I44@", "name": "Maria Konstantinou" }
   ],
   "notes": [

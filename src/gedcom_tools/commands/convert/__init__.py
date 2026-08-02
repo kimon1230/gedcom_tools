@@ -149,6 +149,7 @@ def run(args: Namespace) -> int:
                 normalize=normalize,
                 add_bom=add_bom,
                 dry_run=dry_run,
+                force=force,
             )
 
     except (CodecError, ParserError) as e:

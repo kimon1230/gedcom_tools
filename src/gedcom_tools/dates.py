@@ -106,6 +106,40 @@ def extract_year_from_date(date_val: object) -> int | None:
     return None
 
 
+def extract_year_latest_from_date(date_val: object) -> int | None:
+    """Extract the latest year a date value can refer to.
+
+    Ranges and periods ("BET 1900 AND 1995") carry two bounds and
+    extract_year_from_date deliberately returns the lower one, since that is
+    what gets reported as the birth year. Liveness estimation needs the upper
+    bound instead — assuming the earliest bound would age people into the grave.
+    Anything with a single date resolves identically in both functions.
+    """
+    if date_val is None:
+        return None
+
+    # PHRASE type has NO attributes - check first
+    if is_phrase_date(date_val):
+        return None
+
+    # Raw strings never reach the structured branches below, and the shared
+    # regex fallback takes the FIRST year it finds, so handle them here.
+    if isinstance(date_val, str):
+        years = re.findall(r"\b\d{4}\b", date_val)
+        return int(years[-1]) if years else None
+
+    # ged4py Range, Period - upper bound is at .date2
+    if hasattr(date_val, "date2") and date_val.date2:
+        year = getattr(date_val.date2, "year", None)
+        if year is not None:
+            try:
+                return int(year)
+            except (ValueError, TypeError):
+                pass
+
+    return extract_year_from_date(date_val)
+
+
 def extract_month(date_val: object) -> int | None:
     # ged4py month values are STRING enums ("OCT", "JAN"), not ints
     if date_val is None:

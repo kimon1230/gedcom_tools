@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
-import os
 import re
-import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +17,7 @@ from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
     strip_bom,
+    write_output_securely,
 )
 
 ansel.register()
@@ -183,6 +182,7 @@ def transcode(
     normalize: bool,
     add_bom: bool,
     dry_run: bool,
+    force: bool = False,
 ) -> ConvertResult:
     from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
 
@@ -236,12 +236,12 @@ def transcode(
         encoded = BOMS[target_codec] + encoded
 
     if not dry_run:
-        output_path.write_bytes(encoded)
-        if sys.platform != "win32":
-            try:
-                os.chmod(output_path, 0o600)
-            except OSError:
-                pass
+        # Pass the user's actual --force through rather than inferring it from
+        # the path existing: run() checked the path earlier, and a file that
+        # appeared in between is one nobody authorised overwriting.
+        write_err = write_output_securely(output_path, encoded, force=force)
+        if write_err is not None:
+            raise ValueError(write_err.removeprefix("Error: "))
 
     return ConvertResult(
         source_file=source_path,

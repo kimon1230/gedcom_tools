@@ -14,17 +14,18 @@ from gedcom_tools import cli
 # Commands whose run() has no `except Exception` at all, so a BrokenPipeError
 # already travels untouched up to cli._run_command.
 #
-# filter.run() does contain an `except OSError` (filter/__init__.py:252) and
-# BrokenPipeError *is* an OSError subclass - that is harmless only because the
-# try wraps nothing but the `import os` + `os.chmod` pair, neither of which can
-# touch a pipe. Widen that try and the exemption stops being safe.
+# Neither has any `except` in run() at all now - the write-then-chmod pairs that
+# used to carry an `except OSError` were replaced by utils.write_output_securely,
+# which returns a message instead of swallowing. So the exemption rests on the
+# simplest possible ground: nothing in either run() catches anything.
 EXEMPT = frozenset({"convert", "filter"})
 
 # Known limit: this rule reasons about `except Exception` handlers only. An
-# `except OSError` swallows BrokenPipeError just as effectively, and several
-# exist - export/__init__.py:145, filter/__init__.py:252,
-# convert/transcoder.py:243, languages.py:515, and two in compare/__init__.py.
-# The chmod ones cannot see a pipe at all. compare:122 narrows a samefile()
+# `except OSError` swallows BrokenPipeError just as effectively. The three
+# chmod-guarding ones this comment used to list are gone, absorbed into
+# utils.write_output_securely; what remains in the command modules is
+# languages.py:515 (a tuple catch around detect_encoding, downgrading to a
+# warning) and two in compare/__init__.py. compare:122 narrows a samefile()
 # probe, and compare:134 deliberately swallows a failed write to stderr - the
 # verdict there is returned either way, which is the point: an earlier version
 # wrapped the `return` in that same try, so a dead stderr silently skipped it

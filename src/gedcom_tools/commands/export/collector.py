@@ -13,7 +13,11 @@ from gedcom_tools.commands.export.models import (
     ExportIndividual,
     ExportResult,
 )
-from gedcom_tools.dates import extract_year_from_date, is_phrase_date
+from gedcom_tools.dates import (
+    extract_year_from_date,
+    extract_year_latest_from_date,
+    is_phrase_date,
+)
 from gedcom_tools.utils import (
     count_sources_recursive,
     detect_encoding,
@@ -41,6 +45,13 @@ def _extract_year(record: Record, path: str) -> int | None:
     if date_rec is None or date_rec.value is None:
         return None
     return extract_year_from_date(date_rec.value)
+
+
+def _extract_year_latest(record: Record, path: str) -> int | None:
+    date_rec = record.sub_tag(path)
+    if date_rec is None or date_rec.value is None:
+        return None
+    return extract_year_latest_from_date(date_rec.value)
 
 
 def _extract_date_str(record: Record, path: str) -> str:
@@ -112,13 +123,15 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
     # Birth: date string + year + place, with fallbacks
     birth_date = _extract_date_str(record, "BIRT/DATE")
     birth_year = _extract_year(record, "BIRT/DATE")
+    birth_year_latest = _extract_year_latest(record, "BIRT/DATE")
     birth_place = _extract_place(record, "BIRT")
 
     # Fallback for birth year: CHR, then BAPM (year only, not date string)
-    if birth_year is None:
-        birth_year = _extract_year(record, "CHR/DATE")
-        if birth_year is None:
-            birth_year = _extract_year(record, "BAPM/DATE")
+    for fallback_path in ("CHR/DATE", "BAPM/DATE"):
+        if birth_year is not None:
+            break
+        birth_year = _extract_year(record, fallback_path)
+        birth_year_latest = _extract_year_latest(record, fallback_path)
 
     # Death: date string + year + place
     death_date = _extract_date_str(record, "DEAT/DATE")
@@ -169,6 +182,7 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
         sex=sex,
         birth_date=birth_date,
         birth_year=birth_year,
+        birth_year_latest=birth_year_latest,
         birth_place=birth_place,
         death_date=death_date,
         death_year=death_year,

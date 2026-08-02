@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import unicodedata
+from pathlib import Path
+
+import pytest
+from ged4py import GedcomReader
 
 from gedcom_tools.commands.filter.models import GedcomLine, GedcomRecord
 from gedcom_tools.commands.filter.parser import (
@@ -14,6 +18,7 @@ from gedcom_tools.commands.filter.parser import (
     parse_line,
     parse_lines,
 )
+from gedcom_tools.commands.filter.writer import serialize_records
 
 # ---------------------------------------------------------------------------
 # parse_line
@@ -496,3 +501,96 @@ class TestIsPointerValue:
 
     def test_pointer_with_hyphen(self) -> None:
         assert is_pointer_value("@NOTE-42@") is True
+
+
+# ---------------------------------------------------------------------------
+# Line terminators: only CRLF/CR/LF may split a line
+# ---------------------------------------------------------------------------
+
+# Separators str.splitlines() breaks on but GEDCOM (and ged4py) do not.
+NON_TERMINATORS = [
+    pytest.param("\v", id="VT-000B"),
+    pytest.param("\f", id="FF-000C"),
+    pytest.param("\x1c", id="FS-001C"),
+    pytest.param("\x1d", id="GS-001D"),
+    pytest.param("\x1e", id="RS-001E"),
+    pytest.param("\x85", id="NEL-0085"),
+    pytest.param("\u2028", id="LS-2028"),
+    pytest.param("\u2029", id="PS-2029"),
+]
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _smuggling_ged(separator: str) -> str:
+    """A file whose single NOTE value hides a forged level-0 INDI record."""
+    return (
+        "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
+        "0 @I1@ INDI\n1 NAME John /Smith/\n"
+        f"1 NOTE harmless{separator}0 @I99@ INDI{separator}1 NAME Smuggled /Record/\n"
+        "0 TRLR\n"
+    )
+
+
+class TestLineTerminators:
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_separator_stays_inside_value(self, separator: str) -> None:
+        lines = parse_lines(f"1 NOTE before{separator}after\n")
+        assert len(lines) == 1
+        assert lines[0].tag == "NOTE"
+        assert lines[0].value == f"before{separator}after"
+
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_separator_cannot_forge_a_record(self, separator: str) -> None:
+        records = group_records(parse_lines(_smuggling_ged(separator)))
+        assert [r.xref for r in records if r.tag == "INDI"] == ["@I1@"]
+
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_agrees_with_ged4py_record_count(
+        self, tmp_path: Path, separator: str
+    ) -> None:
+        # The security invariant: what ged4py (and so `validate`) treats as a
+        # value must not become structure to `filter`.
+        ged = tmp_path / "smuggle.ged"
+        ged.write_bytes(_smuggling_ged(separator).encode("utf-8"))
+
+        with GedcomReader(str(ged)) as reader:
+            reference = {i.xref_id for i in reader.records0("INDI")}
+
+        records = group_records(parse_lines(ged.read_text(encoding="utf-8")))
+        assert {r.xref for r in records if r.tag == "INDI"} == reference
+
+    @pytest.mark.parametrize("terminator", ["\n", "\r\n", "\r"])
+    def test_real_terminators_still_split(self, terminator: str) -> None:
+        lines = parse_lines(f"0 HEAD{terminator}0 TRLR{terminator}")
+        assert [ln.tag for ln in lines] == ["HEAD", "TRLR"]
+
+    def test_no_trailing_blank_line(self) -> None:
+        lines = parse_lines("0 HEAD\n0 TRLR\n")
+        assert len(lines) == 2
+        assert lines[-1].tag == "TRLR"
+
+    def test_final_line_without_terminator_kept(self) -> None:
+        lines = parse_lines("0 HEAD\n0 TRLR")
+        assert [ln.tag for ln in lines] == ["HEAD", "TRLR"]
+
+    def test_only_one_trailing_empty_dropped(self) -> None:
+        # A genuine blank line before EOF is content and must survive
+        lines = parse_lines("0 HEAD\n\n0 TRLR\n")
+        assert [ln.raw for ln in lines] == ["0 HEAD", "", "0 TRLR"]
+
+
+class TestSerializeRoundTrip:
+    @pytest.mark.parametrize(
+        "name", ["555sample.ged", "non_ascii_names.ged", "missing_trlr.ged"]
+    )
+    def test_fixture_roundtrip_is_byte_identical(self, name: str) -> None:
+        text = (FIXTURES / name).read_text(encoding="utf-8")
+        records = group_records(parse_lines(text))
+        assert serialize_records(records, detect_line_ending(text)) == text
+
+    @pytest.mark.parametrize("terminator", ["\n", "\r\n"])
+    def test_roundtrip_preserves_trailing_terminator(self, terminator: str) -> None:
+        text = terminator.join(["0 HEAD", "1 CHAR UTF-8", "0 TRLR", ""])
+        records = group_records(parse_lines(text))
+        assert serialize_records(records, detect_line_ending(text)) == text

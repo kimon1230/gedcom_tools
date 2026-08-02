@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from gedcom_tools.commands.export.collector import collect_export_data
+from gedcom_tools.commands.export.formatters import format_json
 from gedcom_tools.commands.export.models import estimate_living
 
 
@@ -31,9 +33,9 @@ class TestEstimateLiving:
     def test_recent_birth_no_death(self) -> None:
         assert estimate_living(1980, None, "", current_year=2026) is True
 
-    def test_no_birth_year_no_death(self) -> None:
-        # Unknown birth, no dates at all → not living
-        assert estimate_living(None, None, "", current_year=2026) is False
+    def test_no_birth_year_no_death_assumed_living(self) -> None:
+        # No dates at all → nothing rules out a living person, so redact
+        assert estimate_living(None, None, "", current_year=2026) is True
 
     def test_boundary_exactly_max_age(self) -> None:
         # Born 1916, current year 2026 → 110 years → exactly max_age → still living
@@ -79,10 +81,25 @@ class TestEstimateLiving:
             is True
         )
 
-    def test_not_living_tag_nliv(self) -> None:
-        # _NLIV overrides even a recent birth year
+    def test_uncorroborated_nliv_ignored(self) -> None:
+        # _NLIV comes from an untrusted file; with no death record to back it
+        # up it cannot switch redaction off for someone born in 2000
         assert (
             estimate_living(2000, None, "", current_year=2026, living_marker="_NLIV")
+            is True
+        )
+
+    def test_nliv_corroborated_by_death_year(self) -> None:
+        assert (
+            estimate_living(2000, 2020, "", current_year=2026, living_marker="_NLIV")
+            is False
+        )
+
+    def test_nliv_corroborated_by_burial_date(self) -> None:
+        assert (
+            estimate_living(
+                2000, None, "3 FEB 2020", current_year=2026, living_marker="_NLIV"
+            )
             is False
         )
 
@@ -93,12 +110,17 @@ class TestEstimateLiving:
             is True
         )
 
-    def test_nliv_overrides_living_indicators(self) -> None:
-        # _NLIV takes priority even with recent birth and no death
+    def test_nliv_still_bounded_by_max_age(self) -> None:
+        # Uncorroborated _NLIV falls through to the date rules, and max_age
+        # still settles it for someone born 200 years ago
         assert (
-            estimate_living(2000, None, "", current_year=2026, living_marker="_NLIV")
+            estimate_living(1826, None, "", current_year=2026, living_marker="_NLIV")
             is False
         )
+
+    def test_old_birth_year_beats_missing_death_record(self) -> None:
+        # No death evidence anywhere, but max_age is the ceiling regardless
+        assert estimate_living(1650, None, "", current_year=2026) is False
 
     def test_living_tag_overrides_death(self) -> None:
         # Software says living, but has death year — living tag wins
@@ -317,6 +339,72 @@ class TestCollectorDates:
         assert ind.birth_year == 1850
         assert "1850" in ind.birth_date
 
+    def test_range_birth_year_reports_earliest_bound(self, tmp_path: Path) -> None:
+        # birth_year is what lands in the CSV/JSON column — it must keep
+        # reporting the lower bound
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET 1900 AND 1995\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year == 1900
+        assert ind.birth_year_latest == 1995
+        assert ind.liveness_birth_year == 1995
+
+    def test_period_birth_year_latest(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1910 TO 1920\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year == 1910
+        assert ind.birth_year_latest == 1920
+
+    def test_single_birth_date_latest_matches_birth_year(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 15 JAN 1850\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year_latest == 1850
+
+    def test_missing_birth_date_has_no_latest(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, "0 @I1@ INDI\n1 NAME A /B/\n")
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year_latest is None
+        assert ind.liveness_birth_year is None
+
+    def test_christening_fallback_carries_latest_bound(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 CHR\n2 DATE BET 1800 AND 1810\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year == 1800
+        assert ind.birth_year_latest == 1810
+
+    def test_baptism_fallback_carries_latest_bound(self, tmp_path: Path) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BAPM\n2 DATE BET 1795 AND 1799\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year == 1795
+        assert ind.birth_year_latest == 1799
+
+    def test_birth_range_beats_christening_for_both_bounds(
+        self, tmp_path: Path
+    ) -> None:
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME A /B/\n"
+            "1 BIRT\n2 DATE BET 1850 AND 1860\n"
+            "1 CHR\n2 DATE 1861\n",
+        )
+        ind = collect_export_data(ged).individuals[0]
+        assert ind.birth_year == 1850
+        assert ind.birth_year_latest == 1860
+
 
 # ---------------------------------------------------------------------------
 # Collector: occupations and notes
@@ -497,3 +585,64 @@ class TestCollectorFamilies:
         assert result.family_count == 2
         assert len(result.individuals) == 3
         assert len(result.families) == 2
+
+
+# ---------------------------------------------------------------------------
+# End-to-end redaction: the decisions above as the user sees them
+# ---------------------------------------------------------------------------
+
+
+def _redacted_xrefs(tmp_path: Path, content: str) -> set[str]:
+    result = collect_export_data(_write_ged(tmp_path, content))
+    data = json.loads(format_json(result, redact_living=True))
+    return {i["xref"] for i in data["individuals"] if i["given_name"] == "Living"}
+
+
+class TestRedactLiving:
+    def test_no_birth_date_is_redacted(self, tmp_path: Path) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Mary /Unknown/\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_unparseable_birth_date_is_redacted(self, tmp_path: Path) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Mary /Unknown/\n1 BIRT\n2 DATE (before the fire)\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_birth_range_reaching_into_living_memory_is_redacted(
+        self, tmp_path: Path
+    ) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Ann /Vague/\n1 BIRT\n2 DATE BET 1900 AND 1995\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_birth_range_entirely_beyond_max_age_is_not_redacted(
+        self, tmp_path: Path
+    ) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Ann /Ancient/\n1 BIRT\n2 DATE BET 1700 AND 1750\n"
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_uncorroborated_nliv_is_redacted(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Bo /Flagged/\n1 _NLIV Y\n1 BIRT\n2 DATE 12 JUN 2000\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_nliv_with_death_year_is_not_redacted(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Bo /Flagged/\n1 _NLIV Y\n"
+            "1 BIRT\n2 DATE 12 JUN 2000\n1 DEAT\n2 DATE 3 FEB 2020\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_deceased_individual_is_not_redacted(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Old /Timer/\n"
+            "1 BIRT\n2 DATE 1890\n1 DEAT\n2 DATE 1960\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_range_date_still_exports_earliest_birth_year(self, tmp_path: Path) -> None:
+        # The latest bound drives the liveness call only; the exported column
+        # keeps reporting the lower bound
+        ged = "0 @I1@ INDI\n1 NAME Ann /Vague/\n1 BIRT\n2 DATE BET 1700 AND 1750\n"
+        result = collect_export_data(_write_ged(tmp_path, ged))
+        data = json.loads(format_json(result, redact_living=True))
+        assert data["individuals"][0]["birth_year"] == 1700

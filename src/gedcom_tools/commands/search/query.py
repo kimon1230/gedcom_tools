@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 
+from gedcom_tools.commands.search.matcher import _fold_marks
 from gedcom_tools.commands.search.models import SearchQuery, SearchTerm
 
 VALID_FIELDS = frozenset(
@@ -163,32 +164,53 @@ def _count_nesting_depth(value: str) -> int:
 
 
 def _validate_regex(value: str) -> None:
+    """Reject patterns whose matching cost could blow up.
+
+    The matcher compiles the diacritic-folded pattern and only falls back to
+    the raw one when the folded form will not compile, so the guard has to
+    inspect whichever form actually gets compiled: stripping combining marks
+    can reassemble a construct such as ``(a+́)́+b`` into ``(a+)+b``. Error
+    messages always quote what the user typed — the folded form is an internal
+    detail they never asked for.
+    """
     if len(value) > _MAX_REGEX_LENGTH:
         raise ValueError(
             f"Regex pattern is too long ({len(value)} chars, max {_MAX_REGEX_LENGTH}). "
             f"Simplify the pattern"
         )
-    if _count_nesting_depth(value) > _MAX_NESTING_DEPTH:
+
+    folded = _fold_marks(value)
+    try:
+        re.compile(folded)
+    except re.error:
+        pattern, folded_compiles = value, False
+    else:
+        pattern, folded_compiles = folded, True
+
+    if _count_nesting_depth(pattern) > _MAX_NESTING_DEPTH:
         raise ValueError(
             f"Regex pattern has too many nested groups "
             f"(max {_MAX_NESTING_DEPTH} levels). Simplify the pattern"
         )
-    if _NESTED_QUANTIFIER_RE.search(value):
+    if _NESTED_QUANTIFIER_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains nested quantifiers which could "
             f"cause slow matching. Simplify the pattern"
         )
-    if _QUANTIFIED_INNER_RE.search(value):
+    if _QUANTIFIED_INNER_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains a quantified group with "
             f"quantified subexpressions. Simplify the pattern"
         )
-    if _OVERLAPPING_ALT_RE.search(value):
+    if _OVERLAPPING_ALT_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains alternation inside a "
             f"quantified group which could cause slow matching. "
             f"Simplify the pattern"
         )
+
+    if folded_compiles:
+        return
     try:
         re.compile(value)
     except re.error as exc:

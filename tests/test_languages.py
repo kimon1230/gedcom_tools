@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import stat
+import sys
 import unicodedata
 from argparse import Namespace
 from pathlib import Path
@@ -2317,3 +2319,58 @@ class TestSharedReader:
             "Classifying unreferenced notes",
         ):
             assert phase in err
+
+
+class TestModelCacheLocation:
+    """The 126 MB model is handed to fasttext's native loader on a filename
+    check alone, so where it is cached is a trust boundary, not a preference.
+    """
+
+    def test_cache_is_not_in_a_world_writable_tmp(self) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert not str(_cache_dir()).startswith("/tmp")
+
+    def test_probe_and_download_agree_on_one_path(self) -> None:
+        # If these ever diverge the result is either a permanent false
+        # "already cached" or a 126 MB re-download on every run.
+        from gedcom_tools.language_detect import _cache_dir, _full_model_cache_dir
+
+        assert _full_model_cache_dir() == _cache_dir()
+
+    def test_xdg_cache_home_is_honoured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        assert _cache_dir() == tmp_path / "gedcom-tools"
+
+    def test_falls_back_to_home_cache_without_xdg(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools import language_detect
+
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.setattr(language_detect.Path, "home", lambda: tmp_path)
+        assert language_detect._cache_dir() == tmp_path / ".cache" / "gedcom-tools"
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="mkdir(mode=...) is ignored on Windows"
+    )
+    def test_cache_is_created_private(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        created = _cache_dir()
+        assert stat.S_IMODE(created.stat().st_mode) == 0o700
+
+    def test_repeated_calls_do_not_fail_on_existing_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        assert _cache_dir() == _cache_dir()

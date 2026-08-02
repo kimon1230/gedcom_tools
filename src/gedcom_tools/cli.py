@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import sys
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from gedcom_tools import __version__
 from gedcom_tools.commands import (
@@ -25,9 +26,12 @@ from gedcom_tools.commands import (
 )
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import set_ascii_mode
+from gedcom_tools.utils import _BIDI_CHARS as BIDI_CHARS
 
 if TYPE_CHECKING:
     from argparse import Namespace
+    from collections.abc import Iterable
+    from typing import TextIO
 
 
 # Subcommand name -> the module that owns it. Modules, not the bound `run`
@@ -111,6 +115,62 @@ def create_parser() -> argparse.ArgumentParser:
 
 _streams_hardened = False
 
+# Escape sequences this program emits itself: the SGR codes in progress.Colors
+# and the spinner's erase-to-end-of-line. Keep in sync with progress.py - a
+# colour added there and missing here simply stops reaching the terminal.
+_OWN_SEQUENCES = r"\x1b\[(?:0|2|31|32|33|36)m|\x1b\[K"
+
+# Everything a GEDCOM file can smuggle into a name or a place and have the
+# terminal act on: OSC (window title, clipboard), any other CSI (cursor moves,
+# screen clears), the C0 and C1 control ranges, and bidi overrides. Tab,
+# newline and carriage return stay - they are the report's own layout.
+_HOSTILE_SEQUENCES = (
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b\[[0-9;?]*[A-Za-z]"
+    # \x09, \x0a and \x0d are missing from the range on purpose: tab, newline
+    # and carriage return are how the reports lay themselves out. The class in
+    # utils.sanitize_error keeps only the first two, which is right for a
+    # single-line error message and wrong here.
+    r"|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"
+    + "".join(re.escape(c) for c in sorted(BIDI_CHARS))
+    + r"]"
+)
+
+_TERMINAL_CONTROL_RE = re.compile(f"(?P<own>{_OWN_SEQUENCES})|{_HOSTILE_SEQUENCES}")
+
+
+def scrub_terminal_controls(text: str) -> str:
+    """Drop terminal-control sequences that did not originate in this program."""
+    return _TERMINAL_CONTROL_RE.sub(lambda m: m.group("own") or "", text)
+
+
+class _TerminalControlFilter:
+    """A text stream that scrubs control sequences on their way to a terminal.
+
+    Names, places and note text are printed exactly as the file spells them,
+    and a file is free to spell them with an OSC window-title set or a screen
+    clear in the middle. Filtering here rather than in each collector means
+    every command's terminal output is covered by one chokepoint, including
+    the JSON formatters - json.dumps escapes C0 but passes C1 through raw, so
+    an 8-bit CSI survives the encoder untouched.
+    """
+
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        self._stream.write(scrub_terminal_controls(text))
+        # Callers care whether their whole string was accepted, not how much
+        # of it the terminal ended up seeing.
+        return len(text)
+
+    def writelines(self, lines: Iterable[str]) -> None:
+        for line in lines:
+            self.write(line)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
 
 def _harden_streams() -> None:
     """Make stdout/stderr survive non-ASCII output on legacy codepages.
@@ -125,6 +185,12 @@ def _harden_streams() -> None:
     forcing UTF-8 onto a cp1252 console produces mojibake; it only gets the
     error handler, which changes nothing except for characters that would
     otherwise raise.
+
+    A terminal also gets the control-sequence filter, and a redirected stream
+    must not: `export --to csv > people.csv` writes a real data file through
+    stdout, and quietly deleting bytes from a user's export would be a worse
+    bug than the one the filter exists to fix. Nothing interprets an escape
+    sequence in a file, so there is nothing there to defend against either.
     """
     global _streams_hardened
     if _streams_hardened:
@@ -136,9 +202,9 @@ def _harden_streams() -> None:
         # User specified their own error handler; leave both settings alone.
         return
 
-    for stream, original in (
-        (sys.stdout, sys.__stdout__),
-        (sys.stderr, sys.__stderr__),
+    for name, stream, original in (
+        ("stdout", sys.stdout, sys.__stdout__),
+        ("stderr", sys.stderr, sys.__stderr__),
     ):
         # Only touch the real interpreter streams. pytest's CaptureIO is a
         # TextIOWrapper subclass and would otherwise be mutated session-wide.
@@ -150,13 +216,16 @@ def _harden_streams() -> None:
         if reconfigure is None:
             continue
         try:
-            if stream.isatty() or io_encoding:
+            is_tty = stream.isatty()
+            if is_tty or io_encoding:
                 reconfigure(errors="backslashreplace")
             else:
                 # reconfigure() resets errors to strict unless told otherwise.
                 reconfigure(encoding="utf-8", errors="backslashreplace")
         except (ValueError, OSError):
             continue
+        if is_tty:
+            setattr(sys, name, cast("TextIO", _TerminalControlFilter(stream)))
 
 
 def main(argv: list[str] | None = None) -> int:
