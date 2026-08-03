@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import re
+import stat
 import sys
 import unicodedata
 from contextlib import suppress
@@ -178,11 +179,27 @@ def write_output_securely(
     create-or-fail but symlinks are followed and the mode is ignored — the
     same concession the `sys.platform != "win32"` chmod guard already made.
     """
-    if path.exists() and not path.is_file():
-        # /dev/null, /dev/stdout, FIFOs: nothing to create, nothing to
-        # truncate, and no mode worth setting. Write them the plain way.
+    target_mode: int | None
+    try:
+        target_mode = os.lstat(path).st_mode
+    except OSError:
+        # Nothing there yet (or the parent is unreadable): let the atomic open
+        # below decide. A propagating FileNotFoundError here would break every
+        # ordinary "create a new file" write.
+        target_mode = None
+
+    if target_mode is not None and (
+        stat.S_ISCHR(target_mode) or stat.S_ISFIFO(target_mode)
+    ):
+        # /dev/null and named pipes: nothing to create, nothing to truncate,
+        # and no mode worth setting. Write them the plain way.
+        #
+        # lstat, not stat: stat() follows symlinks, so a link aimed at a FIFO
+        # or a device would look identical to the real thing and get written
+        # through — exactly what the symlink guard below exists to stop.
+        # Anything else, links included, falls through to O_NOFOLLOW.
         if isinstance(data, str):
-            path.write_text(data, encoding=encoding)
+            path.write_text(data, encoding=encoding, newline="")
         else:
             path.write_bytes(data)
         return None
@@ -191,7 +208,7 @@ def write_output_securely(
         os.O_WRONLY
         | os.O_CREAT
         | getattr(os, "O_NOFOLLOW", 0)  # POSIX only; absent on Windows
-        | getattr(os, "O_BINARY", 0)  # Windows only; no newline translation
+        | getattr(os, "O_BINARY", 0)  # Windows only; keeps the CRT out of it
         | (os.O_TRUNC if force else os.O_EXCL)
     )
 
@@ -203,6 +220,11 @@ def write_output_securely(
         # answer is not "use --force" — that path is refused as well.
         if e.errno == errno.ELOOP or path.is_symlink():
             return f"Error: {SYMLINK_OUTPUT_ERROR}"
+        if path.is_dir():
+            # Checked before FileExistsError: a directory also raises EEXIST
+            # under O_EXCL, and "use --force" would be false advice — with
+            # --force the open raises EISDIR instead.
+            return f"Error: {path} is a directory. Give a file path instead."
         if isinstance(e, FileExistsError):
             return f"Error: {path} already exists. Use --force to overwrite."
         raise
@@ -215,7 +237,10 @@ def write_output_securely(
             os.fchmod(fd, 0o600)
 
     if isinstance(data, str):
-        with os.fdopen(fd, "w", encoding=encoding) as text_out:
+        # newline="" is load-bearing: the default rewrites every \n as
+        # os.linesep, which on Windows turns csv.writer's own \r\n into \r\r\n.
+        # O_BINARY only silences the CRT; Python's translation is its own layer.
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as text_out:
             text_out.write(data)
     else:
         with os.fdopen(fd, "wb") as byte_out:

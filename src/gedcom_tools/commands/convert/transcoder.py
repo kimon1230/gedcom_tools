@@ -158,15 +158,17 @@ def update_char_header(text: str, new_char: str) -> str:
 
 
 def count_long_lines(text: str, codec_name: str) -> tuple[int, int]:
-    raw_lines = text.split("\n")
+    # Splits on exactly the three GEDCOM line terminators, matching
+    # filter.parser.parse_lines. Splitting on "\n" alone collapses a classic
+    # Mac CR-only file into one line, which then trips the 255-byte check.
+    raw_lines = re.split(r"\r\n|\r|\n", text)
     # Filter trailing empty string from final newline
     if raw_lines and raw_lines[-1] == "":
         raw_lines = raw_lines[:-1]
 
     over = 0
     for line in raw_lines:
-        stripped = line.rstrip("\r")
-        if len(stripped.encode(codec_name, errors="replace")) > 255:
+        if len(line.encode(codec_name, errors="replace")) > 255:
             over += 1
 
     return len(raw_lines), over

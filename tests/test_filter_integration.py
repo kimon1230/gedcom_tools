@@ -213,6 +213,92 @@ class TestFilterStripTag:
 
 
 # ---------------------------------------------------------------------------
+# TestFilterStructuralTags
+# ---------------------------------------------------------------------------
+
+
+SUBM_GED = (
+    "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n1 SUBM @SUBM1@\n"
+    "0 @SUBM1@ SUBM\n1 NAME Kimon\n1 ADDR 1 Main St\n"
+    "0 @I1@ INDI\n1 NAME John /Smith/\n"
+    "0 TRLR\n"
+)
+
+
+class TestFilterStructuralTags:
+    def test_strip_trlr_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["TRLR"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert content.rstrip().endswith("0 TRLR")
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_strip_head_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["HEAD"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert content.startswith("0 HEAD")
+        assert "HEAD" in capsys.readouterr().err
+
+    def test_strip_subm_still_removes_the_record(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Stripping the submitter is a privacy workflow, not a structural break."""
+        src = _write_ged(tmp_path, SUBM_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["SUBM"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "SUBM" not in content
+        assert "Kimon" not in content
+        assert content.startswith("0 HEAD")
+        assert content.rstrip().endswith("0 TRLR")
+
+    def test_mixed_strip_tags_apply_the_valid_one(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["TRLR", "NOTE"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "NOTE" not in content
+        assert content.rstrip().endswith("0 TRLR")
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_output_missing_trlr_aborts_without_writing(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Backstop for a transform that drops TRLR by some other route."""
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+
+        def _drop_trlr(
+            records: list[object], spec: object
+        ) -> tuple[list[object], set[str]]:
+            return [r for r in records if getattr(r, "tag", None) != "TRLR"], set()
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.filter.apply_strip_transforms", _drop_trlr
+        )
+        code = run(_make_args(src, out, strip_tag=["NAME"]))
+        assert code == EXIT_ERROR
+        assert not out.exists()
+        assert "would not be a valid GEDCOM" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
 # TestFilterCombined
 # ---------------------------------------------------------------------------
 

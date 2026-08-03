@@ -299,13 +299,19 @@ def test_broken_pipe_exits_success(tmp_path):
             "--dry-run",
         ],
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        # Captured, not discarded. This fails on Windows with status 120 -
+        # CPython's shutdown-flush failure - and the only artifact that says
+        # why is the "Exception ignored in: <_io.TextIOWrapper name='<stdout>'>"
+        # line the interpreter prints on that path. DEVNULL threw it away, so
+        # every red run reported a bare `assert 120 == 0` and nothing else.
+        stderr=subprocess.PIPE,
     )
     # Closing the read end is head walking away once it has the line it
     # wanted: every later write on the child's side gets EPIPE.
     assert proc.stdout is not None
     proc.stdout.close()
-    assert proc.wait(timeout=120) == EXIT_SUCCESS
+    _, err = proc.communicate(timeout=120)
+    assert proc.returncode == EXIT_SUCCESS, err.decode(errors="replace")
 
 
 def test_broken_pipe_handler_survives_fdless_stdout(monkeypatch, tmp_path):

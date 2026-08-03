@@ -325,6 +325,37 @@ class TestCountLongLines:
         assert total == 1
         assert over == 1
 
+    def test_cr_only_lines_counted_individually(self) -> None:
+        # Classic Mac files terminate lines with a bare CR. Splitting on "\n"
+        # alone collapsed the whole file into a single over-long "line".
+        rows = ["0 HEAD", "1 CHAR ANSEL", "1 NOTE " + "x" * 120, "0 TRLR"]
+        total, over = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        assert total == 4
+        assert over == 0
+
+    def test_line_ending_styles_agree(self) -> None:
+        rows = ["0 HEAD", "1 CHAR ANSEL", "1 NOTE " + "x" * 120, "0 TRLR"]
+        cr = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        lf = count_long_lines("\n".join(rows) + "\n", "utf-8")
+        crlf = count_long_lines("\r\n".join(rows) + "\r\n", "utf-8")
+        assert cr == lf == crlf == (4, 0)
+
+    def test_long_line_counted_for_every_line_ending(self) -> None:
+        rows = ["0 HEAD", "1 NOTE " + "x" * 256, "0 TRLR"]
+        cr = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        lf = count_long_lines("\n".join(rows) + "\n", "utf-8")
+        crlf = count_long_lines("\r\n".join(rows) + "\r\n", "utf-8")
+        assert cr == lf == crlf == (3, 1)
+
+    def test_unterminated_final_line_still_counted(self) -> None:
+        # Only one trailing terminator is dropped; a file that ends without one
+        # keeps its last line.
+        assert count_long_lines("0 HEAD\r0 TRLR", "utf-8") == (2, 0)
+
+    def test_blank_line_before_terminator_kept(self) -> None:
+        # Two consecutive CRs mean an empty line, not a line ending to swallow.
+        assert count_long_lines("0 HEAD\r\r0 TRLR\r", "utf-8") == (3, 0)
+
 
 # ---------------------------------------------------------------------------
 # TestTranscode

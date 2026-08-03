@@ -8,6 +8,7 @@ extracting subtrees rooted at a specific individual.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from gedcom_tools.commands.filter.models import (
@@ -26,6 +27,12 @@ from gedcom_tools.graph import (
     find_ancestors,
     find_descendants,
 )
+
+# Tags whose removal would leave the output structurally invalid. These are
+# silently dropped from user-supplied --strip-tag values. Note that SUBM is
+# deliberately absent: stripping the submitter record is a legitimate privacy
+# operation and must keep working.
+_UNSTRIPPABLE_TAGS = frozenset({"HEAD", "TRLR"})
 
 
 def apply_strip_transforms(
@@ -68,9 +75,19 @@ def apply_strip_transforms(
     # 4. Strip-tag (user-specified tags, both record and line level)
     if spec.strip_tags:
         user_tags = {t.upper() for t in spec.strip_tags}
-        records, removed = _strip_records_by_tag(records, user_tags)
-        all_removed_xrefs.update(removed)
-        records = _strip_lines_by_tag(records, user_tags)
+        ignored = user_tags & _UNSTRIPPABLE_TAGS
+        if ignored:
+            names = ", ".join(sorted(ignored))
+            print(
+                f"Warning: Ignoring --strip-tag {names}: removing "
+                "these tags would produce an invalid GEDCOM file.",
+                file=sys.stderr,
+            )
+            user_tags -= ignored
+        if user_tags:
+            records, removed = _strip_records_by_tag(records, user_tags)
+            all_removed_xrefs.update(removed)
+            records = _strip_lines_by_tag(records, user_tags)
 
     return records, all_removed_xrefs
 

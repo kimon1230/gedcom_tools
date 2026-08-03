@@ -500,6 +500,21 @@ class TestWriteOutputSecurely:
         assert "--force" in result
         assert out.read_text(encoding="utf-8") == "keep me"
 
+    @pytest.mark.parametrize("force", [False, True])
+    def test_directory_target_is_refused_with_actionable_advice(
+        self, tmp_path: Path, force: bool
+    ) -> None:
+        # A directory also raises EEXIST under O_EXCL, so it would otherwise
+        # be reported as "use --force" - advice that leads straight to an
+        # unhandled EISDIR. Both spellings must say the same true thing.
+        out = tmp_path / "somedir"
+        out.mkdir()
+        result = write_output_securely(out, b"new", force=force)
+        assert result is not None
+        assert "is a directory" in result
+        assert "--force" not in result
+        assert out.is_dir()
+
     def test_force_overwrites_a_regular_file(self, tmp_path: Path) -> None:
         out = tmp_path / "out.ged"
         out.write_text("stale and much longer than the replacement", encoding="utf-8")
@@ -613,3 +628,104 @@ class TestWriteOutputSecurely:
         out = tmp_path / "out.ged"
         assert write_output_securely(out, b"data", force=False) is None
         assert out.read_bytes() == b"data"
+
+    @posix_only
+    def test_symlink_to_a_fifo_is_refused(self, tmp_path: Path) -> None:
+        # A link is not a device, however much stat() insists otherwise. Reader
+        # held open so a write-through would succeed rather than block — the
+        # test has to fail loudly if the guard ever regresses.
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        link = tmp_path / "out.csv"
+        link.symlink_to(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            result = write_output_securely(link, "leaked", force=False)
+
+            assert result == "Error: Output path is a symlink; refusing to follow it."
+            # No writer ever opened the pipe, so the non-blocking read reports
+            # EOF rather than data.
+            assert os.read(reader, 16) == b""
+        finally:
+            os.close(reader)
+
+    @posix_only
+    def test_symlink_to_a_regular_file_is_refused(self, tmp_path: Path) -> None:
+        victim = tmp_path / "important.csv"
+        victim.write_text("someone else's file", encoding="utf-8")
+        link = tmp_path / "out.csv"
+        link.symlink_to(victim)
+
+        result = write_output_securely(link, "leaked", force=False)
+
+        assert result == "Error: Output path is a symlink; refusing to follow it."
+        assert victim.read_text(encoding="utf-8") == "someone else's file"
+
+    def test_character_device_still_takes_the_fast_path(self) -> None:
+        # /dev/null is the real thing, not a link to it, so the lstat gate has
+        # to let it through.
+        assert write_output_securely(Path(os.devnull), "data", force=False) is None
+
+    @posix_only
+    def test_real_fifo_still_takes_the_fast_path(self, tmp_path: Path) -> None:
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            assert write_output_securely(fifo, b"through", force=False) is None
+            assert os.read(reader, 16) == b"through"
+        finally:
+            os.close(reader)
+
+
+class TestWriteOutputSecurelyNewlines:
+    # These assert on-disk bytes because the bug they pin is invisible to
+    # csv.reader: newline=None makes TextIOWrapper expand \n to os.linesep, so
+    # csv.writer's own \r\n reaches a Windows disk as \r\r\n and reads back as a
+    # blank row between every real one. POSIX linesep is already \n, so these
+    # pass either way here — their job is to hold the line on Windows.
+    ROWS = "id,name\r\nI1,Smith\r\n"
+
+    def test_crlf_is_not_expanded(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.csv"
+        write_output_securely(out, self.ROWS, force=False)
+        raw = out.read_bytes()
+        assert b"\r\r\n" not in raw
+        assert raw == b"id,name\r\nI1,Smith\r\n"
+
+    def test_bare_lf_stays_bare(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.txt"
+        write_output_securely(out, "one\ntwo\n", force=False)
+        raw = out.read_bytes()
+        assert b"\r\n" not in raw
+        assert raw == b"one\ntwo\n"
+
+    def test_force_overwrite_does_not_translate_either(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.csv"
+        out.write_text("stale", encoding="utf-8")
+        write_output_securely(out, self.ROWS, force=True)
+        assert out.read_bytes() == b"id,name\r\nI1,Smith\r\n"
+
+    @posix_only
+    def test_fast_path_crlf_is_not_expanded(self, tmp_path: Path) -> None:
+        # Path.write_text has the same newline=None default, so the FIFO branch
+        # needs its own proof.
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            write_output_securely(fifo, self.ROWS, force=False)
+            assert os.read(reader, 64) == b"id,name\r\nI1,Smith\r\n"
+        finally:
+            os.close(reader)
+
+    @posix_only
+    def test_fast_path_bare_lf_stays_bare(self, tmp_path: Path) -> None:
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            write_output_securely(fifo, "one\ntwo\n", force=False)
+            assert os.read(reader, 64) == b"one\ntwo\n"
+        finally:
+            os.close(reader)

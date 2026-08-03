@@ -596,6 +596,320 @@ class TestCollectorBasic:
         assert result.generation_depth == 3
 
 
+def _write_father_chain(path: Path, generations: int) -> None:
+    """Write a pedigree that is a single unbroken father chain.
+
+    @I1@ is the youngest; @I{generations}@ is the apical ancestor.
+    """
+    lines = ["0 HEAD", "1 SOUR Test", "1 GEDC", "2 VERS 5.5.1", "1 CHAR UTF-8"]
+
+    for i in range(1, generations + 1):
+        lines.append(f"0 @I{i}@ INDI")
+        lines.append(f"1 NAME Person{i} /Chain/")
+        lines.append("1 SEX M")
+        if i < generations:
+            lines.append(f"1 FAMC @F{i}@")
+        if i > 1:
+            lines.append(f"1 FAMS @F{i - 1}@")
+
+    for i in range(1, generations):
+        lines.append(f"0 @F{i}@ FAM")
+        lines.append(f"1 HUSB @I{i + 1}@")
+        lines.append(f"1 CHIL @I{i}@")
+
+    lines.append("0 TRLR")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestGenerationDepthTraversal:
+
+    def test_very_long_chain_does_not_overflow_stack(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "deep_chain.ged"
+        _write_father_chain(gedcom, 3000)
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 3000
+        assert result.earliest_generation is not None
+        assert result.earliest_generation.xref == "@I1@"
+
+    def test_shared_ancestor_depth_is_order_independent(self, tmp_path: Path) -> None:
+        # @S1@ is an ancestor of @X1@ twice over: once as the father (a
+        # single hop) and once through a four-generation maternal line.
+        gedcom = tmp_path / "pedigree_collapse.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @A1@ INDI
+1 NAME Apex /Collapse/
+1 SEX M
+1 FAMS @FA1@
+0 @A2@ INDI
+1 NAME Second /Collapse/
+1 SEX M
+1 FAMC @FA1@
+1 FAMS @FA2@
+0 @A3@ INDI
+1 NAME Third /Collapse/
+1 SEX M
+1 FAMC @FA2@
+1 FAMS @FA3@
+0 @S1@ INDI
+1 NAME Shared /Collapse/
+1 SEX M
+1 FAMC @FA3@
+1 FAMS @FM1@
+1 FAMS @FX1@
+0 @M1@ INDI
+1 NAME Mother1 /Collapse/
+1 SEX F
+1 FAMC @FM1@
+1 FAMS @FM2@
+0 @M2@ INDI
+1 NAME Mother2 /Collapse/
+1 SEX F
+1 FAMC @FM2@
+1 FAMS @FM3@
+0 @M3@ INDI
+1 NAME Mother3 /Collapse/
+1 SEX F
+1 FAMC @FM3@
+1 FAMS @FX1@
+0 @X1@ INDI
+1 NAME Descendant /Collapse/
+1 SEX F
+1 FAMC @FX1@
+0 @FA1@ FAM
+1 HUSB @A1@
+1 CHIL @A2@
+0 @FA2@ FAM
+1 HUSB @A2@
+1 CHIL @A3@
+0 @FA3@ FAM
+1 HUSB @A3@
+1 CHIL @S1@
+0 @FM1@ FAM
+1 HUSB @S1@
+1 CHIL @M1@
+0 @FM2@ FAM
+1 WIFE @M1@
+1 CHIL @M2@
+0 @FM3@ FAM
+1 WIFE @M2@
+1 CHIL @M3@
+0 @FX1@ FAM
+1 HUSB @S1@
+1 WIFE @M3@
+1 CHIL @X1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 8
+        assert result.earliest_generation is not None
+        assert result.earliest_generation.xref == "@X1@"
+
+        # The shared ancestor holds a node property, not a traversal
+        # counter, so the memo must come out identical whichever end of
+        # the file the outer loop starts from.
+        forward: dict[str, int] = {}
+        for xref in collector.individuals:
+            collector._compute_generation_depth(xref, forward)
+
+        backward: dict[str, int] = {}
+        for xref in reversed(list(collector.individuals)):
+            collector._compute_generation_depth(xref, backward)
+
+        assert forward == backward
+        assert forward["@S1@"] == 4
+        assert forward["@M3@"] == 7
+        assert forward["@X1@"] == 8
+
+    def test_parent_cycle_terminates(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "cycle.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME First /Loop/
+1 SEX M
+1 FAMC @F2@
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Second /Loop/
+1 SEX M
+1 FAMC @F1@
+1 FAMS @F2@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I2@
+0 @F2@ FAM
+1 HUSB @I2@
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 2
+
+    def test_self_parent_cycle_terminates(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "self_parent.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Own /Father/
+1 SEX M
+1 FAMC @F1@
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 1
+
+    def test_five_generation_tree(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "five_gen.ged"
+        _write_father_chain(gedcom, 5)
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 5
+
+    def test_individual_without_famc_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "no_famc.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Alone /Rootless/
+1 SEX F
+0 @I2@ INDI
+1 NAME Also /Rootless/
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 1
+        assert collector._parent_xrefs("@I1@") == []
+
+    def test_famc_pointing_at_missing_family_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "dangling_famc.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Orphan /Pointer/
+1 SEX M
+1 FAMC @F99@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 1
+        assert collector._parent_xrefs("@I1@") == []
+
+    def test_famc_family_without_parents_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "childless_parents.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Only /Child/
+1 SEX M
+1 FAMC @F1@
+0 @F1@ FAM
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 1
+
+    def test_unknown_xref_has_no_parents(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "lookup.ged"
+        _write_father_chain(gedcom, 2)
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        collector.collect()
+
+        assert collector._parent_xrefs("@NOPE@") == []
+
+    def test_memo_is_reused_across_calls(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "memo.ged"
+        _write_father_chain(gedcom, 4)
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        collector.collect()
+
+        memo: dict[str, int] = {}
+        assert collector._compute_generation_depth("@I1@", memo) == 4
+        assert memo == {"@I1@": 4, "@I2@": 3, "@I3@": 2, "@I4@": 1}
+
+        # Second call for an already-resolved xref is a pure cache hit.
+        assert collector._compute_generation_depth("@I3@", memo) == 2
+        assert len(memo) == 4
+
+
 class TestEdgeCases:
 
     def test_empty_file(self, tmp_path: Path) -> None:

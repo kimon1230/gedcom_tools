@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from gedcom_tools.commands.filter.models import (
     FilterSpec,
     GedcomLine,
@@ -846,8 +848,11 @@ class TestTransformsEdgeCases:
         assert [c.tag for c in indi.children] == ["NAME"]
 
     def test_strip_tag_does_not_affect_head_trlr(self) -> None:
-        """HEAD and TRLR should not be matched by strip_tags
-        (user would have to explicitly specify HEAD/TRLR)."""
+        """HEAD and TRLR survive strip_tags, even when named explicitly.
+
+        Stripping an unrelated tag must leave them alone, and asking for
+        them by name is refused rather than honoured.
+        """
         records = [
             _record("HEAD"),
             _record("INDI", xref="@I1@"),
@@ -860,6 +865,95 @@ class TestTransformsEdgeCases:
         assert "TRLR" in result_tags
         assert "INDI" not in result_tags
         assert removed == {"@I1@"}
+
+        explicit = FilterSpec(strip_tags=["HEAD", "TRLR"])
+        result, removed = apply_strip_transforms(records, explicit)
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+
+
+# ---------------------------------------------------------------------------
+# TestStripTagStructuralGuard
+# ---------------------------------------------------------------------------
+
+
+class TestStripTagStructuralGuard:
+    def test_trlr_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["TRLR"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_head_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["HEAD"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+        assert "HEAD" in capsys.readouterr().err
+
+    def test_lowercase_trlr_is_refused(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The guard runs after case normalization, so --strip-tag trlr is caught."""
+        records = [_record("HEAD"), _record("TRLR")]
+        result, _ = apply_strip_transforms(records, FilterSpec(strip_tags=["trlr"]))
+        assert [r.tag for r in result] == ["HEAD", "TRLR"]
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_subm_is_still_strippable(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """SUBM is data, not structure. Stripping it is a supported privacy step."""
+        records = [
+            _record("HEAD"),
+            _record("SUBM", xref="@SUBM1@", children=[_line(1, "NAME", "Me")]),
+            _record("INDI", xref="@I1@"),
+            _record("TRLR"),
+        ]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["SUBM"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == {"@SUBM1@"}
+        assert capsys.readouterr().err == ""
+
+    def test_mixed_tags_strips_the_safe_one(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [
+            _record("HEAD"),
+            _record("INDI", xref="@I1@", children=[_line(1, "NOTE", "inline")]),
+            _record("NOTE", xref="@N1@"),
+            _record("TRLR"),
+        ]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["TRLR", "NOTE"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == {"@N1@"}
+        indi = next(r for r in result if r.tag == "INDI")
+        assert indi.children == []
+        err = capsys.readouterr().err
+        assert "TRLR" in err
+        assert "NOTE" not in err
+
+    def test_warning_names_both_ignored_tags(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [_record("HEAD"), _record("TRLR")]
+        apply_strip_transforms(records, FilterSpec(strip_tags=["TRLR", "HEAD"]))
+        err = capsys.readouterr().err
+        assert "HEAD, TRLR" in err
+
+    def test_no_warning_when_nothing_ignored(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        apply_strip_transforms(records, FilterSpec(strip_tags=["INDI"]))
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------

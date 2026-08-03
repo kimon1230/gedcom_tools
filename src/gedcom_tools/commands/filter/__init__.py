@@ -227,6 +227,16 @@ def run(args: Namespace) -> int:
 
         output_counts = count_records(records)
 
+    # Backstop: no transform may drop the structural records, whatever route
+    # it takes. Bail out before writing rather than emit a broken file.
+    if not has_head_and_trlr(records):
+        print(
+            "Error: Filtering removed HEAD or TRLR; "
+            "output would not be a valid GEDCOM.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
     removed_counts = RecordCounts(
         indi=source_counts.indi - output_counts.indi,
         fam=source_counts.fam - output_counts.fam,
