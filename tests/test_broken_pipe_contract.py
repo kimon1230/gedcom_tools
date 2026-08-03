@@ -217,10 +217,54 @@ def test_cli_dispatch_catches_broken_pipe_before_its_generic_handler() -> None:
     # _run_command is the end of the chain, not a link in it: it turns the
     # commands' re-raise into a clean exit instead of passing it on. So the
     # ordering is what matters here, not the re-raise the rule looks for.
-    tries = _generic_tries(_find_function(_parse(cli), "_run_command"))
-    assert len(tries) == 1
-    caught = [h.type.id for h in tries[0].handlers if isinstance(h.type, ast.Name)]
-    assert caught.index("BrokenPipeError") < caught.index("Exception")
+    #
+    # The arms catch OSError, not BrokenPipeError: a closed pipe on Windows
+    # arrives as OSError(EINVAL), which BrokenPipeError misses entirely - that
+    # was CI run 30835357508, exit 120 on both Windows legs.
+    #
+    # They are nested inside the generic try rather than siblings of it. As
+    # siblings, the `raise` that rejects a non-pipe errno would skip the
+    # generic handler and escape as an unhandled traceback; nesting is what
+    # routes it to report_error. So the ordering this asserts is containment.
+    fn = _find_function(_parse(cli), "_run_command")
+    generic = _generic_tries(fn)
+    assert len(generic) == 1
+    pipe_arms = [
+        h
+        for node in ast.walk(generic[0])
+        for h in (node.handlers if isinstance(node, ast.Try) else [])
+        if isinstance(h.type, ast.Name) and h.type.id == "OSError"
+    ]
+    assert pipe_arms, "the pipe-shaped handlers must sit inside the generic try"
+
+
+def test_cli_dispatch_pipe_arms_are_errno_gated() -> None:
+    """Every `except OSError` in _run_command must consult `_reader_gone`.
+
+    A bare `except OSError` here is the failure mode this guards. The outer
+    arm returns EXIT_SUCCESS, so unguarded it reports a PermissionError as a
+    clean run; the inner one would swallow ENOSPC and call a truncated file a
+    successful write. Both were caught in review before they shipped.
+    """
+    fn = _find_function(_parse(cli), "_run_command")
+    arms = [
+        h
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Try)
+        for h in node.handlers
+        if isinstance(h.type, ast.Name) and h.type.id == "OSError"
+    ]
+    assert arms, "expected the pipe-shaped handlers to catch OSError"
+    for arm in arms:
+        called = {
+            n.func.id
+            for n in ast.walk(arm)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+        assert "_reader_gone" in called, (
+            "an `except OSError` in _run_command that does not consult "
+            "_reader_gone swallows every I/O failure, not just a closed pipe"
+        )
 
 
 # --- the rule, checked against sources written to break it -----------------

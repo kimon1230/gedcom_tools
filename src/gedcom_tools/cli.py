@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import io
 import os
 import re
@@ -249,6 +250,19 @@ def main(argv: list[str] | None = None) -> int:
     return _run_command(args)
 
 
+# Errnos that mean "the reader is gone". CPython raises BrokenPipeError for
+# EPIPE and ESHUTDOWN, but a closed pipe on Windows surfaces as a plain
+# OSError(EINVAL) - confirmed from CI run 30835357508, where it escaped both
+# BrokenPipeError arms into the generic handler and the interpreter's own
+# shutdown flush then failed too, overriding the status with 120.
+_READER_GONE_ERRNOS = frozenset({errno.EPIPE, errno.ESHUTDOWN, errno.EINVAL})
+
+
+def _reader_gone(exc: OSError) -> bool:
+    """True when `exc` means the far end of stdout closed."""
+    return exc.errno in _READER_GONE_ERRNOS
+
+
 def _silence_stdout() -> None:
     """Point stdout's fd at devnull so the shutdown flush lands harmlessly.
 
@@ -270,25 +284,35 @@ def _silence_stdout() -> None:
 
 def _run_command(args: Namespace) -> int:
     try:
-        # Annotated because attribute access on a module is Any to mypy.
-        exit_code: int = _HANDLERS[args.command].run(args)
-        # stdout is block-buffered when piped, so a closed reader normally only
-        # surfaces during the interpreter's own shutdown flush - too late to
-        # handle, and worth exit status 120. Flushing here moves the failure
-        # into this try block.
+        # Nested rather than a sibling `except OSError`: a non-pipe errno
+        # re-raises from the inner handler, and only nesting lets it reach the
+        # generic handler below. As siblings it would escape _run_command
+        # entirely as an unhandled traceback.
         try:
-            sys.stdout.flush()
-        except BrokenPipeError:
-            # The command already reached a verdict; a reader that walked away
-            # afterwards does not change it.
+            # Annotated because attribute access on a module is Any to mypy.
+            exit_code: int = _HANDLERS[args.command].run(args)
+            # stdout is block-buffered when piped, so a closed reader normally
+            # only surfaces during the interpreter's own shutdown flush - too
+            # late to handle, and worth exit status 120. Flushing here moves
+            # the failure into this try block.
+            try:
+                sys.stdout.flush()
+            except OSError as e:
+                # The command already reached a verdict; a reader that walked
+                # away afterwards does not change it.
+                if not _reader_gone(e):
+                    raise
+                _silence_stdout()
+            return exit_code
+        except OSError as e:
+            # The pipe closed mid-write, so the command never reached a
+            # verdict. `gedcom-tools ... | head` is a normal way to use the
+            # tool, not an error. Everything else OSError-shaped - a full disk,
+            # an unwritable path - is a real failure and falls through.
+            if not _reader_gone(e):
+                raise
             _silence_stdout()
-        return exit_code
-    except BrokenPipeError:
-        # The pipe closed mid-write, so the command never reached a verdict.
-        # `gedcom-tools ... | head` is a normal way to use the tool, not an
-        # error.
-        _silence_stdout()
-        return EXIT_SUCCESS
+            return EXIT_SUCCESS
     except Exception as e:
         if args.verbose:
             # Note: --verbose shows file paths in traceback, acceptable for local CLI

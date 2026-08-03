@@ -1,3 +1,5 @@
+import argparse
+import errno
 import io
 import subprocess
 import sys
@@ -312,6 +314,49 @@ def test_broken_pipe_exits_success(tmp_path):
     proc.stdout.close()
     _, err = proc.communicate(timeout=120)
     assert proc.returncode == EXIT_SUCCESS, err.decode(errors="replace")
+
+
+@pytest.mark.parametrize(
+    "err",
+    [errno.EPIPE, errno.ESHUTDOWN, errno.EINVAL],
+    ids=["EPIPE", "ESHUTDOWN", "EINVAL"],
+)
+def test_reader_gone_errnos_exit_success(monkeypatch, err):
+    """A closed reader is a clean exit whichever errno the platform picks.
+
+    EINVAL is the Windows spelling and is not a BrokenPipeError, which is how
+    it escaped both arms into the generic handler and produced exit 120.
+    """
+
+    def burst(args):
+        raise OSError(err, "reader went away")
+
+    monkeypatch.setattr(stats, "run", burst)
+    # StringIO has no fileno, so _silence_stdout's dup2 no-ops. With pytest's
+    # real capture fd it would redirect that to devnull and break capturing
+    # for the rest of the session.
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    args = argparse.Namespace(command="stats", verbose=False)
+    assert cli._run_command(args) == EXIT_SUCCESS
+
+
+@pytest.mark.parametrize(
+    "err", [errno.ENOSPC, errno.EACCES, errno.EIO], ids=["ENOSPC", "EACCES", "EIO"]
+)
+def test_non_pipe_errnos_still_fail_loudly(monkeypatch, capsys, err):
+    """The errno gate is the whole point: a real I/O failure must not silence.
+
+    Unguarded, the outer arm returns EXIT_SUCCESS for anything OSError-shaped,
+    so a full disk or an unwritable path would be reported as a clean run.
+    """
+
+    def burst(args):
+        raise OSError(err, "a real failure")
+
+    monkeypatch.setattr(stats, "run", burst)
+    args = argparse.Namespace(command="stats", verbose=False)
+    assert cli._run_command(args) == EXIT_ERROR
+    assert "Error:" in capsys.readouterr().err
 
 
 def test_broken_pipe_handler_survives_fdless_stdout(monkeypatch, tmp_path):
