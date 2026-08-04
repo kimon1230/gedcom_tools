@@ -6,8 +6,19 @@ import json
 import sys
 from pathlib import Path
 
+from gedcom_tools.cli import create_parser, main
 from gedcom_tools.commands.compare import register_subcommand, run
 from gedcom_tools.constants import EXIT_SUCCESS, EXIT_USAGE_ERROR
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    """Args built the way the CLI builds them: real dest names, real defaults."""
+    return create_parser().parse_args(argv)
+
+
+def _run_cli(argv: list[str]) -> int:
+    """Drive the published entry point end to end, parser and dispatch included."""
+    return main(argv)
 
 
 def _write_gedcom(path: Path, individuals: list[str]) -> Path:
@@ -69,21 +80,54 @@ def _make_args(
     limit: int | None = None,
     reject_sex_mismatch: bool = False,
     phonetic: str = "soundex",
+    max_block_size: int = 500,
 ) -> argparse.Namespace:
-    return argparse.Namespace(
-        file_a=file_a,
-        file_b=file_b,
-        format=fmt,
-        quiet=quiet,
-        verbose=verbose,
-        no_color=no_color,
-        certain_threshold=certain_threshold,
-        probable_threshold=probable_threshold,
-        show_matches=show_matches,
-        list_unique=list_unique,
-        limit=limit,
-        reject_sex_mismatch=reject_sex_mismatch,
-        phonetic=phonetic,
+    argv = [f"--format={fmt}"]
+    if quiet:
+        argv.append("--quiet")
+    if verbose:
+        argv.append("--verbose")
+    if no_color:
+        argv.append("--no-color")
+    argv += [
+        "compare",
+        str(file_a),
+        str(file_b),
+        f"--certain-threshold={certain_threshold}",
+        f"--probable-threshold={probable_threshold}",
+        f"--show-matches={show_matches}",
+        f"--phonetic={phonetic}",
+        f"--max-block-size={max_block_size}",
+    ]
+    if list_unique:
+        argv.append("--list-unique")
+    if reject_sex_mismatch:
+        argv.append("--reject-sex-mismatch")
+    # Left off entirely when None, so the parser's own default is what runs.
+    if limit is not None:
+        argv.append(f"--limit={limit}")
+    return _parse(argv)
+
+
+# Distinct enough that no two share a Soundex code, so the given-name passes
+# never produce a block of their own.
+_CROWD_GIVEN_NAMES = ["Alan", "Bertha", "Carl", "Dora", "Egbert", "Fiona"]
+
+
+def _crowded_surname_file(path: Path, xref_prefix: str, count: int) -> Path:
+    """People who all share one surname + birth decade, i.e. one fat block."""
+    return _write_gedcom(
+        path,
+        [
+            _indi_block(
+                f"@{xref_prefix}{n}@",
+                _CROWD_GIVEN_NAMES[n],
+                "Smith",
+                "M",
+                birth_year=1850 + n,
+            )
+            for n in range(count)
+        ],
     )
 
 
@@ -359,12 +403,19 @@ class TestFlags:
         ]
         fa = _write_gedcom(tmp_path / "a.ged", indis_a)
         fb = _write_gedcom(tmp_path / "b.ged", indis_b)
-        args = _make_args(fa, fb, fmt="json", limit=1)
-        run(args)
-        data = json.loads(capsys.readouterr().out)
-        # limit=1 caps each section to 1 item
-        assert data["certain_matches"] == [] or len(data["certain_matches"]) <= 1
-        assert data["probable_matches"] == [] or len(data["probable_matches"]) <= 1
+
+        # Control run. Ten identical people on both sides all score 1.0, so
+        # every pair lands in certain_matches and probable_matches stays empty.
+        # Without this the limited assertion below would also pass on a bucket
+        # that was empty to begin with.
+        run(_make_args(fa, fb, fmt="json", limit=0))
+        unlimited = json.loads(capsys.readouterr().out)
+        assert len(unlimited["certain_matches"]) >= 2
+
+        run(_make_args(fa, fb, fmt="json", limit=1))
+        limited = json.loads(capsys.readouterr().out)
+        assert len(limited["certain_matches"]) == 1
+        assert limited["certain_matches_total"] == len(unlimited["certain_matches"])
 
 
 class TestLimitDefaulting:
@@ -559,3 +610,138 @@ class TestMetaphoneIntegration:
         data_mp = json.loads(capsys.readouterr().out)
         mp_matches = data_mp["certain_matches"] + data_mp["probable_matches"]
         assert len(mp_matches) >= 1
+
+
+class TestOversizedBlockWarning:
+    def _pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        fa = _write_gedcom(
+            tmp_path / "a.ged",
+            [_indi_block("@I1@", "John", "Smith", "M", birth_year=1850)],
+        )
+        fb = _crowded_surname_file(tmp_path / "b.ged", "B", 4)
+        return fa, fb
+
+    def test_warning_names_the_group_count(self, tmp_path: Path, capsys) -> None:
+        fa, fb = self._pair(tmp_path)
+        assert run(_make_args(fa, fb, max_block_size=2)) == EXIT_SUCCESS
+        err = capsys.readouterr().err
+        # One surname block was dropped, not one per individual on side A.
+        assert "1 blocking group exceeded --max-block-size 2" in err
+        assert "some matches may be missing" in err
+
+    def test_count_reaches_json_consumers(self, tmp_path: Path, capsys) -> None:
+        fa, fb = self._pair(tmp_path)
+        assert run(_make_args(fa, fb, fmt="json", max_block_size=2)) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["oversized_blocks_skipped"] == 1
+        assert "--max-block-size" in captured.err
+
+    def test_quiet_still_says_the_answer_is_incomplete(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        fa, fb = self._pair(tmp_path)
+        assert run(_make_args(fa, fb, quiet=True, max_block_size=2)) == EXIT_SUCCESS
+        assert "blocking group" in capsys.readouterr().err
+
+    def test_nothing_skipped_is_silent(self, tmp_path: Path, capsys) -> None:
+        fa, fb = self._pair(tmp_path)
+        assert run(_make_args(fa, fb, fmt="json")) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert "blocking group" not in captured.err
+        assert "oversized_blocks_skipped" not in json.loads(captured.out)
+
+    def test_raising_the_cap_recovers_the_matches(self, tmp_path: Path, capsys) -> None:
+        # Four namesakes: every blocking pass puts them in the same group, so
+        # a low cap leaves no route to the match at all.
+        fa = _write_gedcom(
+            tmp_path / "a.ged",
+            [_indi_block("@I1@", "Alan", "Smith", "M", birth_year=1850)],
+        )
+        fb = _write_gedcom(
+            tmp_path / "b.ged",
+            [
+                _indi_block(f"@B{n}@", "Alan", "Smith", "M", birth_year=1850 + n)
+                for n in range(4)
+            ],
+        )
+
+        run(_make_args(fa, fb, fmt="json", max_block_size=2))
+        capped = json.loads(capsys.readouterr().out)
+
+        run(_make_args(fa, fb, fmt="json", max_block_size=10))
+        full = json.loads(capsys.readouterr().out)
+
+        assert capped["certain_matches_total"] + capped["probable_matches_total"] == 0
+        assert capped["oversized_blocks_skipped"] == 3
+        assert full["certain_matches_total"] + full["probable_matches_total"] == 1
+        assert "oversized_blocks_skipped" not in full
+
+    def test_zero_cap_is_a_usage_error(self, tmp_path: Path, capsys) -> None:
+        fa, fb = self._pair(tmp_path)
+        assert run(_make_args(fa, fb, max_block_size=0)) == EXIT_USAGE_ERROR
+        assert "--max-block-size must be at least 1" in capsys.readouterr().err
+
+    def test_flag_is_registered(self) -> None:
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        register_subcommand(subparsers)
+        args = parser.parse_args(["compare", "a.ged", "b.ged", "--max-block-size", "5"])
+        assert args.max_block_size == 5
+        default_args = parser.parse_args(["compare", "a.ged", "b.ged"])
+        assert default_args.max_block_size == 500
+
+
+class TestCliEndToEnd:
+    """No hand-built Namespace anywhere: argv in, exit status out."""
+
+    def test_compare_via_main(self, tmp_path: Path, capsys) -> None:
+        a, b = _create_pair(tmp_path)
+        rc = _run_cli(["--format", "json", "--no-color", "compare", str(a), str(b)])
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        matched = {
+            m["individual_a"]["xref"]
+            for m in data["certain_matches"] + data["probable_matches"]
+        }
+        assert "@I1@" in matched
+
+    def test_compare_flags_survive_the_real_parser(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        a, b = _create_pair(tmp_path)
+        rc = _run_cli(
+            [
+                "--format",
+                "json",
+                "--no-color",
+                "compare",
+                str(a),
+                str(b),
+                "--list-unique",
+                "--show-matches",
+                "certain",
+                "--phonetic",
+                "metaphone",
+                "--max-block-size",
+                "50",
+            ]
+        )
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert data["probable_matches"] == []
+        assert {u["xref"] for u in data["unique_to_a"]} >= {"@I3@"}
+
+    def test_threshold_error_reaches_the_exit_status(self, tmp_path: Path) -> None:
+        a, b = _create_pair(tmp_path)
+        rc = _run_cli(
+            [
+                "compare",
+                str(a),
+                str(b),
+                "--certain-threshold",
+                "0.50",
+                "--probable-threshold",
+                "0.65",
+            ]
+        )
+        assert rc == EXIT_USAGE_ERROR

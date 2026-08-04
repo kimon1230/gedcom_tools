@@ -10,6 +10,7 @@ from pathlib import Path
 import ansel  # type: ignore[import-untyped]
 import pytest
 
+from gedcom_tools.cli import create_parser, main
 from gedcom_tools.commands.convert import run
 from gedcom_tools.commands.convert.transcoder import (
     CODEC_TO_CHAR,
@@ -24,6 +25,17 @@ from gedcom_tools.progress import Colors
 from gedcom_tools.utils import BOMS, EncodingInfo, resolve_source_codec, strip_bom
 
 ansel.register()
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    """Args built the way the CLI builds them: real dest names, real defaults."""
+    return create_parser().parse_args(argv)
+
+
+def _run_cli(argv: list[str]) -> int:
+    """Drive the published entry point end to end, parser and dispatch included."""
+    return main(argv)
+
 
 MINIMAL_GED = (
     "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
@@ -41,24 +53,38 @@ def _make_args(
     file_path: Path,
     to_encoding: str,
     output: Path,
-    **kwargs: object,
+    *,
+    from_encoding: str | None = None,
+    force: bool = False,
+    bom: bool = False,
+    no_normalize: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    quiet: bool = False,
+    no_color: bool = True,
+    format: str = "text",
 ) -> argparse.Namespace:
-    defaults: dict[str, object] = {
-        "file": file_path,
-        "to_encoding": to_encoding,
-        "output": output,
-        "from_encoding": None,
-        "force": False,
-        "bom": False,
-        "no_normalize": False,
-        "dry_run": False,
-        "verbose": False,
-        "quiet": False,
-        "no_color": True,
-        "format": "text",
-    }
-    defaults.update(kwargs)
-    return argparse.Namespace(**defaults)
+    argv = [f"--format={format}"]
+    if quiet:
+        argv.append("--quiet")
+    if verbose:
+        argv.append("--verbose")
+    if no_color:
+        argv.append("--no-color")
+    # --to and --from carry dest overrides (to_encoding / from_encoding); going
+    # through the parser is what keeps this file honest about them.
+    argv += ["convert", str(file_path), f"--to={to_encoding}", "--output", str(output)]
+    if from_encoding is not None:
+        argv.append(f"--from={from_encoding}")
+    if force:
+        argv.append("--force")
+    if bom:
+        argv.append("--bom")
+    if no_normalize:
+        argv.append("--no-normalize")
+    if dry_run:
+        argv.append("--dry-run")
+    return _parse(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,3 +1071,73 @@ class TestConvertColorStream:
         code = run(_make_args(src, "utf-8", out, no_color=False))
         assert code == EXIT_SUCCESS
         assert "\x1b[" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# TestCliEndToEnd
+# ---------------------------------------------------------------------------
+
+
+class TestCliEndToEnd:
+    """No hand-built Namespace anywhere: argv in, exit status out."""
+
+    def test_convert_via_main(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        rc = _run_cli(
+            ["--no-color", "convert", str(src), "--to", "utf-8", "-o", str(out)]
+        )
+        assert rc == EXIT_SUCCESS
+        assert "John /Smith/" in out.read_text(encoding="utf-8")
+
+    def test_from_and_to_renamed_dests_reach_the_command(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # --to/--from are the two flags whose dest differs from their name, so
+        # they are exactly the ones a hand-built Namespace could drift from.
+        latin1 = (
+            "0 HEAD\n1 SOUR TEST\n1 CHAR ASCII\n"
+            "0 @I1@ INDI\n1 NAME \xe9mile /Duval/\n0 TRLR\n"
+        )
+        src = tmp_path / "src.ged"
+        src.write_bytes(latin1.encode("latin-1"))
+        out = tmp_path / "out.ged"
+        rc = _run_cli(
+            [
+                "--format",
+                "json",
+                "--no-color",
+                "convert",
+                str(src),
+                "--to",
+                "unicode",
+                "--from",
+                "latin-1",
+                "--output",
+                str(out),
+            ]
+        )
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert data["target_encoding"] == "UNICODE"
+        assert "émile" in out.read_bytes().decode("utf-16-le")
+
+    def test_missing_input_reaches_the_exit_status(self, tmp_path: Path) -> None:
+        rc = _run_cli(
+            [
+                "convert",
+                str(tmp_path / "gone.ged"),
+                "--to",
+                "utf-8",
+                "-o",
+                str(tmp_path / "out.ged"),
+            ]
+        )
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_missing_required_to_is_a_parser_error(self, tmp_path: Path) -> None:
+        src = _write_ged(tmp_path)
+        with pytest.raises(SystemExit):
+            _run_cli(["convert", str(src), "-o", str(tmp_path / "out.ged")])

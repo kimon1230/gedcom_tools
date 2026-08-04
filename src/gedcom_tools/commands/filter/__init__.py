@@ -207,7 +207,6 @@ def run(args: Namespace) -> int:
         if spec.subtree_root is not None:
             records, subtree_removed = extract_subtree(
                 records,
-                file_path,
                 spec.subtree_root,
                 spec.ancestor_depth,
                 spec.descendant_depth,

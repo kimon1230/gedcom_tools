@@ -72,13 +72,18 @@ class TestStrictValidation:
         assert "255" in warnings[0].message
 
     def test_line_too_long_no_strict(self) -> None:
-        """No W032 without --strict mode."""
+        """Outside --strict the over-length line downgrades from W032 to W003."""
         engine = ValidationEngine(FIXTURES / "long_line.ged", mode="full")
         result = engine.validate()
 
         # Should not have W032 without strict mode
         error_codes = [i.code for i in result.issues]
         assert ErrorCode.W032_LINE_TOO_LONG_STRICT not in error_codes
+
+        soft = [i for i in result.issues if i.code == ErrorCode.W003_LINE_TOO_LONG]
+        assert len(soft) == 1
+        assert soft[0].severity == Severity.WARNING
+        assert "255" in soft[0].message
 
     def test_valid_file_passes_strict(self) -> None:
         """555sample.ged passes strict 5.5.5 validation."""
@@ -153,11 +158,9 @@ class TestAnselDeprecation:
         engine = ValidationEngine(ged_file, mode="full", strict="5.5.5")
         result = engine.validate()
 
-        # ANSEL is supported; should have W030 (deprecated in 5.5.5) but no E009
+        # ANSEL is still readable, so the file only earns a deprecation warning
         error_codes = [i.code for i in result.issues]
-        error_values = {c.value for c in error_codes}
         assert ErrorCode.W030_ANSEL_DEPRECATED in error_codes
-        assert "E009" not in error_values
         assert result.success is True  # warnings don't fail validation
 
     def test_ansel_not_deprecated_in_551(self, tmp_path: Path) -> None:
@@ -184,7 +187,5 @@ class TestAnselDeprecation:
 
         # ANSEL is not deprecated in 5.5.1
         error_codes = [i.code for i in result.issues]
-        error_values = {c.value for c in error_codes}
         assert ErrorCode.W030_ANSEL_DEPRECATED not in error_codes
-        assert "E009" not in error_values
         assert result.success is True

@@ -33,6 +33,14 @@ MAX_SPOUSAL_AGE_GAP = 50
 # ~/.claude/plans/gedcom_tools/ on why that is not a small change.
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB
 
+# Ceiling on the note text `stats` holds in memory while collecting, so that
+# language detection can run off a single read of the file. A tree big enough
+# to blow this is pathological - the whole royal92 fixture has no notes at all
+# - but a file that is mostly note text would otherwise balloon. Past the cap
+# the buffer is dropped and detection falls back to a second pass over the
+# file, trading the time back for a bounded footprint.
+MAX_NOTE_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
+
 # Tags on INDI sub-records that are NOT events/attributes.
 # Shared by the languages command and the stats collector so both agree on
 # what counts as an event when attributing notes.

@@ -32,6 +32,7 @@ _OVERLAPPING_ALT_RE = re.compile(r"\(([^)]*\|[^)]*)\)\s*[+*?{]")
 _MAX_REGEX_LENGTH = 256
 _MAX_NESTING_DEPTH = 3
 _XREF_RE = re.compile(r"^@[A-Za-z0-9_]+@$")
+_HOME_PREFIXES = ("/home/", "/Users/")
 
 
 def _tokenize(query_string: str) -> list[str]:
@@ -220,16 +221,43 @@ def _validate_regex(value: str) -> None:
         ) from None
 
 
-def _check_tilde_expansion(value: str, operator: str) -> None:
-    """Warn if shell expanded ~ into a home directory path."""
-    if operator != "~":
+def _check_tilde_expansion(value: str) -> None:
+    """Reject a term where a home directory path stands in for a ``~`` query.
+
+    The mishap arrives in two shapes: the shell expands ``~kimon`` before argv
+    is built and the token arrives as a bare ``/home/kimon`` with no operator,
+    or it lands in the value of a ``surname~...`` term. One substring test on
+    the value covers both -- a bare token parses to a ``name:`` term whose
+    value is the path, so the operator is irrelevant.
+
+    Deliberately not gated on the operator. The check used to fire only for
+    ``~`` terms, which is precisely the case where the shell did *not* expand
+    anything -- the bug it exists to catch was the one shape it could not see.
+    The cost is that a value legitimately containing ``/home/`` is unsearchable;
+    genealogy values do not look like that.
+    """
+    if not any(prefix in value for prefix in _HOME_PREFIXES):
         return
-    if "/home/" in value or "/Users/" in value:
-        raise ValueError(
-            f"Value '{value}' looks like a home directory path -- "
-            f"the shell likely expanded ~. Wrap the query in single quotes: "
-            f"gedcom-tools search tree.ged 'surname~Schmidt'"
-        )
+    raise ValueError(
+        f"Value '{value}' looks like a home directory path -- "
+        f"the shell likely expanded ~. Wrap the query in single quotes: "
+        f"gedcom-tools search tree.ged 'surname~Schmidt'"
+    )
+
+
+def _encode_phonetic(value: str, operator: str, algorithm: str) -> tuple[str, str]:
+    """Phonetic codes for a query value, or ("", "") when it will never be used.
+
+    Only ``~`` terms consult the codes, and the encode is pure overhead for the
+    rest, so date, sex and xref terms skip it entirely.
+    """
+    if operator != "~":
+        return ("", "")
+
+    from gedcom_tools.phonetics import phonetic_encode
+    from gedcom_tools.utils import normalize_compare
+
+    return phonetic_encode(normalize_compare(value), algorithm)
 
 
 def parse_query(
@@ -259,7 +287,7 @@ def parse_query(
 
         _validate_field(field)
         _validate_operator_field(field, operator)
-        _check_tilde_expansion(value, operator)
+        _check_tilde_expansion(value)
 
         date_range = _parse_date_range(value, field, operator)
 
@@ -289,6 +317,7 @@ def parse_query(
                 value=value,
                 is_wildcard=is_wildcard,
                 date_range=date_range,
+                phonetic_codes=_encode_phonetic(value, operator, phonetic_algo),
             )
         )
 

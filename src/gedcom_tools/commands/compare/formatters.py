@@ -272,4 +272,9 @@ def format_json(
         "unique_to_b_total": unique_b_total,
     }
 
+    # Only present when recall was actually capped -- a stderr warning does
+    # not reach a consumer reading JSON off stdout.
+    if result.oversized_blocks_skipped:
+        data["oversized_blocks_skipped"] = result.oversized_blocks_skipped
+
     return json.dumps(data, indent=2, ensure_ascii=False)

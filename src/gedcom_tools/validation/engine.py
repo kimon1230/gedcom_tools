@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from array import array
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal
 
 from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
-from gedcom_tools.constants import VALID_SEX_VALUES
+from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
     classify_date_precision,
     extract_month,
@@ -41,8 +42,12 @@ MAX_LINE_LENGTH = 255
 # Maximum nesting depth per GEDCOM spec (level numbers 0-99)
 MAX_NESTING_DEPTH = 99
 
-# Maximum unique custom tags to warn about before suppressing
-MAX_CUSTOM_TAG_WARNINGS = 10
+# How many issues of any one code get reported before the rest are collapsed
+# into a single "N more suppressed" line. Applies to the unique-custom-tag
+# warning and to the per-line formatting warnings (W002/W003/W032), which are
+# otherwise unbounded: one issue object per offending line, on a file that can
+# be 500 MB of them.
+MAX_ISSUES_PER_CODE = 10
 
 
 class ValidationEngine:
@@ -79,11 +84,30 @@ class ValidationEngine:
 
         self._ref_validator = ReferenceValidator()
         self._sem_validator = SemanticValidator()
-        self._line_offsets: list[int] = []
+        self._line_offsets: array[int] = array("Q")
         self._warned_custom_tags: set[str] = set()
 
     def validate(self) -> ValidationResult:
-        """Run all validation phases and return results."""
+        """Run all validation phases and return results.
+
+        Raises
+        ------
+        ValueError
+            If the file is larger than the supported maximum. ``filter`` and
+            ``convert`` reject oversized input the same way; validation applies
+            the same limit so one command does not silently accept a file the
+            rest of the tool refuses.
+        """
+        file_size = self.file_path.stat().st_size
+        if file_size > MAX_FILE_SIZE_BYTES:
+            limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+            actual_mb = file_size / (1024 * 1024)
+            msg = (
+                f"File is too large ({actual_mb:.1f} MB). "
+                f"Maximum supported size is {limit_mb} MB."
+            )
+            raise ValueError(msg)
+
         tracker = PhaseTracker(
             total_phases=4,
             stream=self.stream,
@@ -128,8 +152,15 @@ class ValidationEngine:
         - W002: Trailing whitespace
         - W003: Line too long (soft warning, always checked)
         - W032: Line too long strict (only in --strict mode)
+
+        These are per-line checks, so a file that trips one of them on every
+        line would otherwise produce one issue object per line. Each code is
+        capped and the remainder reported as a single summary.
         """
-        self._line_offsets = [0]
+        # "Q" (unsigned long long) keeps the map at 8 bytes per line instead of
+        # a full Python int object per line.
+        self._line_offsets = array("Q", [0])
+        seen: dict[ErrorCode, int] = {}
         with open(self.file_path, "rb") as f:
             offset = 0
             line_num = 0
@@ -139,31 +170,60 @@ class ValidationEngine:
 
                 # W002: Trailing whitespace
                 if line_content != line_content.rstrip():
-                    self._add_issue(
+                    self._add_line_issue(
+                        seen,
                         ErrorCode.W002_TRAILING_WHITESPACE,
                         "Line has trailing whitespace",
-                        line=line_num,
+                        line_num,
                     )
 
                 # W003/W032: Line length checks
                 if len(line_content) > MAX_LINE_LENGTH:
                     if self.strict is not None:
-                        self._add_issue(
+                        self._add_line_issue(
+                            seen,
                             ErrorCode.W032_LINE_TOO_LONG_STRICT,
                             f"Line exceeds {MAX_LINE_LENGTH} bytes "
                             f"({len(line_content)} bytes)",
-                            line=line_num,
+                            line_num,
                         )
                     else:
-                        self._add_issue(
+                        self._add_line_issue(
+                            seen,
                             ErrorCode.W003_LINE_TOO_LONG,
                             f"Line exceeds recommended {MAX_LINE_LENGTH} bytes "
                             f"({len(line_content)} bytes)",
-                            line=line_num,
+                            line_num,
                         )
 
                 offset += len(line)
                 self._line_offsets.append(offset)
+
+        for code, count in seen.items():
+            if count > MAX_ISSUES_PER_CODE:
+                suppressed = count - MAX_ISSUES_PER_CODE
+                self._add_issue(
+                    code,
+                    f"{suppressed:,} more lines with this issue were "
+                    f"suppressed (first {MAX_ISSUES_PER_CODE} shown)",
+                )
+
+    def _add_line_issue(
+        self,
+        seen: dict[ErrorCode, int],
+        code: ErrorCode,
+        message: str,
+        line: int,
+    ) -> None:
+        """Record a per-line issue, up to the per-code reporting limit.
+
+        ``seen`` keeps counting past the limit so the caller can report how
+        many occurrences were left out.
+        """
+        count = seen.get(code, 0) + 1
+        seen[code] = count
+        if count <= MAX_ISSUES_PER_CODE:
+            self._add_issue(code, message, line=line)
 
     def _offset_to_line(self, offset: int) -> int:
         """Convert byte offset to line number (1-indexed)."""
@@ -204,6 +264,17 @@ class ValidationEngine:
             self._add_issue(
                 ErrorCode.E003_INVALID_LEVEL,
                 f"Structure error: {e}",
+            )
+            if self.mode == "quick":
+                raise StopValidation() from None
+            return
+        except OSError as e:
+            # A truncated header never reaches a CHAR record, so ged4py runs off
+            # the end of the file. Report it rather than letting it escape as an
+            # unhandled traceback from a phase the user cannot see into.
+            self._add_issue(
+                ErrorCode.E004_MALFORMED_LINE,
+                f"Could not read file header: {e}",
             )
             if self.mode == "quick":
                 raise StopValidation() from None
@@ -573,17 +644,17 @@ class ValidationEngine:
             if tag and tag.startswith("_"):
                 if tag not in self._warned_custom_tags:
                     sub_offset = sub.offset if sub.offset else 0
-                    if len(self._warned_custom_tags) < MAX_CUSTOM_TAG_WARNINGS:
+                    if len(self._warned_custom_tags) < MAX_ISSUES_PER_CODE:
                         self._add_issue(
                             ErrorCode.W004_CUSTOM_TAG,
                             f"Custom tag {tag} is non-standard",
                             line=self._offset_to_line(sub_offset),
                         )
-                    elif len(self._warned_custom_tags) == MAX_CUSTOM_TAG_WARNINGS:
+                    elif len(self._warned_custom_tags) == MAX_ISSUES_PER_CODE:
                         self._add_issue(
                             ErrorCode.W004_CUSTOM_TAG,
                             f"Additional custom tags suppressed "
-                            f"(>{MAX_CUSTOM_TAG_WARNINGS} unique tags found)",
+                            f"(>{MAX_ISSUES_PER_CODE} unique tags found)",
                             line=self._offset_to_line(sub_offset),
                         )
                     self._warned_custom_tags.add(tag)

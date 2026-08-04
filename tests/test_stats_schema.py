@@ -10,6 +10,11 @@ from gedcom_tools.commands.stats.collector import StatsCollector
 
 SCHEMA_PATH = Path(__file__).parent.parent / "docs" / "stats-schema.json"
 
+# StatsCollector builds a real GedcomLanguageDetector for any file with INDI or
+# FAM records, which fetches a 126 MB model on a cold cache. Nothing here asserts
+# anything about detected languages, so the conftest stub stands in.
+pytestmark = pytest.mark.usefixtures("_fast_lingua")
+
 
 @pytest.fixture
 def schema() -> dict:

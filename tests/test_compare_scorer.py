@@ -714,3 +714,71 @@ class TestEdgeCases:
         )
         result = score_pair(a, b)
         assert "Birth Place" not in result.field_scores
+
+
+class TestLazyRapidfuzzImport:
+    """rapidfuzz costs ~30 ms to import and cli.py reaches this module on
+    every invocation, so the dependency is bound on first score instead of at
+    import time. This test file imports it eagerly at the top, so both checks
+    have to run in a clean interpreter.
+    """
+
+    def _probe(self, body: str) -> str:
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-c", body],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def test_cli_import_does_not_pull_in_rapidfuzz(self) -> None:
+        assert (
+            self._probe(
+                "import sys, gedcom_tools.cli; print('rapidfuzz' in sys.modules)"
+            )
+            == "False"
+        )
+
+    def test_scoring_pulls_it_in_on_demand(self) -> None:
+        # The other half of the deal: deferred, not dropped.
+        assert (
+            self._probe(
+                "import sys;"
+                "from gedcom_tools.commands.compare.scorer import _best_name_jw;"
+                "_best_name_jw('smith', [], 'smyth', []);"
+                "print('rapidfuzz' in sys.modules)"
+            )
+            == "True"
+        )
+
+    def test_place_scoring_works_without_a_module_level_binding(self) -> None:
+        a = _ind(
+            surname_normalized="smith",
+            given_name_normalized="john",
+            birth_place_normalized="london, england",
+        )
+        b = _ind(
+            xref="@I2@",
+            source="B",
+            surname_normalized="smith",
+            given_name_normalized="john",
+            birth_place_normalized="london, england",
+        )
+        assert score_pair(a, b).field_scores["Birth Place"] == 1.0
+
+    def test_name_scoring_matches_a_direct_jarowinkler_call(self) -> None:
+        a = _ind(surname_normalized="smith", given_name_normalized="john")
+        b = _ind(
+            xref="@I2@",
+            source="B",
+            surname_normalized="smyth",
+            given_name_normalized="john",
+        )
+        result = score_pair(a, b)
+        assert result.field_scores["Surname"] == pytest.approx(
+            round(JaroWinkler.similarity("smith", "smyth"), 4)
+        )

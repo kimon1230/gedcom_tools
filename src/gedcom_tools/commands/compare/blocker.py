@@ -8,6 +8,24 @@ if TYPE_CHECKING:
     from gedcom_tools.commands.compare.models import CompareIndividual
 
 
+DEFAULT_MAX_BLOCK_SIZE = 500
+
+
+def describe_oversized_blocks(count: int, max_block_size: int) -> str:
+    """Warning text for blocking groups dropped by the block-size cap.
+
+    Shared by `compare` and `duplicates` so both report the same thing.
+    """
+    groups = "group" if count == 1 else "groups"
+    was = "was" if count == 1 else "were"
+    return (
+        f"Warning: {count:,} blocking {groups} exceeded --max-block-size "
+        f"{max_block_size:,} and {was} skipped, so some matches may be missing.\n"
+        "  Re-run with a larger --max-block-size to include them; scoring cost "
+        "grows with the square of the group size."
+    )
+
+
 def _key_surname_birth(ind: CompareIndividual) -> str | None:
     if ind.surname_phonetic and ind.birth_decade:
         return f"{ind.surname_phonetic}|{ind.birth_decade}"
@@ -87,6 +105,7 @@ def _run_pass(
     key_fn: Callable[[CompareIndividual], str | None],
     max_block_size: int,
     candidates: set[tuple[str, str]],
+    oversized_keys: set[str],
 ) -> None:
     # Index side B
     blocks: dict[str, list[str]] = defaultdict(list)
@@ -101,7 +120,13 @@ def _run_pass(
         if key is None:
             continue
         block = blocks.get(key)
-        if block is None or len(block) > max_block_size:
+        if block is None:
+            continue
+        if len(block) > max_block_size:
+            # Record the key, not a counter: this branch runs once per
+            # individual on side A, so a single fat block would otherwise
+            # be reported as hundreds of skipped groups.
+            oversized_keys.add(key)
             continue
         xref_a = ind.xref
         for xref_b in block:
@@ -114,6 +139,7 @@ def _run_multi_key_pass(
     key_fn: Callable[[CompareIndividual], list[str]],
     max_block_size: int,
     candidates: set[tuple[str, str]],
+    oversized_keys: set[str],
 ) -> None:
     blocks: dict[str, list[str]] = defaultdict(list)
     for ind in individuals_b:
@@ -124,7 +150,10 @@ def _run_multi_key_pass(
         xref_a = ind.xref
         for key in key_fn(ind):
             block = blocks.get(key)
-            if block is None or len(block) > max_block_size:
+            if block is None:
+                continue
+            if len(block) > max_block_size:
+                oversized_keys.add(key)
                 continue
             for xref_b in block:
                 candidates.add((xref_a, xref_b))
@@ -133,16 +162,32 @@ def _run_multi_key_pass(
 def generate_candidates(
     individuals_a: list[CompareIndividual],
     individuals_b: list[CompareIndividual],
-    max_block_size: int = 500,
+    max_block_size: int = DEFAULT_MAX_BLOCK_SIZE,
     algorithm: str = "soundex",
+    oversized_keys: set[str] | None = None,
 ) -> set[tuple[str, str]]:
-    """Return set of (xref_a, xref_b) candidate pairs."""
+    """Return set of (xref_a, xref_b) candidate pairs.
+
+    Blocks larger than ``max_block_size`` are skipped, which silently costs
+    recall.  Pass a set as ``oversized_keys`` to find out: every blocking key
+    that was skipped lands in it, so ``len(oversized_keys)`` is the number of
+    distinct groups dropped.  Keys are deduplicated across passes, so two
+    passes that happen to produce the same key string count once.
+    """
     candidates: set[tuple[str, str]] = set()
+    skipped = oversized_keys if oversized_keys is not None else set()
     for key_fn in _PASS_KEY_FNS:
-        _run_pass(individuals_a, individuals_b, key_fn, max_block_size, candidates)
+        _run_pass(
+            individuals_a, individuals_b, key_fn, max_block_size, candidates, skipped
+        )
     if algorithm == "metaphone":
         for mk_fn in _METAPHONE_MULTI_KEY_FNS:
             _run_multi_key_pass(
-                individuals_a, individuals_b, mk_fn, max_block_size, candidates
+                individuals_a,
+                individuals_b,
+                mk_fn,
+                max_block_size,
+                candidates,
+                skipped,
             )
     return candidates

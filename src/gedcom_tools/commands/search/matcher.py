@@ -11,7 +11,6 @@ from gedcom_tools.commands.search.models import (
     SearchQuery,
     SearchTerm,
 )
-from gedcom_tools.utils import normalize_compare
 
 _RELATIONSHIP_FIELDS = frozenset({"ancestor", "descendant"})
 
@@ -230,7 +229,7 @@ def _match_term(
     ind: SearchIndividual, term: SearchTerm, query: SearchQuery
 ) -> MatchDetail | None:
     field = term.field
-    query_norm = normalize_compare(term.value)
+    query_norm = term.value_norm
     match_type = _get_match_type(term, query)
 
     # Date fields
@@ -257,9 +256,7 @@ def _match_term(
 
     # Phonetic matching (name fields only — validated by query parser)
     if term.operator == "~":
-        from gedcom_tools.phonetics import phonetic_encode
-
-        query_primary, query_alt = phonetic_encode(query_norm, query.phonetic_algo)
+        query_primary, query_alt = term.phonetic_codes
         matched: str | None = None
         if field == "name":
             matched = _match_name_phonetic(ind, query_primary, query_alt)

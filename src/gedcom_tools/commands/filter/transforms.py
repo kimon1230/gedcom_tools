@@ -9,7 +9,6 @@ extracting subtrees rooted at a specific individual.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from gedcom_tools.commands.filter.models import (
     UNLIMITED_DEPTH,
@@ -247,7 +246,6 @@ def _collect_dependent_xrefs(
 
 def extract_subtree(
     records: list[GedcomRecord],
-    file_path: Path,
     root_xref: str,
     ancestor_depth: int | None,
     descendant_depth: int,
@@ -262,7 +260,7 @@ def extract_subtree(
 
     Returns the filtered record list and the set of removed xrefs.
     """
-    graph = build_parent_child_graph(file_path)
+    graph = build_parent_child_graph(records)
 
     all_xrefs = collect_xrefs(records)
     if root_xref not in all_xrefs:

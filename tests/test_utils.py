@@ -7,9 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from ged4py.parser import CodecError
 
+from gedcom_tools import utils
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 from gedcom_tools.utils import (
+    _CHAR_SCAN_WINDOW,
     count_sources_recursive,
     detect_encoding,
     extract_xref,
@@ -71,6 +74,163 @@ class TestDetectEncoding:
         ged.write_text("0 HEAD\n1 CHAR ANSEL\n0 TRLR\n", encoding="utf-8")
         info = detect_encoding(ged)
         assert info.encoding == "ANSEL"
+        assert info.declared_charset == "ANSEL"
+
+    def test_unknown_charset_raises_without_bom(self, tmp_path: Path) -> None:
+        # The BOM-conflict raise above is covered; this is the other arm, where
+        # the codec name alone is unresolvable.
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n1 CHAR NOSUCHTHING\n0 TRLR\n", encoding="utf-8")
+        with pytest.raises(CodecError, match="NOSUCHTHING"):
+            detect_encoding(ged)
+
+    def test_extra_whitespace_around_char(self, tmp_path: Path) -> None:
+        # Behaviour change: this used to yield ' ANSEL', leading space and all,
+        # which then flowed into the encoding field and into JSON output.
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n1  CHAR  ANSEL\n0 TRLR\n", encoding="utf-8")
+        info = detect_encoding(ged)
+        assert info.declared_charset == "ANSEL"
+        assert info.encoding == "ANSEL"
+
+    def test_trailing_whitespace_stripped(self, tmp_path: Path) -> None:
+        # Behaviour change: previously 'ANSEL   '.
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n1 CHAR ANSEL   \n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset == "ANSEL"
+
+    def test_tab_separated_after_blank_line(self, tmp_path: Path) -> None:
+        # Behaviour change: this raised ParserError before.
+        ged = tmp_path / "test.ged"
+        ged.write_text("\n0 HEAD\n1\tCHAR\tANSEL\n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset == "ANSEL"
+
+    def test_junk_line_before_head(self, tmp_path: Path) -> None:
+        # Behaviour change: this raised ParserError before. A stray first line is
+        # no reason to refuse to read a perfectly good CHAR record.
+        ged = tmp_path / "test.ged"
+        ged.write_text("hello world\n0 HEAD\n1 CHAR ANSEL\n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset == "ANSEL"
+
+    def test_lowercase_char_tag_ignored(self, tmp_path: Path) -> None:
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n1 char ANSEL\n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset is None
+
+    def test_valueless_char_line_ignored(self, tmp_path: Path) -> None:
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n1 CHAR\n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset is None
+
+    def test_char_in_a_later_record_not_picked_up(self, tmp_path: Path) -> None:
+        ged = tmp_path / "test.ged"
+        ged.write_text("0 HEAD\n0 @I1@ INDI\n1 CHAR ANSEL\n0 TRLR\n", encoding="utf-8")
+        assert detect_encoding(ged).declared_charset is None
+
+    def test_multibyte_character_at_the_window_boundary(self, tmp_path: Path) -> None:
+        # Decoding the whole probe buffer would raise UnicodeDecodeError here.
+        # The scan only decodes the extracted charset value, so it cannot.
+        window = _CHAR_SCAN_WINDOW
+        head = b"0 HEAD\n"
+        while len(head) < window - 1:
+            head += b"1 NOTE " + b"x" * 60 + b"\n"
+        ged = tmp_path / "test.ged"
+        ged.write_bytes(head[: window - 1] + "é".encode() + b"\n1 CHAR UTF-8\n0 TRLR\n")
+        assert detect_encoding(ged).encoding == "UTF-8"
+
+    def test_declared_ascii_with_non_ascii_body_byte(self, tmp_path: Path) -> None:
+        # A file that lies about its own codec still resolves; guess_codec never
+        # decodes body bytes and neither do we.
+        ged = tmp_path / "test.ged"
+        ged.write_bytes(
+            b"0 HEAD\n1 CHAR ASCII\n0 @I1@ INDI\n1 NAME M\xfcller\n0 TRLR\n"
+        )
+        assert detect_encoding(ged).declared_charset == "ASCII"
+
+    def test_cr_only_line_terminators(self, tmp_path: Path) -> None:
+        ged = tmp_path / "test.ged"
+        ged.write_bytes(b"0 HEAD\r1 CHAR ANSEL\r0 TRLR\r")
+        assert detect_encoding(ged).declared_charset == "ANSEL"
+
+    def test_char_straddling_the_scan_window(self, tmp_path: Path) -> None:
+        """A `1 CHAR ANSEL` split across the 64 KB cut must not become 'ANS'.
+
+        This one file exercises both halves of the bounded scan: the partial-line
+        drop, without which the truncated match wins, and the reconciliation that
+        hands the file to the reader once the window runs out mid-header.
+        """
+        ged = _straddling_char_file(tmp_path / "padded.ged")
+        info = detect_encoding(ged)
+        assert info.declared_charset == "ANSEL"
+        assert info.encoding == "ANSEL"
+
+
+def _straddling_char_file(path: Path) -> Path:
+    """Pad a HEAD so `1 CHAR ANSEL` spans the scan window, cut mid-value.
+
+    The last complete bytes before the cut are `1 CHAR ANS` -- enough to satisfy
+    the three-token match, and wrong.
+    """
+    window = _CHAR_SCAN_WINDOW
+    start = window - len(b"1 CHAR ANS")
+    head = b"0 HEAD\n"
+    filler = b"1 NOTE " + b"p" * 60 + b"\n"
+    while len(head) + len(filler) <= start:
+        head += filler
+    head += b"1 NOTE " + b"q" * (start - len(head) - 8) + b"\n"
+    assert len(head) == start, "padding arithmetic drifted"
+    data = head + b"1 CHAR ANSEL\n0 TRLR\n"
+    assert data[:window].rsplit(b"\n", 1)[-1] == b"1 CHAR ANS"
+    path.write_bytes(data)
+    return path
+
+
+class TestDetectEncodingPathTaken:
+    """Which implementation served the request, not just what it returned.
+
+    Every other case here passes identically under the bounded scan or the
+    reader, so a fast path that always raised would revert the speedup with a
+    green suite.
+    """
+
+    @pytest.mark.parametrize(
+        "name,data,expected",
+        [
+            ("utf8", b"0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", "UTF-8"),
+            ("ansel", b"0 HEAD\n1 CHAR ANSEL\n0 TRLR\n", "ANSEL"),
+            ("no_char", b"0 HEAD\n0 TRLR\n", None),
+            # CR-only guards the BinaryFileCR wrapper specifically: drop it and a
+            # plain handle sends this file to the reader.
+            ("cr_only", b"0 HEAD\r1 CHAR ANSEL\r0 TRLR\r", "ANSEL"),
+        ],
+    )
+    def test_reader_is_never_constructed(
+        self, tmp_path: Path, name: str, data: bytes, expected: str | None
+    ) -> None:
+        ged = tmp_path / f"{name}.ged"
+        ged.write_bytes(data)
+
+        def explode(*args: object, **kwargs: object) -> None:
+            raise AssertionError("GedcomReader was constructed on the fast path")
+
+        with patch("gedcom_tools.utils.GedcomReader", explode):
+            info = detect_encoding(ged)
+
+        assert info.declared_charset == expected
+
+    def test_fallback_is_reachable(self, tmp_path: Path) -> None:
+        ged = _straddling_char_file(tmp_path / "padded.ged")
+        real = utils.GedcomReader
+        calls: list[str] = []
+
+        def counting(path: str, *args: object, **kwargs: object) -> object:
+            calls.append(path)
+            return real(path, *args, **kwargs)
+
+        with patch("gedcom_tools.utils.GedcomReader", counting):
+            info = detect_encoding(ged)
+
+        assert calls == [str(ged)]
         assert info.declared_charset == "ANSEL"
 
 
@@ -729,3 +889,73 @@ class TestWriteOutputSecurelyNewlines:
             assert os.read(reader, 64) == b"one\ntwo\n"
         finally:
             os.close(reader)
+
+
+# codecs.lookup resolves byte-to-byte transforms too, so --from base64 used to
+# pass validation and then die inside the decode with a LookupError nobody can
+# act on. These live here rather than next to TestResolveSourceCodec in
+# test_convert.py because the predicate being guarded is a utils-level one.
+
+NON_TEXT_CODECS = ["base64", "hex", "zlib", "rot13", "bz2", "uu", "quopri"]
+
+TEXT_CODECS = [
+    ("utf-8", "utf-8"),
+    ("ascii", "ascii"),
+    ("latin-1", "iso8859-1"),
+    ("cp1252", "cp1252"),
+    ("utf-16-le", "utf-16-le"),
+    ("iso-8859-1", "iso8859-1"),
+]
+
+
+class TestLookupTextCodec:
+    @pytest.mark.parametrize("name", NON_TEXT_CODECS)
+    def test_transforms_are_not_text(self, name: str) -> None:
+        assert utils._lookup_text_codec(name) is None
+
+    def test_unregistered_name(self) -> None:
+        assert utils._lookup_text_codec("not-a-codec") is None
+
+    @pytest.mark.parametrize(("name", "canonical"), TEXT_CODECS)
+    def test_text_codecs_canonicalized(self, name: str, canonical: str) -> None:
+        assert utils._lookup_text_codec(name) == canonical
+
+    def test_ansel_codec_survives(self) -> None:
+        # Rejecting this would break every ANSEL file the tool handles.
+        assert utils._lookup_text_codec("gedcom") == "gedcom"
+
+    def test_codecinfo_without_the_private_flag_is_accepted(self) -> None:
+        # _is_text_encoding is private, so the getattr default has to fail open.
+        class Exotic:
+            name = "weird-8"
+
+        with patch("codecs.lookup", return_value=Exotic()):
+            assert utils._lookup_text_codec("weird-8") == "weird-8"
+
+
+class TestResolveSourceCodecRejectsNonTextCodecs:
+    INFO = utils.EncodingInfo(encoding="UTF-8")
+
+    @pytest.mark.parametrize("name", NON_TEXT_CODECS)
+    def test_override_rejected(self, name: str) -> None:
+        with pytest.raises(ValueError, match="Unknown source encoding"):
+            utils.resolve_source_codec(self.INFO, name)
+
+    @pytest.mark.parametrize(("name", "canonical"), TEXT_CODECS)
+    def test_override_still_resolves(self, name: str, canonical: str) -> None:
+        assert utils.resolve_source_codec(self.INFO, name) == canonical
+
+    @pytest.mark.parametrize("name", ["gedcom", "ansel", "ANSEL"])
+    def test_ansel_override_still_resolves(self, name: str) -> None:
+        assert utils.resolve_source_codec(self.INFO, name) == "gedcom"
+
+    @pytest.mark.parametrize("name", NON_TEXT_CODECS)
+    def test_detected_charset_rejected(self, name: str) -> None:
+        # A file declaring "1 CHAR zlib" gets the same treatment.
+        info = utils.EncodingInfo(encoding=name)
+        with pytest.raises(ValueError, match="Cannot determine source encoding"):
+            utils.resolve_source_codec(info, None)
+
+    def test_error_names_the_offending_value(self) -> None:
+        with pytest.raises(ValueError, match=r"Unknown source encoding: base64$"):
+            utils.resolve_source_codec(self.INFO, "base64")

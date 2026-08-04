@@ -11,6 +11,9 @@ import pytest
 
 from gedcom_tools.commands.export import run
 from gedcom_tools.commands.export.formatters import (
+    _CSV_TRIGGERS,
+    _FAM_CSV_COLUMNS,
+    _INDI_CSV_COLUMNS,
     _csv_safe,
     _redact_individual_csv,
     format_csv,
@@ -987,3 +990,153 @@ class TestCsvInjectionEndToEnd:
         row = _export_csv(tmp_path, "John /Smith/")
         assert row[1] == "John"
         assert row[2] == "Smith"
+
+
+# ---------------------------------------------------------------------------
+# CSV/JSON redaction parity
+# ---------------------------------------------------------------------------
+
+
+def _undo_csv_safe(cell: str) -> str:
+    """Invert _csv_safe so a cell can be compared with the value JSON carries.
+
+    Only an apostrophe that guards a trigger character is stripped, so a name
+    that genuinely begins with one survives.
+    """
+    if len(cell) > 1 and cell[0] == "'" and cell[1] in _CSV_TRIGGERS:
+        return cell[1:]
+    return cell
+
+
+def _canon(cell: str, value: Any) -> tuple[Any, Any]:
+    """Put one CSV cell and its JSON counterpart on the same footing.
+
+    CSV carries strings only: None arrives as "", ints as digits, lists as a
+    ";"-joined run (occupations join on "; ", hence the strip). Empty entries
+    inside a list are kept -- a redacted child is a blank slot, not a missing
+    one, and dropping it would hide a length mismatch.
+    """
+    if isinstance(value, list):
+        parts = [item.strip() for item in cell.split(";")] if cell else []
+        return parts, [str(item).strip() for item in value]
+    return cell, "" if value is None else str(value)
+
+
+def _diff_columns(
+    csv_row: dict[str, str], json_row: dict[str, Any], columns: list[str]
+) -> dict[str, tuple[Any, Any]]:
+    diffs = {}
+    for column in columns:
+        from_csv, from_json = _canon(_undo_csv_safe(csv_row[column]), json_row[column])
+        if from_csv != from_json:
+            diffs[column] = (from_csv, from_json)
+    return diffs
+
+
+def _parity_tree() -> tuple[list[ExportIndividual], list[ExportFamily]]:
+    """A tree that puts both redacted and untouched rows through both writers.
+
+    @F1@ has a living husband and a living child, so it exercises every mask
+    the family writers apply. @F2@ is entirely deceased and carries formula
+    payloads, so the untouched path and the _csv_safe guard are covered too.
+    """
+    payload_spouse = _indi(
+        xref="@I5@",
+        birth_place="+HYPERLINK(1)",
+        occupations=["Blacksmith", "@Farmer"],
+    )
+    individuals = [
+        _living("@I1@"),
+        _deceased("@I2@"),
+        _living("@I3@"),
+        _deceased("@I4@"),
+        payload_spouse,
+        _deceased("@I6@"),
+    ]
+    families = [
+        _fam(
+            xref="@F1@",
+            husband_xref="@I1@",
+            wife_xref="@I2@",
+            children_xrefs=["@I3@", "@I4@"],
+        ),
+        _fam(
+            xref="@F2@",
+            husband_xref="@I5@",
+            husband_name="=cmd",
+            wife_xref="@I6@",
+            wife_name="-2+3",
+            marriage_place="@Rome",
+            children_xrefs=[],
+        ),
+    ]
+    return individuals, families
+
+
+def _parity_export() -> tuple[list[dict[str, str]], list[dict[str, str]], Any]:
+    """Export one tree three ways with redaction on.
+
+    CSV rows come back keyed by the column constants the formatter itself
+    writes, so a new column joins the comparison without touching this file.
+    """
+    individuals, families = _parity_tree()
+    result = _result(individuals=individuals, families=families)
+    indi_csv = format_csv(result, include_bom=False, redact_living=True)
+    fam_csv = format_csv(
+        result, table="families", include_bom=False, redact_living=True
+    )
+    data = json.loads(format_json(result, redact_living=True))
+    indi_rows = list(csv.reader(io.StringIO(indi_csv)))[1:]
+    fam_rows = list(csv.reader(io.StringIO(fam_csv)))[1:]
+    return (
+        [dict(zip(_INDI_CSV_COLUMNS, row, strict=True)) for row in indi_rows],
+        [dict(zip(_FAM_CSV_COLUMNS, row, strict=True)) for row in fam_rows],
+        data,
+    )
+
+
+class TestRedactionParity:
+    """The family masking block is duplicated verbatim between the CSV and the
+    JSON writer, and each writer recomputes living_xrefs for itself. Nothing is
+    shared, so a redaction rule added to one writer and not the other would
+    leak on the format nobody re-checked. These tests compare the two outputs
+    field by field instead of extracting a helper.
+
+    The individual paths are a different shape and are compared only on their
+    common columns -- see test_individual_json_carries_two_extra_keys.
+    """
+
+    def test_undo_csv_safe_inverts_the_guard(self) -> None:
+        # If this drifts, every comparison below turns into a false mismatch.
+        for value in ["=cmd", "-1+1", "@Rome", "+1", "Smith", "", "O'Brien"]:
+            assert _undo_csv_safe(_csv_safe(value)) == value
+
+    def test_family_column_sets_are_identical(self) -> None:
+        _, _, data = _parity_export()
+        for fam in data["families"]:
+            assert set(fam) == set(_FAM_CSV_COLUMNS)
+
+    def test_family_masking_agrees_across_formats(self) -> None:
+        _, fam_rows, data = _parity_export()
+        assert len(fam_rows) == len(data["families"])
+        for csv_row, json_row in zip(fam_rows, data["families"], strict=True):
+            diffs = _diff_columns(csv_row, json_row, _FAM_CSV_COLUMNS)
+            assert not diffs, f"{json_row['xref']} (csv, json): {diffs}"
+
+    def test_individual_masking_agrees_on_shared_columns(self) -> None:
+        indi_rows, _, data = _parity_export()
+        assert len(indi_rows) == len(data["individuals"])
+        for csv_row, json_row in zip(indi_rows, data["individuals"], strict=True):
+            diffs = _diff_columns(csv_row, json_row, _INDI_CSV_COLUMNS)
+            assert not diffs, f"{json_row['xref']} (csv, json): {diffs}"
+
+    def test_individual_json_carries_two_extra_keys(self) -> None:
+        # The individual writers genuinely diverge: _redact_individual_csv
+        # builds positional cells, _individual_to_dict(redacted=True) returns
+        # these two on top of them because CSV has no column to put them in.
+        # A third extra key means a field was added to one writer only, which
+        # is the leak this whole class exists to catch -- decide deliberately
+        # whether CSV needs it before widening this set.
+        _, _, data = _parity_export()
+        for indi in data["individuals"]:
+            assert set(indi) - set(_INDI_CSV_COLUMNS) == {"alt_names", "notes"}

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from gedcom_tools.commands.filter.models import GedcomRecord
+from gedcom_tools.commands.filter.parser import group_records, parse_lines
 from gedcom_tools.graph import (
     ParentChildGraph,
     UnionFind,
@@ -12,12 +14,22 @@ from gedcom_tools.graph import (
     find_ancestors_with_depth,
     find_connected_components,
 )
+from gedcom_tools.utils import detect_encoding, resolve_source_codec, strip_bom
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _write_ged(tmp_path: Path, content: str, filename: str = "test.ged") -> Path:
     p = tmp_path / filename
     p.write_text(f"0 HEAD\n1 CHAR UTF-8\n{content}0 TRLR\n", encoding="utf-8")
     return p
+
+
+def _records_from_path(path: Path) -> list[GedcomRecord]:
+    """Parse a file into level-0 records the way the filter command does."""
+    stripped, _bom = strip_bom(path.read_bytes())
+    codec = resolve_source_codec(detect_encoding(path), None)
+    return group_records(parse_lines(stripped.decode(codec)))
 
 
 # Inline GEDCOM for couples/depth tests
@@ -114,6 +126,128 @@ class TestBuildParentChildGraphCouples:
         assert "@I3@" not in i1_partners
         assert "@I3@" not in i2_partners
         assert graph.couples.get("@I3@") is None
+
+
+class TestBuildParentChildGraphInputEquivalence:
+    """build_parent_child_graph must not care which input form it is handed.
+
+    Every assertion here compares the file-path route (ged4py re-parse)
+    against the in-memory route (already-parsed records). If the two ever
+    drift, these fail rather than the subtree output quietly changing.
+    """
+
+    def _both(self, tmp_path: Path, content: str) -> tuple[
+        ParentChildGraph,
+        ParentChildGraph,
+    ]:
+        p = _write_ged(tmp_path, content)
+        return build_parent_child_graph(p), build_parent_child_graph(
+            _records_from_path(p)
+        )
+
+    def test_inline_samples_agree(self, tmp_path: Path) -> None:
+        samples = {
+            "two_parent": _TWO_PARENT_FAM,
+            "single_parent": _SINGLE_PARENT_FAM,
+            "two_marriages": _TWO_MARRIAGES,
+            "three_gen": _THREE_GEN,
+            "pedigree_collapse": _PEDIGREE_COLLAPSE,
+            "three_parents": _THREE_PARENTS,
+        }
+        for name, content in samples.items():
+            sub = tmp_path / name
+            sub.mkdir()
+            from_file, from_records = self._both(sub, content)
+            assert from_file == from_records, name
+
+    def test_royal92_agrees(self) -> None:
+        path = FIXTURES / "royal92.ged"
+        from_file = build_parent_child_graph(path)
+        from_records = build_parent_child_graph(_records_from_path(path))
+        # Guard against both routes silently producing nothing
+        assert len(from_file.parents_of) > 1000
+        assert from_file == from_records
+
+    def test_dangling_pointer_kept_by_both(self, tmp_path: Path) -> None:
+        # @I99@ has no INDI record; neither route validates existence
+        ged = (
+            "0 @I1@ INDI\n1 NAME A /X/\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I99@\n1 CHIL @I98@\n"
+        )
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file.parents_of["@I98@"] == ["@I1@", "@I99@"]
+        assert from_file.couples["@I1@"] == {"@I99@"}
+
+    def test_valueless_pointer_lines_ignored_by_both(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME A /X/\n"
+            "0 @I2@ INDI\n1 NAME B /Y/\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE\n1 CHIL @I2@\n1 CHIL\n"
+        )
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file.parents_of["@I2@"] == ["@I1@"]
+        assert from_file.couples == {}
+
+    def test_non_pointer_values_ignored_by_both(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME A /X/\n"
+            "0 @F1@ FAM\n1 HUSB not-a-pointer\n1 CHIL @I1@\n"
+        )
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file.parents_of == {}
+        assert from_file.children_of == {}
+
+    def test_deeper_level_tags_ignored_by_both(self, tmp_path: Path) -> None:
+        # HUSB/CHIL below level 1 are sub-structure, not family membership.
+        # ged4py only exposes immediate subordinates, so the record walk has
+        # to filter on level to match.
+        ged = (
+            "0 @I1@ INDI\n1 NAME A /X/\n"
+            "0 @I2@ INDI\n1 NAME B /Y/\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n"
+            "1 MARR\n2 HUSB @I90@\n2 CHIL @I91@\n"
+        )
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file.parents_of == {"@I2@": ["@I1@"]}
+        assert "@I90@" not in from_file.children_of
+        assert "@I91@" not in from_file.parents_of
+
+    def test_file_with_no_families_agrees(self, tmp_path: Path) -> None:
+        ged = "0 @I1@ INDI\n1 NAME A /X/\n"
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file == ParentChildGraph()
+
+    def test_records_route_skips_non_fam_records(self, tmp_path: Path) -> None:
+        # An INDI carrying HUSB/CHIL lines must not contribute edges
+        ged = (
+            "0 @I1@ INDI\n1 HUSB @I7@\n1 CHIL @I8@\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n"
+        )
+        from_file, from_records = self._both(tmp_path, ged)
+        assert from_file == from_records
+        assert from_file.parents_of == {"@I2@": ["@I1@"]}
+
+    def test_empty_record_list_gives_empty_graph(self) -> None:
+        assert build_parent_child_graph([]) == ParentChildGraph()
+
+    def test_records_route_accepts_any_iterable(self, tmp_path: Path) -> None:
+        p = _write_ged(tmp_path, _TWO_PARENT_FAM)
+        records = _records_from_path(p)
+        from_generator = build_parent_child_graph(r for r in records)
+        assert from_generator == build_parent_child_graph(records)
+
+    def test_records_route_does_not_reread_the_file(self, tmp_path: Path) -> None:
+        # The whole point of the change: no second parse of the input.
+        p = _write_ged(tmp_path, _TWO_PARENT_FAM)
+        records = _records_from_path(p)
+        p.unlink()
+        graph = build_parent_child_graph(records)
+        assert graph.parents_of == {"@I3@": ["@I1@", "@I2@"]}
 
 
 class TestFindAncestorsWithDepth:

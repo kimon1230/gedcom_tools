@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unicodedata
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -113,7 +114,28 @@ def _cache_dir() -> Path:
     """
     base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     path = Path(base) / "gedcom-tools"
+
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
+
+    # A symlinked leaf is left as the user configured it. Symlinking a cache
+    # onto a bigger volume is an ordinary thing to do, and refusing to run --
+    # or chmod'ing through the link onto a directory that is not ours -- costs
+    # more than it buys here: reaching the target needs local write access to
+    # the cache path already. Skipping the chmod means the 0700 promise below
+    # does not hold for that setup, which is the honest trade.
+    if sys.platform != "win32" and not path.is_symlink():
+        # mkdir applies `mode` only to a leaf it creates itself, and the umask
+        # eats it on any parent it has to create along the way. Without this,
+        # an already-existing cache -- or an XDG_CACHE_HOME aimed at a
+        # group-writable directory -- keeps whatever permissions it had, and
+        # the promise above would hold on the first run only.
+        #
+        # Suppressed rather than propagated: a cache directory we do not own
+        # (a shared CI cache, a read-only mount) works today, and a failed
+        # tightening is not a reason to refuse to run.
+        with suppress(OSError):
+            os.chmod(path, 0o700)
+
     return path
 
 

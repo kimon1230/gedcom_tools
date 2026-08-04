@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import os
 import re
 import stat
@@ -13,7 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ged4py.parser import GedcomReader
+# BinaryFileCR is absent from ged4py.parser.__all__ but is what GedcomReader
+# itself wraps every file in -- see _declared_charset for why we need it too.
+from ged4py.parser import (  # type: ignore[attr-defined]
+    BinaryFileCR,
+    GedcomReader,
+    guess_codec,
+)
 
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 
@@ -58,18 +65,45 @@ def strip_bom(data: bytes) -> tuple[bytes, str | None]:
     return data, None
 
 
-def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
-    """Resolve the source codec name from encoding info or user override."""
+def _lookup_text_codec(name: str) -> str | None:
+    """Canonical codec name for `name`, or None if it is not a text codec.
+
+    ``codecs.lookup`` also resolves the byte-to-byte transforms -- base64, hex,
+    zlib, rot13 and friends. Those sail straight through a bare lookup and then
+    detonate hundreds of lines later inside the decode with "'base64' is not a
+    text encoding", which tells a user who typed ``--from base64`` nothing they
+    can act on. Rejecting them here routes them into the caller's own "unknown
+    encoding" message instead.
+
+    Probing ``info.decode(b"", ...)`` does not work as a test: base64 and hex
+    decode empty input happily (returning bytes, not str), while zlib and
+    rot13 raise things that are not LookupError. ``_is_text_encoding`` is the
+    private flag CPython itself consults to raise that LookupError, so it is
+    the exact predicate we want. The ``True`` default keeps an exotic
+    ``CodecInfo`` that lacks the attribute working rather than rejecting a
+    perfectly good codec -- notably ``gedcom``, the ANSEL codec everything
+    here depends on.
+    """
     import codecs
 
+    try:
+        info = codecs.lookup(name)
+    except LookupError:
+        return None
+    if not getattr(info, "_is_text_encoding", True):
+        return None
+    return info.name
+
+
+def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
+    """Resolve the source codec name from encoding info or user override."""
     if from_override is not None:
         key = from_override.lower()
         if key in GEDCOM_CHARSETS:
             return GEDCOM_CHARSETS[key]
-        try:
-            return codecs.lookup(from_override).name
-        except LookupError:
-            pass
+        resolved = _lookup_text_codec(from_override)
+        if resolved is not None:
+            return resolved
         msg = f"Unknown source encoding: {from_override}"
         raise ValueError(msg)
 
@@ -79,10 +113,9 @@ def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None)
     key = enc.lower()
     if key in GEDCOM_CHARSETS:
         return GEDCOM_CHARSETS[key]
-    try:
-        return codecs.lookup(enc).name
-    except LookupError:
-        pass
+    resolved = _lookup_text_codec(enc)
+    if resolved is not None:
+        return resolved
     msg = f"Cannot determine source encoding from '{enc}'. Use --from to specify."
     raise ValueError(msg)
 
@@ -284,10 +317,86 @@ class EncodingInfo:
         return " ".join(parts)
 
 
+# Real GEDCOM headers are a few hundred bytes. The window only needs to be big
+# enough that _declared_charset's reconciliation fallback stays a rarity.
+_CHAR_SCAN_WINDOW = 65536
+
+
+def _scan_declared_charset(
+    stream: io.BufferedReader, bom_size: int
+) -> tuple[str | None, bool]:
+    """Find the raw `1 CHAR` value by scanning bytes, never decoding the body.
+
+    Returns the charset and whether the caller must reconcile against the
+    unbounded reader because the CHAR line may lie past the window.
+    """
+    stream.seek(bom_size)
+    chunk = stream.read(_CHAR_SCAN_WINDOW)
+    lines = re.split(b"\r\n|\r|\n", chunk)
+
+    window_full = len(chunk) == _CHAR_SCAN_WINDOW
+    if window_full:
+        # The last element is a partial line. Keeping it matches a straddling
+        # "1 CHAR ANSEL" as "ANS" and hands back a silently wrong encoding.
+        lines.pop()
+
+    declared: str | None = None
+    found_head_end = False
+    for raw in lines:
+        parts = raw.strip().split()
+        if len(parts) >= 2 and parts[0] == b"0" and parts[1] != b"HEAD":
+            found_head_end = True
+            break
+        if len(parts) >= 3 and parts[0] == b"1" and parts[1] == b"CHAR":
+            # Charset names are ASCII, so decode only the value. Decoding the
+            # whole buffer raises UnicodeDecodeError on a multi-byte character
+            # straddling the cut, and on `1 CHAR ASCII` with a latin-1 body byte.
+            declared = b" ".join(parts[2:]).decode("ascii", errors="replace")
+            break
+
+    return declared, declared is None and window_full and not found_head_end
+
+
+def _declared_charset_via_reader(file_path: Path) -> str | None:
+    """Fallback: let ged4py lex the file. Slow, but it reads without a bound."""
+    with GedcomReader(str(file_path)) as reader:
+        if reader.header:
+            char_rec = reader.header.sub_tag("CHAR")
+            if char_rec and char_rec.value:
+                return str(char_rec.value)
+    return None
+
+
+def _declared_charset(file_path: Path) -> str | None:
+    """Read the `1 CHAR` value, preferring a bounded read over a full lex.
+
+    `guess_codec` is the same function GedcomReader uses, so every alias table,
+    tokenisation rule and raise path is preserved by construction -- but it stops
+    at the end of the header instead of indexing the whole file.
+
+    BinaryFileCR is load-bearing: a plain file handle makes guess_codec raise
+    OSError on CR-only files, which would send every one of them to the fallback.
+    """
+    try:
+        with BinaryFileCR(io.FileIO(str(file_path))) as stream:
+            _codec, bom_size = guess_codec(stream, require_char=False, warn=False)
+            declared, needs_reconcile = _scan_declared_charset(stream, bom_size)
+    except (OSError, UnicodeDecodeError):
+        # Truncated or otherwise malformed header. UnicodeDecodeError is a
+        # ValueError, not an OSError -- guess_codec documents it as a raise path.
+        return _declared_charset_via_reader(file_path)
+
+    if needs_reconcile:
+        # The window ran out mid-header. Returning None here would downgrade an
+        # ANSEL file to the UTF-8 default; the reader is the only thing that can
+        # still find the CHAR line.
+        return _declared_charset_via_reader(file_path)
+    return declared
+
+
 def detect_encoding(file_path: Path) -> EncodingInfo:
     """Detect GEDCOM file encoding from BOM and CHAR header."""
     has_bom = False
-    declared_charset = None
 
     with open(file_path, "rb") as f:
         bom = f.read(3)
@@ -296,11 +405,7 @@ def detect_encoding(file_path: Path) -> EncodingInfo:
         elif bom[:2] in (b"\xff\xfe", b"\xfe\xff"):
             has_bom = True
 
-    with GedcomReader(str(file_path)) as reader:
-        if reader.header:
-            char_rec = reader.header.sub_tag("CHAR")
-            if char_rec and char_rec.value:
-                declared_charset = str(char_rec.value)
+    declared_charset = _declared_charset(file_path)
 
     detected = "UTF-8"
     if has_bom:

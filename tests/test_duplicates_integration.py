@@ -8,13 +8,25 @@ from unittest.mock import patch
 
 import pytest
 
+from gedcom_tools.cli import create_parser, main
 from gedcom_tools.commands.compare.models import CompareIndividual, MatchScore
 from gedcom_tools.commands.duplicates import (
     _deduplicate_single_file,
     _normalize_candidates,
+    register_subcommand,
     run,
 )
 from gedcom_tools.constants import EXIT_SUCCESS, EXIT_USAGE_ERROR
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    """Args built the way the CLI builds them: real dest names, real defaults."""
+    return create_parser().parse_args(argv)
+
+
+def _run_cli(argv: list[str]) -> int:
+    """Drive the published entry point end to end, parser and dispatch included."""
+    return main(argv)
 
 
 def _write_gedcom(path: Path, individuals: list[str]) -> Path:
@@ -74,20 +86,30 @@ def _make_args(
     limit: int | None = None,
     reject_sex_mismatch: bool = False,
     phonetic: str = "soundex",
+    max_block_size: int = 500,
 ) -> argparse.Namespace:
-    return argparse.Namespace(
-        file=file_path,
-        format=fmt,
-        quiet=quiet,
-        verbose=verbose,
-        no_color=no_color,
-        certain_threshold=certain_threshold,
-        probable_threshold=probable_threshold,
-        show_matches=show_matches,
-        limit=limit,
-        reject_sex_mismatch=reject_sex_mismatch,
-        phonetic=phonetic,
-    )
+    argv = [f"--format={fmt}"]
+    if quiet:
+        argv.append("--quiet")
+    if verbose:
+        argv.append("--verbose")
+    if no_color:
+        argv.append("--no-color")
+    argv += [
+        "duplicates",
+        str(file_path),
+        f"--certain-threshold={certain_threshold}",
+        f"--probable-threshold={probable_threshold}",
+        f"--show-matches={show_matches}",
+        f"--phonetic={phonetic}",
+        f"--max-block-size={max_block_size}",
+    ]
+    if reject_sex_mismatch:
+        argv.append("--reject-sex-mismatch")
+    # Left off entirely when None, so the parser's own default is what runs.
+    if limit is not None:
+        argv.append(f"--limit={limit}")
+    return _parse(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -825,3 +847,150 @@ class TestMetaphoneDuplicates:
             matched_xrefs.add(m["individual_b"]["xref"])
         assert "@I1@" in matched_xrefs
         assert "@I2@" in matched_xrefs
+
+
+# ---------------------------------------------------------------------------
+# Oversized blocking groups
+# ---------------------------------------------------------------------------
+
+
+_CROWD_GIVEN_NAMES = ["Alan", "Bertha", "Carl", "Dora"]
+
+
+def _crowded_surname_file(path: Path) -> Path:
+    """Four Smiths born in the same decade -- one fat blocking group."""
+    return _write_gedcom(
+        path,
+        [
+            _indi_block(f"@I{n}@", _CROWD_GIVEN_NAMES[n], "Smith", "M", 1850 + n)
+            for n in range(4)
+        ],
+    )
+
+
+class TestOversizedBlockWarning:
+    def test_warning_names_the_group_count(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _crowded_surname_file(tmp_path / "crowd.ged")
+        assert run(_make_args(f, max_block_size=2)) == EXIT_SUCCESS
+        err = capsys.readouterr().err
+        # One group, not one per individual that looked it up.
+        assert "1 blocking group exceeded --max-block-size 2" in err
+        assert "some matches may be missing" in err
+
+    def test_count_reaches_json_consumers(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _crowded_surname_file(tmp_path / "crowd.ged")
+        assert run(_make_args(f, fmt="json", max_block_size=2)) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["oversized_blocks_skipped"] == 1
+        assert "--max-block-size" in captured.err
+
+    def test_quiet_still_says_the_answer_is_incomplete(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _crowded_surname_file(tmp_path / "crowd.ged")
+        assert run(_make_args(f, quiet=True, max_block_size=2)) == EXIT_SUCCESS
+        assert "blocking group" in capsys.readouterr().err
+
+    def test_nothing_skipped_is_silent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _crowded_surname_file(tmp_path / "crowd.ged")
+        assert run(_make_args(f, fmt="json")) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert "blocking group" not in captured.err
+        assert "oversized_blocks_skipped" not in json.loads(captured.out)
+
+    def test_raising_the_cap_recovers_the_duplicates(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _write_gedcom(
+            tmp_path / "namesakes.ged",
+            [
+                _indi_block(f"@I{n}@", "Alan", "Smith", "M", 1850, 1920, "London")
+                for n in range(3)
+            ],
+        )
+        run(_make_args(f, fmt="json", max_block_size=2))
+        capped = json.loads(capsys.readouterr().out)
+
+        run(_make_args(f, fmt="json", max_block_size=10))
+        full = json.loads(capsys.readouterr().out)
+
+        assert capped["certain_duplicates_total"] == 0
+        assert capped["oversized_blocks_skipped"] > 0
+        assert full["certain_duplicates_total"] == 1
+
+    def test_zero_cap_is_a_usage_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _crowded_surname_file(tmp_path / "crowd.ged")
+        assert run(_make_args(f, max_block_size=0)) == EXIT_USAGE_ERROR
+        assert "--max-block-size must be at least 1" in capsys.readouterr().err
+
+    def test_flag_is_registered(self) -> None:
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers()
+        register_subcommand(subparsers)
+        args = parser.parse_args(["duplicates", "a.ged", "--max-block-size", "5"])
+        assert args.max_block_size == 5
+        assert parser.parse_args(["duplicates", "a.ged"]).max_block_size == 500
+
+
+class TestCliEndToEnd:
+    """No hand-built Namespace anywhere: argv in, exit status out."""
+
+    def test_duplicates_via_main(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _write_gedcom(
+            tmp_path / "test.ged",
+            [
+                _indi_block("@I1@", "John", "Smith", "M", 1850, 1920, "London"),
+                _indi_block("@I2@", "John", "Smith", "M", 1850, 1920, "London"),
+            ],
+        )
+        rc = _run_cli(["--format", "json", "--no-color", "duplicates", str(f)])
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        pairs = data["certain_duplicates"] + data["probable_duplicates"]
+        assert {p["individual_a"]["xref"] for p in pairs} == {"@I1@"}
+
+    def test_flags_survive_the_real_parser(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        f = _write_gedcom(
+            tmp_path / "test.ged",
+            [
+                _indi_block("@I1@", "Alex", "Smith", "M", 1850, 1920, "London"),
+                _indi_block("@I2@", "Alex", "Smith", "F", 1850, 1920, "London"),
+            ],
+        )
+        rc = _run_cli(
+            [
+                "--format",
+                "json",
+                "--no-color",
+                "duplicates",
+                str(f),
+                "--reject-sex-mismatch",
+                "--phonetic",
+                "metaphone",
+                "--limit",
+                "5",
+            ]
+        )
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert data["certain_duplicates_total"] == 0
+        assert data["probable_duplicates_total"] == 0
+
+    def test_threshold_error_reaches_the_exit_status(self, tmp_path: Path) -> None:
+        f = _write_gedcom(tmp_path / "test.ged", [])
+        rc = _run_cli(
+            ["duplicates", str(f), "--certain-threshold", "0.5"],
+        )
+        assert rc == EXIT_USAGE_ERROR

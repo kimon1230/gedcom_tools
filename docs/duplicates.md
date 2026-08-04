@@ -23,6 +23,7 @@ gedcom-tools duplicates <file> [options]
 | `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
 | `--reject-sex-mismatch` | Treat sex mismatches as hard reject (score 0.0) |
 | `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
+| `--max-block-size N` | Max individuals sharing a blocking key before the group is skipped (default: 500) |
 | `--no-color` | Disable colored output |
 | `--ascii` | ASCII-only decorations in progress output and results |
 
@@ -61,6 +62,28 @@ details.
 The `--phonetic metaphone` option uses Double Metaphone for blocking and scoring,
 improving recall for European name variants. See
 [Compare: Multi-Pass Blocking](compare.md#multi-pass-blocking) for details.
+
+### Block Size Cap
+
+Groups larger than `--max-block-size` (default 500) are skipped, because scoring
+a group costs time proportional to the square of its size. A file where 600
+people share `SMITH|1850s` finds no duplicates inside that group.
+
+The run says so rather than quietly reporting fewer duplicates. Any skipped
+group produces a stderr warning:
+
+```
+Warning: 2 blocking groups exceeded --max-block-size 500 and were skipped, so some matches may be missing.
+  Re-run with a larger --max-block-size to include them; scoring cost grows with the square of the group size.
+```
+
+and JSON output carries `oversized_blocks_skipped` with the same number, since a
+stderr warning never reaches a consumer piping JSON. The count is of distinct
+blocking keys, so one 600-member group counts once. The warning is printed in
+every output mode, `--quiet` included.
+
+Raise the cap to include the group at the cost of a slower run, or narrow the
+input to avoid it. See [Compare: Block Size Cap](compare.md#block-size-cap).
 
 ### Classification
 
@@ -204,6 +227,19 @@ When a sex mismatch penalty is applied:
 The `*_total` fields reflect the full count before any `--limit` truncation or
 `--show-matches` filtering, so consumers always know the complete picture.
 
+The `oversized_blocks_skipped` key is added only when at least one blocking
+group was dropped for exceeding `--max-block-size`; its absence means nothing
+was capped:
+
+```json
+{
+  "total_individuals": 5000,
+  "certain_duplicates_total": 3,
+  "probable_duplicates_total": 5,
+  "oversized_blocks_skipped": 2
+}
+```
+
 The `insufficient_data` key is only present when `true`:
 
 ```json
@@ -221,7 +257,7 @@ The `insufficient_data` key is only present when `true`:
 |------|---------|
 | 0 | Success |
 | 1 | Error during processing |
-| 2 | Usage error (file not found, invalid thresholds) |
+| 2 | Usage error (file not found, invalid thresholds, `--max-block-size` below 1) |
 
 ## Known Limitations
 
@@ -231,8 +267,9 @@ The `insufficient_data` key is only present when `true`:
 - No family context: matches are field-level only; shared parents/children are
   not considered as corroborating evidence
 - Blocking may miss pairs with no shared blocking key (rare with 5 passes)
-- Large blocks (500+ individuals sharing a blocking key) are silently capped to
-  avoid quadratic blowup
+- Large blocks (more than `--max-block-size` individuals sharing a blocking key)
+  are skipped to avoid quadratic blowup; the run reports how many groups were
+  dropped, but not which individuals were in them
 
 ## Related Commands
 

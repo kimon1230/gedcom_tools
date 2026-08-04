@@ -23,6 +23,7 @@ gedcom-tools compare <file_a> <file_b> [options]
 | `--limit N` | Max items per output section (text default: 50, JSON default: unlimited) |
 | `--reject-sex-mismatch` | Treat sex mismatches as hard reject (score 0.0) |
 | `--phonetic {soundex,metaphone}` | Phonetic algorithm for blocking and scoring (default: soundex) |
+| `--max-block-size N` | Max individuals sharing a blocking key before the group is skipped (default: 500) |
 | `--no-color` | Disable colored output |
 | `--ascii` | ASCII-only decorations in progress output and results |
 
@@ -120,6 +121,29 @@ To avoid O(N*M) comparisons, 5 blocking passes generate candidate pairs
 5. Surname phonetic + given name phonetic
 
 Only pairs that share at least one blocking key are scored.
+
+### Block Size Cap
+
+Scoring a blocking group costs time proportional to the square of its size, so
+groups larger than `--max-block-size` (default 500) are skipped entirely. On a
+file where 600 people share `SMITH|1850s`, that group contributes no candidate
+pairs at all and matches inside it are never found.
+
+Skipped groups are reported. A run that dropped any prints to stderr:
+
+```
+Warning: 2 blocking groups exceeded --max-block-size 500 and were skipped, so some matches may be missing.
+  Re-run with a larger --max-block-size to include them; scoring cost grows with the square of the group size.
+```
+
+and JSON output carries `oversized_blocks_skipped` with the same number. The
+count is of distinct blocking keys -- one 600-member group is one skipped group,
+however many individuals looked it up. The warning is printed in every output
+mode, `--quiet` included, since it says the result is incomplete.
+
+Raising the cap recovers the missed matches at the cost of a slower run.
+Narrowing the input -- comparing subtrees rather than whole files -- avoids the
+group instead.
 
 With `--phonetic metaphone`, two additional multi-key passes run after the
 standard passes. Each individual is indexed under both its primary and secondary
@@ -243,13 +267,18 @@ Single line:
 }
 ```
 
+`oversized_blocks_skipped` is added only when at least one blocking group was
+dropped for exceeding `--max-block-size`; its absence means nothing was capped.
+Treat a present key as "these results are incomplete" -- see
+[Block Size Cap](#block-size-cap).
+
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
 | 1 | Error during processing |
-| 2 | Usage error (file not found, invalid thresholds, same file) |
+| 2 | Usage error (file not found, invalid thresholds, `--max-block-size` below 1, same file) |
 
 ## Known Limitations
 
@@ -260,6 +289,8 @@ Single line:
   relationships are not considered
 - Blocking may miss pairs that share no blocking key at all (rare with 5
   passes)
+- Blocking groups larger than `--max-block-size` are skipped; the run reports
+  how many, but not which individuals were in them
 - Greedy deduplication is not globally optimal (no Hungarian algorithm)
 
 ## References

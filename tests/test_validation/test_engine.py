@@ -1,7 +1,11 @@
+from array import array
 from pathlib import Path
 
+import pytest
+
+from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
 from gedcom_tools.validation import validate_file
-from gedcom_tools.validation.engine import ValidationEngine
+from gedcom_tools.validation.engine import MAX_ISSUES_PER_CODE, ValidationEngine
 from gedcom_tools.validation.issues import ErrorCode
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -197,6 +201,47 @@ class TestLineChecks:
         assert "_CUSTOM" in custom_warnings[0].message
 
 
+class TestSubmitterReference:
+    """W005 keys off the SUBM pointer in HEAD, not on a SUBM record existing."""
+
+    HEADER = (
+        "0 HEAD\n"
+        "1 SOUR Test\n"
+        "1 GEDC\n"
+        "2 VERS 5.5.1\n"
+        "2 FORM LINEAGE-LINKED\n"
+        "1 CHAR UTF-8\n"
+    )
+    BODY = "0 @I1@ INDI\n1 NAME John /Doe/\n0 TRLR\n"
+
+    def test_head_without_subm_warns(self, tmp_path):
+        ged = tmp_path / "no_subm.ged"
+        ged.write_text(self.HEADER + self.BODY, encoding="utf-8")
+
+        result = validate_file(ged, mode="full", quiet=True)
+        subm_warnings = [
+            i for i in result.issues if i.code == ErrorCode.W005_MISSING_SUBM
+        ]
+        assert len(subm_warnings) == 1
+        assert "SUBM" in subm_warnings[0].message
+        assert subm_warnings[0].line == 1
+        assert result.success is True  # a warning must not fail the file
+
+    def test_head_with_subm_is_quiet(self, tmp_path):
+        ged = tmp_path / "with_subm.ged"
+        ged.write_text(
+            self.HEADER
+            + "1 SUBM @U1@\n"
+            + "0 @U1@ SUBM\n"
+            + "1 NAME Test Submitter\n"
+            + self.BODY,
+            encoding="utf-8",
+        )
+
+        result = validate_file(ged, mode="full", quiet=True)
+        assert not any(i.code == ErrorCode.W005_MISSING_SUBM for i in result.issues)
+
+
 class TestStrictModeChecks:
 
     def test_missing_gedc_vers(self):
@@ -279,6 +324,27 @@ class TestExceptionPaths:
         assert not result.success
         assert len(result.errors) >= 1
 
+    def test_bom_conflicting_with_char_reports_decode_failure(self, tmp_path):
+        ged = tmp_path / "conflict.ged"
+        ged.write_bytes(b"\xef\xbb\xbf0 HEAD\n1 CHAR ASCII\n0 TRLR\n")
+        result = validate_file(ged, mode="full", quiet=True)
+        decode_errors = [
+            i for i in result.issues if i.code == ErrorCode.E008_DECODE_FAILURE
+        ]
+        assert len(decode_errors) == 1
+        assert "BOM codec" in decode_errors[0].message
+        assert not result.success
+
+    def test_truncated_header_reports_a_read_failure(self, tmp_path):
+        # The header runs off the end of the file, so encoding detection cannot
+        # complete. Without a handler this surfaced as a bare OSError traceback.
+        ged = tmp_path / "truncated.ged"
+        ged.write_bytes(b"0 HEAD\n1 CHAR")
+        result = validate_file(ged, mode="quick", quiet=True)
+        assert not result.success
+        assert [i.code for i in result.errors] == [ErrorCode.E004_MALFORMED_LINE]
+        assert "Could not read file header" in result.errors[0].message
+
 
 class TestOffsetToLine:
     def test_empty_line_offsets_returns_zero(self):
@@ -339,8 +405,6 @@ class TestAnselSupport:
         assert result.success is True
         assert result.encoding_info is not None
         assert result.encoding_info.encoding == "ANSEL"
-        error_values = {i.code.value for i in result.issues}
-        assert "E009" not in error_values
 
     def test_ansel_file_with_diacritics(self, tmp_path):
         """ANSEL file with combining diacritics parses without errors."""
@@ -365,12 +429,10 @@ class TestAnselSupport:
         assert result.encoding_info.encoding == "ANSEL"
 
     def test_royal92_validates_without_ansel_error(self):
-        """royal92.ged (ANSEL file) should not produce E009."""
+        """royal92.ged is recognised as ANSEL rather than rejected as unreadable."""
         royal92 = FIXTURES / "royal92.ged"
         result = validate_file(royal92, mode="full", quiet=True)
 
-        error_values = {i.code.value for i in result.issues}
-        assert "E009" not in error_values
         assert result.encoding_info is not None
         assert result.encoding_info.encoding == "ANSEL"
 
@@ -833,6 +895,205 @@ class TestExtractXrefGuard:
         assert ValidationEngine._extract_xref(Pointer()) == "@S1@"
 
 
+def _write_ged(path, body_lines):
+    """Write a minimal valid 5.5.1 file wrapped around the given body lines."""
+    header = [
+        "0 HEAD",
+        "1 SOUR Test",
+        "1 GEDC",
+        "2 VERS 5.5.1",
+        "2 FORM LINEAGE-LINKED",
+        "1 CHAR UTF-8",
+    ]
+    path.write_text(
+        "\n".join(header + list(body_lines) + ["0 TRLR", ""]),
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestLineIssueCap:
+    def test_trailing_whitespace_capped(self, tmp_path):
+        body = []
+        for i in range(25):
+            body.extend([f"0 @I{i}@ INDI", f"1 NAME Person{i} /Test/ "])
+        ged = _write_ged(tmp_path / "ws.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        warnings = [
+            i for i in result.issues if i.code == ErrorCode.W002_TRAILING_WHITESPACE
+        ]
+        per_line = [i for i in warnings if i.line is not None]
+        summaries = [i for i in warnings if i.line is None]
+
+        assert len(per_line) == MAX_ISSUES_PER_CODE
+        assert len(summaries) == 1
+        assert "15 more" in summaries[0].message
+        assert "suppressed" in summaries[0].message
+
+    def test_below_cap_has_no_summary(self, tmp_path):
+        body = []
+        for i in range(3):
+            body.extend([f"0 @I{i}@ INDI", f"1 NAME Person{i} /Test/ "])
+        ged = _write_ged(tmp_path / "few_ws.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        warnings = [
+            i for i in result.issues if i.code == ErrorCode.W002_TRAILING_WHITESPACE
+        ]
+        assert len(warnings) == 3
+        assert all(i.line is not None for i in warnings)
+
+    def test_exactly_at_cap_has_no_summary(self, tmp_path):
+        body = []
+        for i in range(MAX_ISSUES_PER_CODE):
+            body.extend([f"0 @I{i}@ INDI", f"1 NAME Person{i} /Test/ "])
+        ged = _write_ged(tmp_path / "cap_ws.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        warnings = [
+            i for i in result.issues if i.code == ErrorCode.W002_TRAILING_WHITESPACE
+        ]
+        assert len(warnings) == MAX_ISSUES_PER_CODE
+        assert all(i.line is not None for i in warnings)
+
+    def test_one_over_cap_reports_single_remainder(self, tmp_path):
+        body = []
+        for i in range(MAX_ISSUES_PER_CODE + 1):
+            body.extend([f"0 @I{i}@ INDI", f"1 NAME Person{i} /Test/ "])
+        ged = _write_ged(tmp_path / "over_ws.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        summaries = [
+            i
+            for i in result.issues
+            if i.code == ErrorCode.W002_TRAILING_WHITESPACE and i.line is None
+        ]
+        assert len(summaries) == 1
+        assert "1 more" in summaries[0].message
+
+    def test_line_too_long_capped(self, tmp_path):
+        filler = "x" * 300
+        body = []
+        for i in range(14):
+            body.extend([f"0 @N{i}@ NOTE {filler}"])
+        ged = _write_ged(tmp_path / "long.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        warnings = [i for i in result.issues if i.code == ErrorCode.W003_LINE_TOO_LONG]
+        assert len([i for i in warnings if i.line is not None]) == (MAX_ISSUES_PER_CODE)
+        summaries = [i for i in warnings if i.line is None]
+        assert len(summaries) == 1
+        assert "4 more" in summaries[0].message
+
+    def test_strict_line_too_long_capped(self, tmp_path):
+        filler = "x" * 300
+        body = [f"0 @N{i}@ NOTE {filler}" for i in range(14)]
+        ged = _write_ged(tmp_path / "long_strict.ged", body)
+
+        result = validate_file(ged, mode="full", strict="5.5.1", quiet=True)
+        warnings = [
+            i for i in result.issues if i.code == ErrorCode.W032_LINE_TOO_LONG_STRICT
+        ]
+        assert len([i for i in warnings if i.line is not None]) == (MAX_ISSUES_PER_CODE)
+        assert len([i for i in warnings if i.line is None]) == 1
+        assert not any(i.code == ErrorCode.W003_LINE_TOO_LONG for i in result.issues)
+
+    def test_codes_are_capped_independently(self, tmp_path):
+        filler = "x" * 300
+        body = []
+        for i in range(12):
+            body.extend([f"0 @I{i}@ INDI", f"1 NAME Person{i} /Test/ "])
+        for i in range(12):
+            body.append(f"0 @N{i}@ NOTE {filler}")
+        ged = _write_ged(tmp_path / "both.ged", body)
+
+        result = validate_file(ged, mode="full", quiet=True)
+        for code in (
+            ErrorCode.W002_TRAILING_WHITESPACE,
+            ErrorCode.W003_LINE_TOO_LONG,
+        ):
+            matching = [i for i in result.issues if i.code == code]
+            assert len([i for i in matching if i.line is not None]) == (
+                MAX_ISSUES_PER_CODE
+            )
+            assert len([i for i in matching if i.line is None]) == 1
+
+
+class TestLineOffsetStorage:
+    def test_offsets_use_compact_array(self, tmp_path):
+        ged = _write_ged(tmp_path / "offsets.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        engine.validate()
+
+        assert isinstance(engine._line_offsets, array)
+        assert engine._line_offsets.typecode == "Q"
+        assert engine._line_offsets[0] == 0
+        assert list(engine._line_offsets) == sorted(engine._line_offsets)
+
+    def test_offsets_match_byte_positions(self, tmp_path):
+        ged = _write_ged(tmp_path / "positions.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        engine.validate()
+
+        raw = ged.read_bytes()
+        expected = [0]
+        for line in raw.splitlines(keepends=True):
+            expected.append(expected[-1] + len(line))
+        assert list(engine._line_offsets) == expected
+
+    def test_reported_line_numbers_still_correct(self, tmp_path):
+        # Trailing whitespace sits on the 8th line of the assembled file
+        ged = _write_ged(
+            tmp_path / "lines.ged", ["0 @I1@ INDI", "1 NAME John /Smith/ "]
+        )
+        result = validate_file(ged, mode="full", quiet=True)
+        warnings = [
+            i for i in result.issues if i.code == ErrorCode.W002_TRAILING_WHITESPACE
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].line == 8
+
+    def test_offset_to_line_works_with_array(self):
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = array("Q", [0, 10, 20, 30])
+        assert engine._offset_to_line(0) == 1
+        assert engine._offset_to_line(10) == 2
+        assert engine._offset_to_line(25) == 3
+        assert engine._offset_to_line(1000) == 4
+
+    def test_empty_array_returns_zero(self):
+        engine = ValidationEngine.__new__(ValidationEngine)
+        engine._line_offsets = array("Q")
+        assert engine._offset_to_line(100) == 0
+
+
+class TestFileSizeLimit:
+    def test_oversized_file_rejected(self, tmp_path):
+        big = tmp_path / "big.ged"
+        with open(big, "wb") as f:
+            f.seek(MAX_FILE_SIZE_BYTES + 1)
+            f.write(b"\x00")
+
+        with pytest.raises(ValueError, match="too large"):
+            validate_file(big, mode="full", quiet=True)
+
+    def test_error_includes_size_and_limit(self, tmp_path):
+        big = tmp_path / "big.ged"
+        with open(big, "wb") as f:
+            f.seek(MAX_FILE_SIZE_BYTES + 1)
+            f.write(b"\x00")
+
+        with pytest.raises(ValueError, match="Maximum supported size is 500 MB"):
+            validate_file(big, mode="full", quiet=True)
+
+    def test_file_at_limit_is_accepted(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", 4096)
+        ged = _write_ged(tmp_path / "small.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        result = validate_file(ged, mode="full", quiet=True)
+        assert result.success is True
+
+
 class TestEncodingErrors:
     def test_invalid_encoding_reports_error(self):
         result = validate_file(
@@ -840,7 +1101,9 @@ class TestEncodingErrors:
             mode="full",
             quiet=True,
         )
-        # File should either be invalid or have encoding-related issues
-        assert not result.success or any(
-            "encoding" in str(i.message).lower() for i in result.issues
-        )
+        assert result.success is False
+        decode_failures = [
+            i for i in result.issues if i.code == ErrorCode.E008_DECODE_FAILURE
+        ]
+        assert len(decode_failures) == 1
+        assert "0xff" in decode_failures[0].message

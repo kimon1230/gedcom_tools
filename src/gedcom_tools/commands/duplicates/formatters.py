@@ -183,4 +183,9 @@ def format_json(
         "probable_duplicates_total": probable_total,
     }
 
+    # Only present when recall was actually capped -- a stderr warning does
+    # not reach a consumer reading JSON off stdout.
+    if result.oversized_blocks_skipped:
+        output["oversized_blocks_skipped"] = result.oversized_blocks_skipped
+
     return json.dumps(output, indent=2, ensure_ascii=False)

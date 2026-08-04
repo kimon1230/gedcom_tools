@@ -139,9 +139,6 @@ def _individual_to_dict(ind: IsolatedIndividual) -> dict[str, str | int | None]:
     }
 
 
-_extract_xref = extract_xref
-
-
 def _collect_data(
     file_path: Path,
     *,
@@ -203,7 +200,7 @@ def _collect_data(
                 members: list[str] = []
                 for sub in rec.sub_records:
                     if sub.tag in ("HUSB", "WIFE", "CHIL") and sub.value:
-                        m = _extract_xref(sub.value)
+                        m = extract_xref(sub.value)
                         if m:
                             members.append(m)
 

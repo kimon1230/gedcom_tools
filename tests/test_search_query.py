@@ -5,6 +5,8 @@ import re
 import pytest
 
 from gedcom_tools.commands.search.query import parse_query
+from gedcom_tools.phonetics import phonetic_encode
+from gedcom_tools.utils import normalize_compare
 
 # ---------------------------------------------------------------------------
 # Successful parsing
@@ -424,6 +426,107 @@ class TestTildeExpansionErrors:
     def test_suggests_single_quotes(self) -> None:
         with pytest.raises(ValueError, match="single quotes"):
             parse_query("surname~/home/user/Schmidt")
+
+    def test_shell_expanded_bare_token_linux(self) -> None:
+        # `search tree.ged ~kimon` — the shell ate the tilde, so the token
+        # arrives with no operator left in it at all.
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("/home/kimon")
+
+    def test_shell_expanded_bare_token_macos(self) -> None:
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("/Users/kimon")
+
+    def test_shell_expanded_bare_token_names_the_value(self) -> None:
+        with pytest.raises(ValueError, match=re.escape("'/home/kimon'")):
+            parse_query("/home/kimon")
+
+    def test_shell_expanded_token_among_other_terms(self) -> None:
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("born:1850 /home/kimon")
+
+    def test_expanded_path_after_substring_operator(self) -> None:
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("surname:/home/kimon")
+
+    def test_expanded_path_after_exact_operator(self) -> None:
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("surname=/Users/kimon")
+
+    def test_home_prefix_deeper_in_path_still_caught(self) -> None:
+        with pytest.raises(ValueError, match="home directory path"):
+            parse_query("place:/mnt/home/kimon")
+
+    def test_ordinary_slashed_value_is_fine(self) -> None:
+        q = parse_query("place:Alsace/Lorraine")
+        assert q.terms[0].value == "Alsace/Lorraine"
+
+    def test_leading_slash_without_home_is_fine(self) -> None:
+        q = parse_query("/usr/share")
+        assert q.terms[0].value == "/usr/share"
+
+
+# ---------------------------------------------------------------------------
+# Pre-computed term fields
+# ---------------------------------------------------------------------------
+
+
+class TestPrecomputedTermFields:
+    def test_value_norm_folds_case_and_accents(self) -> None:
+        q = parse_query("surname:Müller")
+        assert q.terms[0].value_norm == normalize_compare("Müller")
+        assert q.terms[0].value == "Müller"
+
+    def test_value_norm_computed_for_every_operator(self) -> None:
+        q = parse_query("surname=Smith born:1850 name~Schmidt sex:F")
+        assert [t.value_norm for t in q.terms] == [
+            "smith",
+            "1850",
+            "schmidt",
+            "f",
+        ]
+
+    def test_phonetic_codes_populated_for_tilde_terms(self) -> None:
+        q = parse_query("surname~Schmidt")
+        assert q.terms[0].phonetic_codes == phonetic_encode(
+            normalize_compare("Schmidt"), "soundex"
+        )
+        assert q.terms[0].phonetic_codes[0] != ""
+
+    def test_phonetic_codes_honour_selected_algorithm(self) -> None:
+        q = parse_query("surname~Schmidt", phonetic_algo="metaphone")
+        assert q.terms[0].phonetic_codes == phonetic_encode(
+            normalize_compare("Schmidt"), "metaphone"
+        )
+
+    def test_phonetic_codes_encode_normalized_value(self) -> None:
+        # Accents are stripped before encoding, so Müller and Muller agree
+        accented = parse_query("surname~Müller").terms[0]
+        plain = parse_query("surname~Muller").terms[0]
+        assert accented.phonetic_codes == plain.phonetic_codes
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "surname:Schmidt",
+            "surname=Schmidt",
+            "born:1850",
+            "sex:F",
+            "ancestor:@I1@",
+        ],
+    )
+    def test_phonetic_codes_empty_for_non_tilde_terms(self, query: str) -> None:
+        q = parse_query(query)
+        assert q.terms[0].phonetic_codes == ("", "")
+
+    def test_unknown_algorithm_rejected_at_parse_time(self) -> None:
+        with pytest.raises(ValueError, match="Unknown phonetic algorithm"):
+            parse_query("surname~Schmidt", phonetic_algo="nysiis")
+
+    def test_unknown_algorithm_ignored_without_tilde_terms(self) -> None:
+        # Nothing consults the codes, so nothing encodes -- no error
+        q = parse_query("surname:Schmidt", phonetic_algo="nysiis")
+        assert q.terms[0].phonetic_codes == ("", "")
 
 
 # ---------------------------------------------------------------------------

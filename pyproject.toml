@@ -34,6 +34,9 @@ dev = [
     "pip-audit>=2.10",
     "jsonschema>=4.26",
 ]
+# Reserved, not yet consumed by any import. The REPL command's `graph` subcommand
+# is what will use it; the extra ships ahead of that because README and the 1.1.1
+# release notes already document `pip install kimon-gedcom-tools[graph]`.
 graph = ["kimon-gedgraph>=1.0.0,<2.0.0"]
 
 [project.scripts]
@@ -64,6 +67,9 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=gedcom_tools --cov-report=term-missing --cov-fail-under=95"
+markers = [
+    "network: downloads the 126 MB language-detection model on a cold cache; deselect with -m 'not network'",
+]
 
 [tool.coverage.run]
 source = ["src/gedcom_tools"]

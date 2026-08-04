@@ -33,6 +33,7 @@ from gedcom_tools.constants import (
     MAX_FIRST_CHILD_AGE,
     MAX_LIFESPAN,
     MAX_MARRIAGE_AGE,
+    MAX_NOTE_BUFFER_BYTES,
     MAX_SPOUSAL_AGE_GAP,
     MIN_MARRIAGE_AGE,
     MIN_PARENT_AGE,
@@ -58,6 +59,8 @@ from gedcom_tools.utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from ged4py.model import Record
 
 # More conservative than MAX_LIFESPAN (120) used in validation.
@@ -70,6 +73,10 @@ MAX_LOCATION_DEPTH = 10
 
 
 class StatsCollector:
+
+    # Bound on the buffered note text, as an attribute so a test can shrink it
+    # far enough to exercise the fallback without a 64 MB fixture.
+    max_note_buffer_bytes: int = MAX_NOTE_BUFFER_BYTES
 
     def __init__(
         self,
@@ -96,6 +103,14 @@ class StatsCollector:
         self.referenced_xrefs: set[str] = set()
         self.detected_languages: set[str] = set()
         self.lang_detector: GedcomLanguageDetector | None = None
+
+        # Note text gathered during collection, detected on in phase 3 once
+        # the model is loaded. Reading it here saves a second pass over the
+        # file; `_note_buffer_overflow` records that the budget blew and the
+        # second pass is needed after all.
+        self._note_texts: list[str] = []
+        self._note_bytes = 0
+        self._note_buffer_overflow = False
 
         # Calculate living threshold dynamically
         self.living_threshold_year = date.today().year - MAX_LIFESPAN_YEARS
@@ -131,7 +146,7 @@ class StatsCollector:
     def _detect_encoding(self) -> None:
         try:
             self.encoding_info = detect_encoding(self.file_path)
-        except (CodecError, ParserError, IntegrityError) as e:
+        except (CodecError, ParserError, IntegrityError, OSError) as e:
             if not self.quiet:
                 print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
             self.encoding_info = EncodingInfo(encoding="Unknown")
@@ -158,66 +173,98 @@ class StatsCollector:
 
                 if tag == "INDI":
                     self._collect_individual(record)
+                    self._buffer_notes(record, INDI_NON_EVENT_TAGS)
                 elif tag == "FAM":
                     self._collect_family(record)
+                    self._buffer_notes(record, FAM_NON_EVENT_TAGS)
 
-    def _detect_note_language(self, sub: Any, category: str) -> None:
-        """Detect language of a NOTE sub-record and track it."""
-        if self.lang_detector is None:
-            return
+    @staticmethod
+    def _iter_note_subs(
+        record: Record, non_event_tags: frozenset[str]
+    ) -> Iterator[Any]:
+        """Yield an INDI/FAM record's NOTE sub-records, event notes included."""
+        for sub in record.sub_records:
+            if sub.tag == "NOTE":
+                yield sub
+            elif sub.tag not in non_event_tags:
+                for subsub in sub.sub_records:
+                    if subsub.tag == "NOTE":
+                        yield subsub
 
+    def _note_text(self, sub: Any) -> str | None:
+        """Resolve a NOTE sub-record to its text, following pointers.
+
+        Pointer targets are recorded in ``referenced_xrefs`` on the way past,
+        so the post-pass can tell which top-level notes nothing refers to.
+        """
         if isinstance(sub, Pointer):
             xref = str(sub.value)
             self.referenced_xrefs.add(xref)
-            text = self.note_lookup.get(xref)
-        elif sub.value is not None:
-            xref = None
-            text = str(sub.value)
-            if not text.strip():
-                return
-        else:
-            return
+            return self.note_lookup.get(xref)
+        if sub.value is None:
+            return None
+        text = str(sub.value)
+        return text if text.strip() else None
 
-        if text is None:
-            return
+    def _buffer_notes(self, record: Record, non_event_tags: frozenset[str]) -> None:
+        """Stash a record's note text for the language detection phase.
 
-        text = unicodedata.normalize("NFC", text).strip()
-        if len(text) < self.lang_detector.min_length:
-            return
+        Detection needs the model that phase 3 loads, but the notes are only
+        cheap to reach while the record is already parsed. Buffering the text
+        keeps stats to one read of the file.
+        """
+        for sub in self._iter_note_subs(record, non_event_tags):
+            # Called for the xref bookkeeping even once the buffer is closed.
+            text = self._note_text(sub)
+            if text is None or self._note_buffer_overflow:
+                continue
 
-        # Use xref as cache key for pointer notes
-        lang, was_skipped = self.lang_detector.detect(text)
-        if not was_skipped and lang != "unknown":
-            self.detected_languages.add(lang)
+            self._note_bytes += len(text.encode("utf-8", "replace"))
+            if self._note_bytes > self.max_note_buffer_bytes:
+                # Drop the whole buffer, not just the overflowing note: phase
+                # 3 rereads the file, and detecting over a partial buffer as
+                # well would only duplicate the work.
+                self._note_buffer_overflow = True
+                self._note_texts.clear()
+                continue
+
+            self._note_texts.append(text)
+
+    def _detect_note_language(self, sub: Any) -> None:
+        """Detect the language of a NOTE sub-record and track it."""
+        self._detect_note_language_text(self._note_text(sub))
 
     def _detect_languages(self) -> None:
-        """Run language detection across all collected INDI/FAM note sub-records."""
+        """Run language detection across all collected INDI/FAM note text."""
+        if self._note_buffer_overflow:
+            self._detect_languages_rereading()
+        else:
+            for text in self._note_texts:
+                self._detect_note_language_text(text)
+
+        # Post-pass: unreferenced top-level notes
+        for xref, text in self.note_lookup.items():
+            if xref not in self.referenced_xrefs:
+                self._detect_note_language_text(text)
+
+    def _detect_languages_rereading(self) -> None:
+        """Detect straight off the file when the note buffer blew its budget.
+
+        Slower, but only one note is resident at a time. The walk covers the
+        whole file rather than the tail: the notes already dropped from the
+        buffer would otherwise never be looked at.
+        """
         with GedcomReader(str(self.file_path)) as reader:
             for rec in reader.records0("INDI"):
-                for sub in rec.sub_records:
-                    if sub.tag == "NOTE":
-                        self._detect_note_language(sub, "stories")
-                    elif sub.tag not in INDI_NON_EVENT_TAGS:
-                        for subsub in sub.sub_records:
-                            if subsub.tag == "NOTE":
-                                self._detect_note_language(subsub, "events")
+                for sub in self._iter_note_subs(rec, INDI_NON_EVENT_TAGS):
+                    self._detect_note_language(sub)
 
             for rec in reader.records0("FAM"):
-                for sub in rec.sub_records:
-                    if sub.tag == "NOTE":
-                        self._detect_note_language(sub, "events")
-                    elif sub.tag not in FAM_NON_EVENT_TAGS:
-                        for subsub in sub.sub_records:
-                            if subsub.tag == "NOTE":
-                                self._detect_note_language(subsub, "events")
+                for sub in self._iter_note_subs(rec, FAM_NON_EVENT_TAGS):
+                    self._detect_note_language(sub)
 
-            # Post-pass: unreferenced top-level notes
-            for xref, text in self.note_lookup.items():
-                if xref not in self.referenced_xrefs:
-                    self._detect_note_language_text(text)
-
-    def _detect_note_language_text(self, text: str) -> None:
-        if self.lang_detector is None:
+    def _detect_note_language_text(self, text: str | None) -> None:
+        if self.lang_detector is None or text is None:
             return
         text = unicodedata.normalize("NFC", text).strip()
         if len(text) < self.lang_detector.min_length:
@@ -236,18 +283,28 @@ class StatsCollector:
         name_rec = record.sub_tag("NAME")
         if name_rec and name_rec.value:
             name_val = name_rec.value
-            # ged4py returns (given, surname, suffix) tuple
+            # ged4py returns (given, surname, trailing), where `trailing` is
+            # whatever followed the surname in the NAME value. That is a
+            # suffix in "John /Smith/ Jr." but further pieces of the given
+            # name in the patronymic form "/Ivanov/ Ivan Ivanovich".
             if isinstance(name_val, tuple) and len(name_val) >= 2:
                 given = name_val[0] or ""
                 surname = name_val[1] or ""
-                suffix = name_val[2] if len(name_val) > 2 else ""
-                # Store full name including suffix
+                trailing = name_val[2] if len(name_val) > 2 else ""
+                # Store full name including the trailing piece
                 name_parts = [given, surname]
-                if suffix:
-                    name_parts.append(suffix)
+                if trailing:
+                    name_parts.append(trailing)
                 data.name = " ".join(p for p in name_parts if p)
-                # Extract first given name (handle "John William" -> "John")
-                parts = given.split() if given else []
+                # Extract first given name (handle "John William" -> "John").
+                # With nothing before the surname, fall back to the trailing
+                # piece so "/Ivanov/ Ivan Ivanovich" ranks as "Ivan" instead
+                # of dropping out of the given-name rankings entirely.
+                # GEDCOM cannot tell a trailing given-name piece from a
+                # suffix here, so "/Smith/ Jr." does rank "Jr." as a given
+                # name. No rule gets both right; the patronymic form is the
+                # commoner one, and losing the person is worse either way.
+                parts = (given or trailing).split()
                 data.given_name = parts[0] if parts else ""
                 if not data.surname:
                     data.surname = surname
@@ -307,11 +364,11 @@ class StatsCollector:
         # Family links and other data
         for sub in record.sub_records:
             if sub.tag == "FAMC" and sub.value:
-                fam_xref = self._extract_xref(sub.value)
+                fam_xref = extract_xref(sub.value)
                 if fam_xref and not data.famc_xref:
                     data.famc_xref = fam_xref
             elif sub.tag == "FAMS" and sub.value:
-                fam_xref = self._extract_xref(sub.value)
+                fam_xref = extract_xref(sub.value)
                 if fam_xref:
                     data.fams_xrefs.append(fam_xref)
             elif sub.tag == "NOTE":
@@ -337,11 +394,11 @@ class StatsCollector:
 
         for sub in record.sub_records:
             if sub.tag == "HUSB" and sub.value:
-                data.husb_xref = self._extract_xref(sub.value)
+                data.husb_xref = extract_xref(sub.value)
             elif sub.tag == "WIFE" and sub.value:
-                data.wife_xref = self._extract_xref(sub.value)
+                data.wife_xref = extract_xref(sub.value)
             elif sub.tag == "CHIL" and sub.value:
-                chil_xref = self._extract_xref(sub.value)
+                chil_xref = extract_xref(sub.value)
                 if chil_xref:
                     data.chil_xrefs.append(chil_xref)
 
@@ -367,10 +424,6 @@ class StatsCollector:
         if date_rec is None or date_rec.value is None:
             return None
         return extract_year_from_date(date_rec.value)
-
-    @staticmethod
-    def _extract_xref(value: object) -> str | None:
-        return extract_xref(value)
 
     def _format_name(self, raw_name: str) -> str:
         """Format a GEDCOM name (remove slashes around surname)."""

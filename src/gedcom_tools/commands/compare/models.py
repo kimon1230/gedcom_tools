@@ -94,3 +94,6 @@ class CompareResult:
     probable_matches: list[MatchPair]
     unique_to_a: list[CompareIndividual]
     unique_to_b: list[CompareIndividual]
+    oversized_blocks_skipped: int = 0
+    """Blocking groups dropped for exceeding the block-size cap.  Non-zero
+    means recall was capped and some matches may be missing."""

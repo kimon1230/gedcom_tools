@@ -81,6 +81,11 @@ Warnings indicate potential issues that don't make the file invalid.
 | W004 | **Custom tag** - Non-standard tag starting with underscore |
 | W005 | **Missing SUBM** - No submitter record found |
 
+Per-line warnings (W002, W003, and W032 under `--strict`) report the first 10
+occurrences of each code, then one summary line giving the number suppressed.
+A file with trailing whitespace on every line would otherwise produce one
+warning per line — millions of them on a large file — burying everything else.
+
 ### Orphaned Records (W010-W015)
 
 | Code | Description |

@@ -18,17 +18,30 @@ from gedcom_tools.commands.stats import (
     StatsResult,
     TimelineEntry,
 )
+from gedcom_tools.commands.stats import collector as stats_collector
 from gedcom_tools.constants import EXIT_ERROR
 from gedcom_tools.progress import Colors
 from gedcom_tools.utils import EncodingInfo
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# StatsCollector builds a GedcomLanguageDetector for any file with INDI or FAM
+# records, and on a cold cache that pulls a 126 MB model off a CDN. Nearly every
+# test in here goes down that path, so the whole module runs against the stub
+# from conftest; the handful of tests that care what the detector says install
+# their own. See tests/conftest.py::_fast_lingua.
+pytestmark = pytest.mark.usefixtures("_fast_lingua")
 
-def _collect(ged: Path, *, top_n: int = 10) -> StatsResult:
+
+def _collector(ged: Path, *, top_n: int = 10) -> StatsCollector:
+    """Build a collector for tests that need to inspect it after collection."""
     return StatsCollector(
         file_path=ged, quiet=True, verbose=False, no_color=True, top_n=top_n
-    ).collect()
+    )
+
+
+def _collect(ged: Path, *, top_n: int = 10) -> StatsResult:
+    return _collector(ged, top_n=top_n).collect()
 
 
 class TestDataClasses:
@@ -2115,6 +2128,90 @@ class TestGivenNameFrequency:
         assert len(result.top_given_names_female) == 1
         assert result.top_given_names_female[0].name == "Mary"
 
+    def test_patronymic_name_ranks_its_given_name(self, tmp_path: Path) -> None:
+        """`/Ivanov/ Ivan Ivanovich` puts the given name after the surname.
+
+        ged4py hands that back as ("", "Ivanov", "Ivan Ivanovich"), and reading
+        the third element as a suffix dropped the person from the rankings.
+        """
+        gedcom = tmp_path / "patronymic.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME /Ivanov/ Ivan Ivanovich
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert result.top_given_names_male[0].name == "Ivan"
+        assert collector.individuals["@I1@"].name == "Ivanov Ivan Ivanovich"
+
+    def test_suffix_does_not_displace_the_given_name(self, tmp_path: Path) -> None:
+        """A real suffix must not reach the rankings, and must stay in `name`."""
+        gedcom = tmp_path / "suffix_given.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Smith/ Jr.
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        indi = collector.individuals["@I1@"]
+        assert indi.given_name == "John"
+        assert indi.name == "John Smith Jr."
+        assert result.top_given_names_male[0].name == "John"
+
+    def test_bare_suffix_ranks_as_a_given_name(self, tmp_path: Path) -> None:
+        """Documents the ambiguity we accepted rather than resolved.
+
+        `/Smith/ Jr.` is indistinguishable from the patronymic form at the
+        GEDCOM level, so the suffix is ranked as a given name. The patronymic
+        spelling is far commoner, and the old behaviour - excluding the person
+        from the rankings altogether - was the worse answer for both.
+        """
+        gedcom = tmp_path / "bare_suffix.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME /Smith/ Jr.
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert collector.individuals["@I1@"].name == "Smith Jr."
+        assert result.top_given_names_male[0].name == "Jr."
+
     def test_given_name_from_givn_subrecord(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "givn_subrecord.ged"
         gedcom.write_text(
@@ -3499,3 +3596,183 @@ class TestBirthPatterns:
 
         assert "Approximate:" in output
         assert "with full date:" in output
+
+
+class _ScriptDetector:
+    """Stand-in for GedcomLanguageDetector that classifies by Unicode block.
+
+    The real model costs seconds to load and these tests only care about which
+    notes reach the detector, not about what it makes of them.
+    """
+
+    min_length = 20
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def detect(self, text: str) -> tuple[str, bool]:
+        if len(text) < self.min_length:
+            return ("unknown", True)
+        for ch in text:
+            if "Ͱ" <= ch <= "Ͽ":
+                return ("el", False)
+            if "Ѐ" <= ch <= "ӿ":
+                return ("ru", False)
+        return ("en", False)
+
+
+NOTE_BUFFER_GEDCOM = """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Harker/
+1 SEX M
+1 NOTE @N1@
+1 NOTE The harbour master kept a ledger of every vessel that wintered here.
+1 BIRT
+2 DATE 12 MAR 1847
+2 NOTE @N2@
+1 DEAT
+2 NOTE
+1 RESI
+2 NOTE @N99@
+0 @I2@ INDI
+1 NAME Eleni /Papadaki/
+1 SEX F
+1 NOTE Η οικογένεια \
+μετανάστευσε \
+από τα βόρεια \
+χωριά τον χειμώνα.
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 NOTE @N1@
+1 MARR
+2 NOTE Another English note, comfortably past the minimum length for detection.
+0 @N1@ NOTE The family emigrated from the northern counties during the winter.
+0 @N2@ NOTE Δεύτερη \
+σημείωση στα \
+ελληνικά με αρκετό \
+κείμενο για \
+ανίχνευση.
+0 @N3@ NOTE Семья переехала \
+из северных деревень \
+зимой тысяча \
+восемьсот сорок \
+седьмого года.
+0 TRLR
+"""
+
+
+class TestNoteLanguageBuffering:
+    """Language detection runs off one read of the file, not two.
+
+    English lives in inline INDI/FAM notes and a referenced top-level note,
+    Greek in an inline note and a pointer target, Russian only in @N3@ which
+    nothing references - so the assertions cover the buffered walk, the
+    pointer resolution and the unreferenced-note post-pass at once.
+    """
+
+    EXPECTED = {"en", "el", "ru"}
+
+    @pytest.fixture
+    def note_ged(self, tmp_path: Path) -> Path:
+        path = tmp_path / "note_buffer.ged"
+        path.write_text(NOTE_BUFFER_GEDCOM, encoding="utf-8")
+        return path
+
+    @pytest.fixture(autouse=True)
+    def _stub_detector(
+        self, monkeypatch: pytest.MonkeyPatch, _fast_lingua: None
+    ) -> None:
+        # Depends on _fast_lingua so the module-wide stub is installed first and
+        # this one lands on top of it; relying on fixture ordering alone would
+        # leave which stub wins up to pytest.
+        monkeypatch.setattr(stats_collector, "GedcomLanguageDetector", _ScriptDetector)
+
+    @staticmethod
+    def _count_readers(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Record every GedcomReader the collector opens."""
+        opened: list[str] = []
+        real = stats_collector.GedcomReader
+
+        def spy(path: str, *args: object, **kwargs: object) -> object:
+            opened.append(path)
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(stats_collector, "GedcomReader", spy)
+        return opened
+
+    def test_detects_within_budget_from_one_pass(
+        self, note_ged: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(note_ged)
+        result = collector.collect()
+
+        assert collector.detected_languages == self.EXPECTED
+        assert result.distinct_languages == 3
+        assert collector._note_buffer_overflow is False
+        assert len(opened) == 1
+
+    def test_detects_the_same_set_over_budget(
+        self, note_ged: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", 200)
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(note_ged)
+        result = collector.collect()
+
+        assert collector.detected_languages == self.EXPECTED
+        assert result.distinct_languages == 3
+        assert collector._note_buffer_overflow is True
+        # The partial buffer is dropped, not detected on alongside the reread.
+        assert collector._note_texts == []
+        assert len(opened) == 2
+
+    def test_budget_is_not_spent_on_pointer_targets_twice(self, note_ged: Path) -> None:
+        """@N1@ is referenced twice, so its text is buffered twice."""
+        collector = _collector(note_ged)
+        collector.collect()
+
+        harker = "The family emigrated from the northern counties during the winter."
+        assert collector._note_texts.count(harker) == 2
+
+    def test_unresolvable_pointer_and_empty_note_are_skipped(
+        self, note_ged: Path
+    ) -> None:
+        collector = _collector(note_ged)
+        collector.collect()
+
+        # @N99@ has no record behind it but still counts as a reference.
+        assert "@N99@" in collector.referenced_xrefs
+        assert all(text for text in collector._note_texts)
+
+    def test_no_notes_leaves_the_buffer_empty(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "no_notes.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Doe/
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert collector._note_texts == []
+        assert collector._note_bytes == 0
+        assert result.distinct_languages == 0

@@ -85,13 +85,24 @@ def _term(
     value: str = "Smith",
     is_wildcard: bool = False,
     date_range: tuple[int, int] | None = None,
+    algorithm: str = "soundex",
 ) -> SearchTerm:
+    from gedcom_tools.phonetics import phonetic_encode
+
+    # parse_query() encodes the query value for ~ terms only; mirror that here
+    # so a hand-built term does not hand the matcher an empty code.
+    codes = (
+        phonetic_encode(normalize_compare(value), algorithm)
+        if operator == "~"
+        else ("", "")
+    )
     return SearchTerm(
         field=field,
         operator=operator,
         value=value,
         is_wildcard=is_wildcard,
         date_range=date_range,
+        phonetic_codes=codes,
     )
 
 
@@ -896,7 +907,14 @@ class TestMetaphoneMatch:
         # Catherine/Katherine differ in soundex but share metaphone
         ind = _make_individual(surname="Katherine", algorithm="metaphone")
         q = _query(
-            [_term(field="surname", operator="~", value="Catherine")],
+            [
+                _term(
+                    field="surname",
+                    operator="~",
+                    value="Catherine",
+                    algorithm="metaphone",
+                )
+            ],
             phonetic_algo="metaphone",
         )
         result = match_individual(ind, q)
@@ -906,7 +924,14 @@ class TestMetaphoneMatch:
     def test_metaphone_given_match(self) -> None:
         ind = _make_individual(given="Katherine", algorithm="metaphone")
         q = _query(
-            [_term(field="given", operator="~", value="Catherine")],
+            [
+                _term(
+                    field="given",
+                    operator="~",
+                    value="Catherine",
+                    algorithm="metaphone",
+                )
+            ],
             phonetic_algo="metaphone",
         )
         result = match_individual(ind, q)
@@ -917,7 +942,14 @@ class TestMetaphoneMatch:
             given="Katherine", surname="Williams", algorithm="metaphone"
         )
         q = _query(
-            [_term(field="name", operator="~", value="Catherine")],
+            [
+                _term(
+                    field="name",
+                    operator="~",
+                    value="Catherine",
+                    algorithm="metaphone",
+                )
+            ],
             phonetic_algo="metaphone",
         )
         result = match_individual(ind, q)
@@ -930,7 +962,14 @@ class TestMetaphoneMatch:
             algorithm="metaphone",
         )
         q = _query(
-            [_term(field="surname", operator="~", value="Catherine")],
+            [
+                _term(
+                    field="surname",
+                    operator="~",
+                    value="Catherine",
+                    algorithm="metaphone",
+                )
+            ],
             phonetic_algo="metaphone",
         )
         result = match_individual(ind, q)
@@ -939,7 +978,14 @@ class TestMetaphoneMatch:
     def test_metaphone_no_false_match(self) -> None:
         ind = _make_individual(surname="Williams", algorithm="metaphone")
         q = _query(
-            [_term(field="surname", operator="~", value="Johnson")],
+            [
+                _term(
+                    field="surname",
+                    operator="~",
+                    value="Johnson",
+                    algorithm="metaphone",
+                )
+            ],
             phonetic_algo="metaphone",
         )
         result = match_individual(ind, q)
@@ -978,3 +1024,34 @@ class TestCacheBounds:
         info = _wildcard_to_regex.cache_info()
         assert info.maxsize == 256
         assert info.currsize == 256
+
+
+# ---------------------------------------------------------------------------
+# Pre-computed term fields
+# ---------------------------------------------------------------------------
+
+
+class TestPrecomputedTermFields:
+    def test_value_norm_defaults_to_normalized_value(self) -> None:
+        assert _term(value="MÜLLER").value_norm == normalize_compare("MÜLLER")
+
+    def test_matcher_reads_value_norm_not_value(self) -> None:
+        # Deliberately inconsistent: only the pre-computed form can match
+        term = _term(field="surname", value="Nonsense")
+        term.value_norm = "smith"
+        result = match_individual(_make_individual(), _query([term]))
+        assert result is not None
+        assert result.details[0].query_term == "Nonsense"
+
+    def test_matcher_reads_phonetic_codes_not_value(self) -> None:
+        from gedcom_tools.phonetics import phonetic_encode
+
+        term = _term(field="surname", operator="~", value="Smith")
+        term.phonetic_codes = phonetic_encode("johnson", "soundex")
+        ind = _make_individual(surname="Jonson")
+        assert match_individual(ind, _query([term])) is not None
+
+    def test_phonetic_codes_are_not_consulted_for_text_terms(self) -> None:
+        term = _term(field="surname", value="Smith")
+        assert term.phonetic_codes == ("", "")
+        assert match_individual(_make_individual(), _query([term])) is not None

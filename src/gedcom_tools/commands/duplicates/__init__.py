@@ -5,7 +5,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from gedcom_tools.commands.compare.blocker import generate_candidates
+from gedcom_tools.commands.compare.blocker import (
+    DEFAULT_MAX_BLOCK_SIZE,
+    describe_oversized_blocks,
+    generate_candidates,
+)
 from gedcom_tools.commands.compare.collector import collect_individuals
 from gedcom_tools.commands.compare.dedup import compute_field_diffs
 from gedcom_tools.commands.compare.models import (
@@ -70,6 +74,15 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         default="soundex",
         help="Phonetic algorithm for blocking/scoring (default: soundex)",
     )
+    parser.add_argument(
+        "--max-block-size",
+        type=int,
+        default=DEFAULT_MAX_BLOCK_SIZE,
+        help=(
+            "Max individuals sharing a blocking key before the group is "
+            f"skipped (default: {DEFAULT_MAX_BLOCK_SIZE})"
+        ),
+    )
 
 
 def _normalize_candidates(
@@ -118,6 +131,7 @@ def run(args: Namespace) -> int:
     probable_threshold: float = args.probable_threshold
     reject_sex_mismatch: bool = args.reject_sex_mismatch
     phonetic: str = getattr(args, "phonetic", "soundex")
+    max_block_size: int = getattr(args, "max_block_size", DEFAULT_MAX_BLOCK_SIZE)
     show_matches: str = args.show_matches
     limit: int | None = args.limit
 
@@ -130,6 +144,13 @@ def run(args: Namespace) -> int:
     if certain_threshold <= probable_threshold:
         print(
             "Error: --certain-threshold must be greater than --probable-threshold.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
+    if max_block_size < 1:
+        print(
+            "Error: --max-block-size must be at least 1. "
+            f"The default is {DEFAULT_MAX_BLOCK_SIZE}.",
             file=sys.stderr,
         )
         return EXIT_USAGE_ERROR
@@ -148,13 +169,19 @@ def run(args: Namespace) -> int:
                 file_path, file_path.name, algorithm=phonetic
             )
 
+        oversized_keys: set[str] = set()
+
         with tracker.phase("Finding duplicates"):
             by_xref: dict[str, CompareIndividual] = {
                 ind.xref: ind for ind in individuals
             }
 
             raw_candidates = generate_candidates(
-                individuals, individuals, algorithm=phonetic
+                individuals,
+                individuals,
+                max_block_size=max_block_size,
+                algorithm=phonetic,
+                oversized_keys=oversized_keys,
             )
             candidates = _normalize_candidates(raw_candidates)
 
@@ -182,6 +209,7 @@ def run(args: Namespace) -> int:
                 total_individuals=len(individuals),
                 certain_matches=certain_matches,
                 probable_matches=probable_matches,
+                oversized_blocks_skipped=len(oversized_keys),
             )
 
             if output_format == "json":
@@ -196,6 +224,14 @@ def run(args: Namespace) -> int:
                     show_matches=show_matches,
                     limit=limit,
                 )
+
+        if oversized_keys:
+            # Printed even under --quiet: this says the answer is incomplete,
+            # which is exactly what a user skimming a one-line summary needs.
+            print(
+                describe_oversized_blocks(len(oversized_keys), max_block_size),
+                file=sys.stderr,
+            )
 
         if output:
             print(output)

@@ -111,8 +111,6 @@ class Spinner:
                 s.update(f" ({i+1} items)")
     """
 
-    FRAMES = UNICODE_GLYPHS.frames
-
     def __init__(
         self,
         message: str,
