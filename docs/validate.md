@@ -86,6 +86,19 @@ occurrences of each code, then one summary line giving the number suppressed.
 A file with trailing whitespace on every line would otherwise produce one
 warning per line — millions of them on a large file — burying everything else.
 
+Under `--format json` this means `summary.warnings` counts what was reported,
+not what the file contains. Two keys carry the difference:
+
+- `summary.total_warnings` — the uncapped count. Always present, and equal to
+  `summary.warnings` when nothing was suppressed.
+- `summary.suppressed` — `{code: count}` of the issues dropped. Present only
+  when at least one code was capped.
+
+A gate thresholding on `summary.warnings` should read `total_warnings` instead,
+or it will read the cap as the file having improved. Note that the W004
+custom-tag cap is not tallied in `suppressed`, so a file with more than ten
+distinct custom tags has a `total_warnings` low by the dropped-tag count.
+
 ### Orphaned Records (W010-W015)
 
 | Code | Description |
@@ -194,7 +207,8 @@ gedcom-tools --format json validate --full file.ged
   },
   "summary": {
     "errors": 1,
-    "warnings": 0
+    "warnings": 0,
+    "total_warnings": 0
   },
   "issues": [
     {
@@ -218,6 +232,13 @@ The validator auto-detects encoding:
 2. Reads CHAR declaration in header
 3. Defaults to UTF-8 if no BOM or CHAR declaration found
 4. Supports ANSEL encoding (common in older GEDCOM files)
+
+### File Size Limit
+
+Input files larger than 500 MB are rejected with an actionable error message
+showing the actual size and the limit, the same way `convert` and `filter`
+reject them. The figure is a backstop against absurd input rather than a
+supported size.
 
 ### Strict Mode
 

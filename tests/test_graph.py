@@ -249,6 +249,13 @@ class TestBuildParentChildGraphInputEquivalence:
         graph = build_parent_child_graph(records)
         assert graph.parents_of == {"@I3@": ["@I1@", "@I2@"]}
 
+    def test_str_path_takes_the_file_route(self, tmp_path: Path) -> None:
+        # A str is iterable, so an isinstance(source, Path) dispatch sends it
+        # down the records branch and walks it one character at a time.
+        p = _write_ged(tmp_path, _TWO_PARENT_FAM)
+        assert build_parent_child_graph(str(p)) == build_parent_child_graph(p)
+        assert build_parent_child_graph(str(p)).parents_of == {"@I3@": ["@I1@", "@I2@"]}
+
 
 class TestFindAncestorsWithDepth:
 

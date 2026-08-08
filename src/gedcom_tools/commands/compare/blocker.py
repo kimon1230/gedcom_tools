@@ -20,7 +20,7 @@ def describe_oversized_blocks(count: int, max_block_size: int) -> str:
     was = "was" if count == 1 else "were"
     return (
         f"Warning: {count:,} blocking {groups} exceeded --max-block-size "
-        f"{max_block_size:,} and {was} skipped, so some matches may be missing.\n"
+        f"{max_block_size} and {was} skipped, so some matches may be missing.\n"
         "  Re-run with a larger --max-block-size to include them; scoring cost "
         "grows with the square of the group size."
     )

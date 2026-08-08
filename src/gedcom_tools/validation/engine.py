@@ -36,6 +36,17 @@ class StopValidation(Exception):
     pass
 
 
+class FileTooLargeError(ValueError):
+    """Raised when the input exceeds the supported file size.
+
+    A ``ValueError`` subclass so existing callers catching ``ValueError``
+    keep working. The distinct type is what lets ``commands/validate.py``
+    report an anticipated policy rejection as a plain one-line message
+    instead of routing it through the unexpected-exception handler, which
+    would name the exception type and offer a traceback.
+    """
+
+
 # Maximum recommended line length per GEDCOM spec
 MAX_LINE_LENGTH = 255
 
@@ -86,13 +97,17 @@ class ValidationEngine:
         self._sem_validator = SemanticValidator()
         self._line_offsets: array[int] = array("Q")
         self._warned_custom_tags: set[str] = set()
+        # code.value -> issues of that code dropped by MAX_ISSUES_PER_CODE.
+        # Keyed by the string, not the ErrorCode member: this reaches
+        # json.dumps, which rejects enum keys.
+        self._suppressed_counts: dict[str, int] = {}
 
     def validate(self) -> ValidationResult:
         """Run all validation phases and return results.
 
         Raises
         ------
-        ValueError
+        FileTooLargeError
             If the file is larger than the supported maximum. ``filter`` and
             ``convert`` reject oversized input the same way; validation applies
             the same limit so one command does not silently accept a file the
@@ -106,7 +121,7 @@ class ValidationEngine:
                 f"File is too large ({actual_mb:.1f} MB). "
                 f"Maximum supported size is {limit_mb} MB."
             )
-            raise ValueError(msg)
+            raise FileTooLargeError(msg)
 
         tracker = PhaseTracker(
             total_phases=4,
@@ -143,6 +158,7 @@ class ValidationEngine:
             issues=self.issues,
             encoding_info=self.encoding_info,
             record_counts=self.record_counts,
+            suppressed_counts=self._suppressed_counts,
         )
 
     def _build_line_map(self) -> None:
@@ -202,6 +218,7 @@ class ValidationEngine:
         for code, count in seen.items():
             if count > MAX_ISSUES_PER_CODE:
                 suppressed = count - MAX_ISSUES_PER_CODE
+                self._suppressed_counts[code.value] = suppressed
                 self._add_issue(
                     code,
                     f"{suppressed:,} more lines with this issue were "

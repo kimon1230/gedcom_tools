@@ -100,7 +100,6 @@ class StatsCollector:
 
         # Language detection state
         self.note_lookup: dict[str, str] = {}
-        self.referenced_xrefs: set[str] = set()
         self.detected_languages: set[str] = set()
         self.lang_detector: GedcomLanguageDetector | None = None
 
@@ -192,29 +191,42 @@ class StatsCollector:
                         yield subsub
 
     def _note_text(self, sub: Any) -> str | None:
-        """Resolve a NOTE sub-record to its text, following pointers.
+        """Return an inline NOTE sub-record's text, or None if it is blank.
 
-        Pointer targets are recorded in ``referenced_xrefs`` on the way past,
-        so the post-pass can tell which top-level notes nothing refers to.
+        Pointers are not resolved here. Every caller must skip them first -
+        handed a `Pointer` this returns the xref string as if it were note
+        text. Pointer targets reach detection through `note_lookup` instead,
+        once each, in `_detect_languages`.
         """
-        if isinstance(sub, Pointer):
-            xref = str(sub.value)
-            self.referenced_xrefs.add(xref)
-            return self.note_lookup.get(xref)
         if sub.value is None:
             return None
         text = str(sub.value)
         return text if text.strip() else None
 
     def _buffer_notes(self, record: Record, non_event_tags: frozenset[str]) -> None:
-        """Stash a record's note text for the language detection phase.
+        """Stash a record's inline note text for the language detection phase.
 
         Detection needs the model that phase 3 loads, but the notes are only
         cheap to reach while the record is already parsed. Buffering the text
         keeps stats to one read of the file.
+
+        Pointer notes are skipped: their text is already resident in
+        `note_lookup`, so buffering it again would charge one shared note
+        once per reference and detect on it once per reference too. A file
+        where thousands of records point at one research note used to blow
+        the budget on a single note's worth of text.
+
+        Consequence, deliberate: the budget bounds *inline* note text only.
+        `note_lookup` holds every top-level NOTE, fully resident and never
+        counted, so a file with tens of MB of top-level notes exceeds the
+        intended ceiling without ever setting `_note_buffer_overflow`. That
+        predates the pointer skip - the lookup was never counted - and is
+        left alone here.
         """
         for sub in self._iter_note_subs(record, non_event_tags):
-            # Called for the xref bookkeeping even once the buffer is closed.
+            if isinstance(sub, Pointer):
+                continue
+
             text = self._note_text(sub)
             if text is None or self._note_buffer_overflow:
                 continue
@@ -231,7 +243,9 @@ class StatsCollector:
             self._note_texts.append(text)
 
     def _detect_note_language(self, sub: Any) -> None:
-        """Detect the language of a NOTE sub-record and track it."""
+        """Detect the language of an inline NOTE sub-record and track it."""
+        if isinstance(sub, Pointer):
+            return
         self._detect_note_language_text(self._note_text(sub))
 
     def _detect_languages(self) -> None:
@@ -242,17 +256,20 @@ class StatsCollector:
             for text in self._note_texts:
                 self._detect_note_language_text(text)
 
-        # Post-pass: unreferenced top-level notes
-        for xref, text in self.note_lookup.items():
-            if xref not in self.referenced_xrefs:
-                self._detect_note_language_text(text)
+        # Post-pass over every top-level note, referenced or not. Neither the
+        # buffer nor the reread looks at pointers, so this is where a shared
+        # note gets detected - exactly once, however many records point at it.
+        for text in self.note_lookup.values():
+            self._detect_note_language_text(text)
 
     def _detect_languages_rereading(self) -> None:
         """Detect straight off the file when the note buffer blew its budget.
 
         Slower, but only one note is resident at a time. The walk covers the
         whole file rather than the tail: the notes already dropped from the
-        buffer would otherwise never be looked at.
+        buffer would otherwise never be looked at. Pointer notes are skipped
+        here as they are in the buffer - `_detect_languages`' post-pass over
+        `note_lookup` covers them, once each.
         """
         with GedcomReader(str(self.file_path)) as reader:
             for rec in reader.records0("INDI"):

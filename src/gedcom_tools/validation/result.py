@@ -22,6 +22,11 @@ class ValidationResult:
     issues: list[ValidationIssue] = field(default_factory=list)
     encoding_info: EncodingInfo | None = None
     record_counts: dict[str, int] = field(default_factory=dict)
+    # {code: issues dropped}, for codes the per-code reporting cap truncated.
+    # Only the per-line formatting codes (W002/W003/W032) are tallied here;
+    # the custom-tag cap is not, so a file with more than ten distinct custom
+    # tags has a total_warnings low by the dropped-tag count.
+    suppressed_counts: dict[str, int] = field(default_factory=dict)
 
     @property
     def errors(self) -> list[ValidationIssue]:
@@ -169,16 +174,30 @@ class ValidationResult:
 
         from pathlib import Path as _Path
 
+        # "warnings" is the length of the reported array, so it stays
+        # verifiable against the document itself. "total_warnings" is what the
+        # file actually contains: each truncated code left one synthetic
+        # summary issue behind, already counted in "warnings", so the dropped
+        # count is added and that stand-in subtracted.
+        summary: dict[str, object] = {
+            "errors": len(self.errors),
+            "warnings": len(self.warnings),
+            "total_warnings": (
+                len(self.warnings)
+                + sum(self.suppressed_counts.values())
+                - len(self.suppressed_counts)
+            ),
+        }
+        if self.suppressed_counts:
+            summary["suppressed"] = dict(self.suppressed_counts)
+
         data: dict[str, object] = {
             "file": self.file_path,
             "filename": _Path(self.file_path).name,
             "valid": self.success,
             "encoding": encoding_data,
             "record_counts": self.record_counts,
-            "summary": {
-                "errors": len(self.errors),
-                "warnings": len(self.warnings),
-            },
+            "summary": summary,
             "issues": issues_list,
         }
 

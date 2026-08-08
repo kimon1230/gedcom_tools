@@ -343,7 +343,9 @@ class TestDescribeOversizedBlocks:
 
     def test_names_the_flag_that_actually_exists(self) -> None:
         msg = describe_oversized_blocks(2, 1200)
-        assert "--max-block-size 1,200" in msg
+        # Rendered without a thousands separator: the advice below tells the
+        # user to re-run with a larger value, and type=int rejects "1,200".
+        assert "--max-block-size 1200" in msg
         assert "Re-run with a larger --max-block-size" in msg
 
     def test_default_constant_matches_signature_default(self) -> None:

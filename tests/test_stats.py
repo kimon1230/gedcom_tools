@@ -1970,6 +1970,55 @@ class TestEdgeCases:
         assert len(result.top_surnames) == 0
 
 
+class TestEncodingDetectionFailure:
+    """The OSError arm on the encoding phase.
+
+    Driving this through `collect()` does not work: phase 2 opens its own
+    GedcomReader on the same truncated file and raises the identical OSError
+    with nothing to catch it, so the run dies before any assertion. The phase
+    is called on its own instead.
+    """
+
+    @staticmethod
+    def _truncated_header(tmp_path: Path) -> Path:
+        # guess_codec runs off the end of the header and raises OSError.
+        ged = tmp_path / "truncated.ged"
+        ged.write_bytes(b"0 HEAD\n1 CHAR")
+        return ged
+
+    def test_warns_and_reports_unknown(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        collector = StatsCollector(
+            file_path=self._truncated_header(tmp_path),
+            quiet=False,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        assert collector.encoding_info is not None
+        assert collector.encoding_info.encoding == "Unknown"
+        assert "Could not detect encoding" in capsys.readouterr().err
+
+    def test_quiet_suppresses_the_warning(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        collector = StatsCollector(
+            file_path=self._truncated_header(tmp_path),
+            quiet=True,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        assert collector.encoding_info is not None
+        assert collector.encoding_info.encoding == "Unknown"
+        assert capsys.readouterr().err == ""
+
+
 class TestCLIIntegration:
 
     def test_stats_command_exists(self) -> None:
@@ -3666,6 +3715,20 @@ NOTE_BUFFER_GEDCOM = """\
 0 TRLR
 """
 
+FANOUT_NOTE = (
+    "The parish register was rebound in 1893 and the earlier entries "
+    "were recopied by hand."
+)
+
+
+def _fanout_gedcom(records: int) -> str:
+    """A file where every individual points at the same top-level note."""
+    lines = ["0 HEAD", "1 SOUR Test", "1 GEDC", "2 VERS 5.5.1", "1 CHAR UTF-8"]
+    for i in range(1, records + 1):
+        lines += [f"0 @I{i}@ INDI", f"1 NAME Person{i} /Shared/", "1 NOTE @N1@"]
+    lines += [f"0 @N1@ NOTE {FANOUT_NOTE}", "0 TRLR", ""]
+    return "\n".join(lines)
+
 
 class TestNoteLanguageBuffering:
     """Language detection runs off one read of the file, not two.
@@ -3722,7 +3785,8 @@ class TestNoteLanguageBuffering:
     def test_detects_the_same_set_over_budget(
         self, note_ged: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", 200)
+        budget = 200
+        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", budget)
         opened = self._count_readers(monkeypatch)
 
         collector = _collector(note_ged)
@@ -3731,27 +3795,68 @@ class TestNoteLanguageBuffering:
         assert collector.detected_languages == self.EXPECTED
         assert result.distinct_languages == 3
         assert collector._note_buffer_overflow is True
+        # Pointer targets no longer contribute, so pin that the inline notes
+        # alone are what blow the budget. Without this the test goes vacuous
+        # the moment someone trims a note out of the fixture.
+        assert collector._note_bytes > budget
         # The partial buffer is dropped, not detected on alongside the reread.
         assert collector._note_texts == []
         assert len(opened) == 2
 
-    def test_budget_is_not_spent_on_pointer_targets_twice(self, note_ged: Path) -> None:
-        """@N1@ is referenced twice, so its text is buffered twice."""
+    def test_pointer_targets_are_not_buffered(self, note_ged: Path) -> None:
+        """@N1@ is referenced twice and buffered neither time."""
         collector = _collector(note_ged)
         collector.collect()
 
-        harker = "The family emigrated from the northern counties during the winter."
-        assert collector._note_texts.count(harker) == 2
+        shared = "The family emigrated from the northern counties during the winter."
+        assert shared not in collector._note_texts
+        # It still gets detected - via the note_lookup post-pass.
+        assert collector.note_lookup["@N1@"] == shared
+        assert "en" in collector.detected_languages
 
-    def test_unresolvable_pointer_and_empty_note_are_skipped(
-        self, note_ged: Path
-    ) -> None:
+    def test_empty_note_is_skipped(self, note_ged: Path) -> None:
         collector = _collector(note_ged)
         collector.collect()
 
-        # @N99@ has no record behind it but still counts as a reference.
-        assert "@N99@" in collector.referenced_xrefs
         assert all(text for text in collector._note_texts)
+
+    def test_shared_note_reaches_the_detector_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gedcom = tmp_path / "fanout.ged"
+        gedcom.write_text(_fanout_gedcom(40), encoding="utf-8")
+
+        seen: list[str] = []
+
+        class CountingDetector(_ScriptDetector):
+            def detect(self, text: str) -> tuple[str, bool]:
+                seen.append(text)
+                return super().detect(text)
+
+        monkeypatch.setattr(stats_collector, "GedcomLanguageDetector", CountingDetector)
+
+        collector = _collector(gedcom)
+        collector.collect()
+
+        assert seen.count(FANOUT_NOTE) == 1
+        assert collector.detected_languages == {"en"}
+
+    def test_fan_out_does_not_trip_the_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gedcom = tmp_path / "fanout.ged"
+        gedcom.write_text(_fanout_gedcom(40), encoding="utf-8")
+        # One copy of the shared note would already overrun this.
+        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", 20)
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(gedcom)
+        collector.collect()
+
+        assert collector._note_buffer_overflow is False
+        assert collector._note_bytes == 0
+        assert collector.detected_languages == {"en"}
+        assert len(opened) == 1
 
     def test_no_notes_leaves_the_buffer_empty(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_notes.ged"

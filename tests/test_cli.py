@@ -157,6 +157,25 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
         main(["--verbose", "validate", str(f)])
 
 
+def test_validate_oversized_file_reports_cleanly(tmp_path, capsys, monkeypatch):
+    """An anticipated size rejection reads as a limit, not as a crash."""
+    monkeypatch.setattr("gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", 10)
+    ged = tmp_path / "big.ged"
+    ged.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", encoding="utf-8")
+
+    result = main(["validate", str(ged)])
+    assert result == EXIT_ERROR
+
+    err = capsys.readouterr().err
+    assert err.startswith("Error: File is too large")
+    # Not "Error: ValueError: ..." with a traceback offer -- the limit is
+    # deliberate, so the exception type and the --verbose hint are both noise.
+    # The rendered limit is not asserted: with the constant patched low,
+    # MAX // (1024 * 1024) renders as 0.
+    assert "ValueError" not in err
+    assert "traceback" not in err.lower()
+
+
 # ---------------------------------------------------------------------------
 # Stats command smoke tests
 # ---------------------------------------------------------------------------

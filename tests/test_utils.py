@@ -218,6 +218,35 @@ class TestDetectEncodingPathTaken:
 
         assert info.declared_charset == expected
 
+    def test_charless_header_in_a_big_file_stays_on_the_fast_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A file with no `1 CHAR` must not pay for a full lex just to say so.
+
+        The window fills up on any file past 64 KB, and without the
+        end-of-header check that alone is taken as "the CHAR line might be
+        further in" -- sending every such file to the reader, which is the
+        cost the bounded scan exists to avoid.
+        """
+        ged = tmp_path / "no_char.ged"
+        body = ["0 HEAD", "1 SOUR Test", "0 @I1@ INDI", "1 NAME A /X/"]
+        while sum(len(line) + 1 for line in body) <= _CHAR_SCAN_WINDOW:
+            n = len(body)
+            body.append(f"0 @I{n}@ INDI")
+            body.append(f"1 NAME Padding{n} /Filler/")
+        body.append("0 TRLR")
+        ged.write_bytes(("\n".join(body) + "\n").encode("utf-8"))
+        assert ged.stat().st_size >= _CHAR_SCAN_WINDOW
+        assert b"1 CHAR" not in ged.read_bytes()
+
+        def explode(*args: object, **kwargs: object) -> None:
+            raise AssertionError("GedcomReader was constructed on the fast path")
+
+        with patch("gedcom_tools.utils.GedcomReader", explode):
+            info = detect_encoding(ged)
+
+        assert info.declared_charset is None
+
     def test_fallback_is_reachable(self, tmp_path: Path) -> None:
         ged = _straddling_char_file(tmp_path / "padded.ged")
         real = utils.GedcomReader

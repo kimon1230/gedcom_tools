@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict, deque
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -214,7 +215,9 @@ def _add_family(
             graph.couples.setdefault(p2, set()).add(p1)
 
 
-def build_parent_child_graph(source: Path | Iterable[RecordLike]) -> ParentChildGraph:
+def build_parent_child_graph(
+    source: Path | str | os.PathLike[str] | Iterable[RecordLike],
+) -> ParentChildGraph:
     """Build directed parent-child graph from FAM records.
 
     ``source`` is either a path to a GEDCOM file, which is parsed with
@@ -223,14 +226,18 @@ def build_parent_child_graph(source: Path | Iterable[RecordLike]) -> ParentChild
     callers that already hold the records should pass them rather than pay
     for a second parse of the file.
 
+    A path may be a ``Path``, a ``str`` or any other ``os.PathLike``. A bare
+    ``str`` is always a path and never a sequence of records -- it is
+    iterable, so the records branch would walk it one character at a time.
+
     Processes HUSB/WIFE as parents and CHIL as children.
     Builds edges per-parent (not per-couple) to handle single-parent families.
     """
     graph = ParentChildGraph()
 
     families = (
-        _families_from_file(source)
-        if isinstance(source, Path)
+        _families_from_file(Path(source))
+        if isinstance(source, (str, os.PathLike))
         else _families_from_records(source)
     )
     for fam_xref, parents, children in families:

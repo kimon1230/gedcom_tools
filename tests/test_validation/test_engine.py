@@ -1,3 +1,5 @@
+import json
+import sys
 from array import array
 from pathlib import Path
 
@@ -5,7 +7,11 @@ import pytest
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
 from gedcom_tools.validation import validate_file
-from gedcom_tools.validation.engine import MAX_ISSUES_PER_CODE, ValidationEngine
+from gedcom_tools.validation.engine import (
+    MAX_ISSUES_PER_CODE,
+    FileTooLargeError,
+    ValidationEngine,
+)
 from gedcom_tools.validation.issues import ErrorCode
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -931,6 +937,14 @@ class TestLineIssueCap:
         assert "15 more" in summaries[0].message
         assert "suppressed" in summaries[0].message
 
+        # The dropped 15 have to be machine-readable too: a CI gate reading
+        # summary.warnings would otherwise see the cap as the file improving.
+        summary = json.loads(result.format_json())["summary"]
+        assert summary["suppressed"] == {"W002": 15}
+        # 15 dropped, less the one summary issue standing in for them, which
+        # summary.warnings already counts. Not reported + suppressed.
+        assert summary["total_warnings"] - summary["warnings"] == 14
+
     def test_below_cap_has_no_summary(self, tmp_path):
         body = []
         for i in range(3):
@@ -943,6 +957,12 @@ class TestLineIssueCap:
         ]
         assert len(warnings) == 3
         assert all(i.line is not None for i in warnings)
+
+        # Nothing suppressed: the key is absent and the total agrees with the
+        # reported count, so a consumer needs no branch to read it.
+        summary = json.loads(result.format_json())["summary"]
+        assert "suppressed" not in summary
+        assert summary["total_warnings"] == summary["warnings"]
 
     def test_exactly_at_cap_has_no_summary(self, tmp_path):
         body = []
@@ -1069,15 +1089,25 @@ class TestLineOffsetStorage:
 
 
 class TestFileSizeLimit:
+    # The sparse write below only stays sparse on ext4/tmpfs. NTFS materialises
+    # it without an explicit FSCTL_SET_SPARSE, so each Windows leg would write
+    # 500 MB twice. Linux keeps the coverage of the real constant.
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="NTFS materialises the sparse file"
+    )
     def test_oversized_file_rejected(self, tmp_path):
         big = tmp_path / "big.ged"
         with open(big, "wb") as f:
             f.seek(MAX_FILE_SIZE_BYTES + 1)
             f.write(b"\x00")
 
+        # Still a ValueError to anyone catching the broad type.
         with pytest.raises(ValueError, match="too large"):
             validate_file(big, mode="full", quiet=True)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="NTFS materialises the sparse file"
+    )
     def test_error_includes_size_and_limit(self, tmp_path):
         big = tmp_path / "big.ged"
         with open(big, "wb") as f:
@@ -1087,11 +1117,25 @@ class TestFileSizeLimit:
         with pytest.raises(ValueError, match="Maximum supported size is 500 MB"):
             validate_file(big, mode="full", quiet=True)
 
+    # Both boundary tests derive the limit from the file that was actually
+    # written. _write_ged goes through write_text with default newline
+    # translation, so a byte count computed from the source string is wrong by
+    # the line count on the Windows legs.
     def test_file_at_limit_is_accepted(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", 4096)
         ged = _write_ged(tmp_path / "small.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        size = ged.stat().st_size
+        monkeypatch.setattr("gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", size)
         result = validate_file(ged, mode="full", quiet=True)
         assert result.success is True
+
+    def test_file_one_byte_over_limit_is_rejected(self, tmp_path, monkeypatch):
+        ged = _write_ged(tmp_path / "small.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        size = ged.stat().st_size
+        monkeypatch.setattr(
+            "gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", size - 1
+        )
+        with pytest.raises(FileTooLargeError):
+            validate_file(ged, mode="full", quiet=True)
 
 
 class TestEncodingErrors:

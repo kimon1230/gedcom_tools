@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import IO, Literal
 
-from gedcom_tools.validation.engine import ValidationEngine
+from gedcom_tools.validation.engine import FileTooLargeError, ValidationEngine
 from gedcom_tools.validation.issues import ErrorCode, Severity, ValidationIssue
 from gedcom_tools.validation.result import ValidationResult
 
@@ -23,6 +23,7 @@ __all__ = [
     "ValidationIssue",
     "ErrorCode",
     "Severity",
+    "FileTooLargeError",
 ]
 
 
