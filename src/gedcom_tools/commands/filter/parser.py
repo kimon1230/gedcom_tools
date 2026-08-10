@@ -1,12 +1,22 @@
 """Line-level GEDCOM parser for the filter command.
 
-Parses GEDCOM text into structured lines and records without ged4py,
-preserving raw content for lossless round-trip output.
+Parses GEDCOM text into structured lines and records without going through
+ged4py's reader, preserving raw content for lossless round-trip output. The
+line grammar itself is borrowed from ged4py so that the two agree on what a
+record is; what is not borrowed is the reader's refusal to continue past a
+malformed line, since `filter` is the tool you reach for on a messy file.
 """
 
 from __future__ import annotations
 
 import re
+
+# _RE_GEDCOM_LINE is absent from ged4py.parser.__all__ but is the grammar
+# GedcomReader lexes every line with -- deriving from it is the only way `filter`
+# can be sure it sees exactly the records `validate` sees. A parallel hand-written
+# pattern is what let crafted lines through in the first place. ged4py is pinned
+# >=0.5.2,<0.6; a rename fails loudly here at import time.
+from ged4py.parser import _RE_GEDCOM_LINE
 
 from gedcom_tools.commands.filter.models import GedcomLine, GedcomRecord, RecordCounts
 
@@ -22,14 +32,17 @@ __all__ = [
     "is_pointer_value",
 ]
 
-_LINE_RE = re.compile(
-    r"^(\d{1,2})"  # level (1-2 digits, 0-99)
-    r"\s+"  # delimiter
-    r"(?:(@[^@]+@)"  # optional xref (any non-@ content between @s)
-    r"\s+)?"  # delimiter after xref
-    r"([A-Za-z0-9_]+)"  # tag
-    r"(?:\s(.*))?$"  # optional value (rest of line)
+# One grammar, not two. ged4py matches bytes; re.A restores that semantics for the
+# decoded copy, without which \d would accept Unicode digits here and nowhere else.
+# Flags are inherited rather than restated so an upstream flag change cannot drift.
+_LINE_RE: re.Pattern[str] = re.compile(
+    _RE_GEDCOM_LINE.pattern.decode("ascii"), _RE_GEDCOM_LINE.flags | re.A
 )
+
+# Exactly the characters bytes.lstrip() removes. str.lstrip() with no argument is a
+# different operation -- it also eats NBSP, U+2000 and the C1 controls, none of which
+# ged4py strips, so a line starting with one would parse here and not there.
+_GED_LSTRIP = " \t\n\r\v\f"
 
 _POINTER_RE = re.compile(r"^@[^@]+@$")
 
@@ -50,16 +63,26 @@ def parse_line(raw: str, line_number: int) -> GedcomLine:
 
     Lines that don't match the expected format are preserved as-is with
     tag="" to avoid data loss during round-trip processing.
+
+    The match runs against ged4py's preprocessed form of the line, not the raw
+    text: GedcomReader strips leading whitespace and trailing CR/LF before it
+    lexes. ``raw`` itself stays untouched -- it is what gets written back out.
     """
-    m = _LINE_RE.match(raw)
+    m = _LINE_RE.match(raw.lstrip(_GED_LSTRIP).rstrip("\r\n"))
     if not m:
         return GedcomLine(
             level=0, xref=None, tag="", value=None, raw=raw, line_number=line_number
         )
-    level = int(m.group(1))
-    xref = m.group(2)
-    tag = m.group(3)
-    value = m.group(4)
+    try:
+        level = int(m["level"])
+    except ValueError:
+        # The level group is unbounded \d+; CPython refuses int() past 4300 digits.
+        return GedcomLine(
+            level=0, xref=None, tag="", value=None, raw=raw, line_number=line_number
+        )
+    xref = m["xref"]
+    tag = m["tag"]
+    value = m["value"]
     return GedcomLine(
         level=level, xref=xref, tag=tag, value=value, raw=raw, line_number=line_number
     )
@@ -68,13 +91,19 @@ def parse_line(raw: str, line_number: int) -> GedcomLine:
 def parse_lines(text: str) -> list[GedcomLine]:
     """Parse GEDCOM text into a list of GedcomLine objects.
 
-    Uses str.splitlines() which handles \\r\\n, \\r, and \\n uniformly.
+    Splits on exactly the three GEDCOM line terminators: \\r\\n, \\r and \\n.
+    str.splitlines() is deliberately NOT used -- it also breaks on VT, FF, FS,
+    GS, RS, NEL, LS and PS, none of which terminate a line in GEDCOM. Treating
+    those as terminators lets a value containing one be promoted to a top-level
+    record on output, so a NOTE payload could smuggle in a forged INDI.
     Each GedcomLine.raw stores the content without trailing line endings.
     """
-    result: list[GedcomLine] = []
-    for i, raw in enumerate(text.splitlines(), start=1):
-        result.append(parse_line(raw, i))
-    return result
+    pieces = re.split(r"\r\n|\r|\n", text)
+    # re.split yields a trailing "" when text ends with a terminator (splitlines
+    # does not). Left in, it serializes back out as a spurious blank line.
+    if pieces and pieces[-1] == "":
+        pieces.pop()
+    return [parse_line(raw, i) for i, raw in enumerate(pieces, start=1)]
 
 
 def group_records(lines: list[GedcomLine]) -> list[GedcomRecord]:

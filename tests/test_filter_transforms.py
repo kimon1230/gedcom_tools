@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from gedcom_tools.commands.filter.models import (
     FilterSpec,
     GedcomLine,
@@ -846,8 +848,11 @@ class TestTransformsEdgeCases:
         assert [c.tag for c in indi.children] == ["NAME"]
 
     def test_strip_tag_does_not_affect_head_trlr(self) -> None:
-        """HEAD and TRLR should not be matched by strip_tags
-        (user would have to explicitly specify HEAD/TRLR)."""
+        """HEAD and TRLR survive strip_tags, even when named explicitly.
+
+        Stripping an unrelated tag must leave them alone, and asking for
+        them by name is refused rather than honoured.
+        """
         records = [
             _record("HEAD"),
             _record("INDI", xref="@I1@"),
@@ -861,12 +866,100 @@ class TestTransformsEdgeCases:
         assert "INDI" not in result_tags
         assert removed == {"@I1@"}
 
+        explicit = FilterSpec(strip_tags=["HEAD", "TRLR"])
+        result, removed = apply_strip_transforms(records, explicit)
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+
+
+# ---------------------------------------------------------------------------
+# TestStripTagStructuralGuard
+# ---------------------------------------------------------------------------
+
+
+class TestStripTagStructuralGuard:
+    def test_trlr_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["TRLR"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_head_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["HEAD"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == set()
+        assert "HEAD" in capsys.readouterr().err
+
+    def test_lowercase_trlr_is_refused(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The guard runs after case normalization, so --strip-tag trlr is caught."""
+        records = [_record("HEAD"), _record("TRLR")]
+        result, _ = apply_strip_transforms(records, FilterSpec(strip_tags=["trlr"]))
+        assert [r.tag for r in result] == ["HEAD", "TRLR"]
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_subm_is_still_strippable(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """SUBM is data, not structure. Stripping it is a supported privacy step."""
+        records = [
+            _record("HEAD"),
+            _record("SUBM", xref="@SUBM1@", children=[_line(1, "NAME", "Me")]),
+            _record("INDI", xref="@I1@"),
+            _record("TRLR"),
+        ]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["SUBM"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == {"@SUBM1@"}
+        assert capsys.readouterr().err == ""
+
+    def test_mixed_tags_strips_the_safe_one(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [
+            _record("HEAD"),
+            _record("INDI", xref="@I1@", children=[_line(1, "NOTE", "inline")]),
+            _record("NOTE", xref="@N1@"),
+            _record("TRLR"),
+        ]
+        result, removed = apply_strip_transforms(
+            records, FilterSpec(strip_tags=["TRLR", "NOTE"])
+        )
+        assert [r.tag for r in result] == ["HEAD", "INDI", "TRLR"]
+        assert removed == {"@N1@"}
+        indi = next(r for r in result if r.tag == "INDI")
+        assert indi.children == []
+        err = capsys.readouterr().err
+        assert "TRLR" in err
+        assert "NOTE" not in err
+
+    def test_warning_names_both_ignored_tags(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [_record("HEAD"), _record("TRLR")]
+        apply_strip_transforms(records, FilterSpec(strip_tags=["TRLR", "HEAD"]))
+        err = capsys.readouterr().err
+        assert "HEAD, TRLR" in err
+
+    def test_no_warning_when_nothing_ignored(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        records = [_record("HEAD"), _record("INDI", xref="@I1@"), _record("TRLR")]
+        apply_strip_transforms(records, FilterSpec(strip_tags=["INDI"]))
+        assert capsys.readouterr().err == ""
+
 
 # ---------------------------------------------------------------------------
 # Subtree extraction tests
 # ---------------------------------------------------------------------------
 
-from pathlib import Path  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 
 from gedcom_tools.commands.filter.transforms import (  # noqa: E402
@@ -1060,9 +1153,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_tags_xrefs = [(r.tag, r.xref) for r in kept]
         assert ("HEAD", None) in kept_tags_xrefs
@@ -1091,9 +1182,7 @@ class TestExtractSubtree:
                     "@I4@": ["@I2@"],
                 },
             )
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 1, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 1, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@I1@" in kept_xrefs
@@ -1115,7 +1204,7 @@ class TestExtractSubtree:
                 parents_of={"@I1@": ["@I2@"], "@I2@": ["@I3@"]},
                 children_of={"@I2@": ["@I1@"], "@I3@": ["@I2@"]},
             )
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 2, 0, False)
+            kept, _ = extract_subtree(records, "@I1@", 2, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert {"@I1@", "@I2@", "@I3@"} == kept_xrefs
@@ -1139,9 +1228,7 @@ class TestExtractSubtree:
                     "@I4@": ["@I3@"],
                 },
             )
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", None, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", None, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert kept_xrefs == {"@I1@", "@I2@", "@I3@", "@I4@"}
@@ -1158,9 +1245,7 @@ class TestExtractSubtree:
                 parents_of={"@I1@": ["@I2@"]},
                 children_of={"@I2@": ["@I1@"]},
             )
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@I1@" in kept_xrefs
@@ -1179,9 +1264,7 @@ class TestExtractSubtree:
                 children_of={"@I1@": ["@I2@"], "@I2@": ["@I3@"]},
                 parents_of={"@I2@": ["@I1@"], "@I3@": ["@I2@"]},
             )
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 1, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 1, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@I1@" in kept_xrefs
@@ -1199,7 +1282,7 @@ class TestExtractSubtree:
                 children_of={"@I1@": ["@I2@"], "@I2@": ["@I3@"]},
                 parents_of={"@I2@": ["@I1@"], "@I3@": ["@I2@"]},
             )
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 0, 2, False)
+            kept, _ = extract_subtree(records, "@I1@", 0, 2, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert kept_xrefs == {"@I1@", "@I2@", "@I3@"}
@@ -1217,7 +1300,7 @@ class TestExtractSubtree:
                 parents_of={"@I3@": ["@I2@"], "@I2@": ["@I1@"]},
                 children_of={"@I1@": ["@I2@"], "@I2@": ["@I3@"], "@I3@": ["@I4@"]},
             )
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I3@", 2, 1, False)
+            kept, _ = extract_subtree(records, "@I3@", 2, 1, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert kept_xrefs == {"@I1@", "@I2@", "@I3@", "@I4@"}
@@ -1233,9 +1316,7 @@ class TestExtractSubtree:
             mock_graph.return_value = _make_graph(
                 couples={"@I1@": {"@I2@"}, "@I2@": {"@I1@"}},
             )
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, True
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, True)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@I1@" in kept_xrefs
@@ -1257,7 +1338,7 @@ class TestExtractSubtree:
             mock_graph.return_value = _make_graph(
                 couples={"@I1@": {"@I2@"}, "@I2@": {"@I1@"}},
             )
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 0, 0, True)
+            kept, _ = extract_subtree(records, "@I1@", 0, 0, True)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@F1@" in kept_xrefs
@@ -1276,9 +1357,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@F1@" in kept_xrefs
@@ -1292,7 +1371,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 0, 0, False)
+            kept, _ = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_tags = [r.tag for r in kept]
         assert "HEAD" in kept_tags
@@ -1307,9 +1386,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_tags = [r.tag for r in kept]
         assert "SUBM" in kept_tags
@@ -1326,7 +1403,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 0, 0, False)
+            kept, _ = extract_subtree(records, "@I1@", 0, 0, False)
 
         # mystery has no xref, so it should be preserved
         assert any(r.tag == "_WEIRD" for r in kept)
@@ -1341,7 +1418,7 @@ class TestExtractSubtree:
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
             with pytest.raises(ValueError, match="Individual @I99@ not found"):
-                extract_subtree(records, Path("fake.ged"), "@I99@", 0, 0, False)
+                extract_subtree(records, "@I99@", 0, 0, False)
 
     def test_root_with_no_relatives_in_graph(self) -> None:
         """Individual exists but has no family connections."""
@@ -1352,9 +1429,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", None, 5, True
-            )
+            kept, removed = extract_subtree(records, "@I1@", None, 5, True)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert kept_xrefs == {"@I1@"}
@@ -1377,7 +1452,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, _ = extract_subtree(records, Path("fake.ged"), "@I1@", 0, 0, False)
+            kept, _ = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@S1@" in kept_xrefs
@@ -1395,9 +1470,7 @@ class TestExtractSubtree:
 
         with patch(self._PATCH_TARGET) as mock_graph:
             mock_graph.return_value = _make_graph()
-            kept, removed = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept, removed = extract_subtree(records, "@I1@", 0, 0, False)
 
         kept_xrefs = {r.xref for r in kept if r.xref}
         assert "@S1@" in kept_xrefs
@@ -1437,15 +1510,109 @@ class TestExtractSubtree:
                 couples={"@I1@": {"@I2@"}, "@I2@": {"@I1@"}},
             )
             # Without spouses: @F2@ should NOT be kept
-            kept_no_spouse, _ = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, False
-            )
+            kept_no_spouse, _ = extract_subtree(records, "@I1@", 0, 0, False)
             no_spouse_xrefs = {r.xref for r in kept_no_spouse if r.xref}
             assert "@F2@" not in no_spouse_xrefs
 
             # With spouses: @F2@ SHOULD be kept (spouse is now in keep set)
-            kept_with_spouse, _ = extract_subtree(
-                records, Path("fake.ged"), "@I1@", 0, 0, True
-            )
+            kept_with_spouse, _ = extract_subtree(records, "@I1@", 0, 0, True)
             with_spouse_xrefs = {r.xref for r in kept_with_spouse if r.xref}
             assert "@F2@" in with_spouse_xrefs
+
+
+# ---------------------------------------------------------------------------
+# TestExtractSubtreeRealGraph
+# ---------------------------------------------------------------------------
+
+from gedcom_tools.commands.filter.parser import (  # noqa: E402
+    group_records,
+    parse_lines,
+)
+
+_SUBTREE_GED = "\n".join(
+    [
+        "0 HEAD",
+        "1 CHAR UTF-8",
+        "0 @I1@ INDI",
+        "1 NAME Grandpa /Smith/",
+        "0 @I2@ INDI",
+        "1 NAME Grandma /Smith/",
+        "0 @I3@ INDI",
+        "1 NAME Dad /Smith/",
+        "0 @I4@ INDI",
+        "1 NAME Mom /Brown/",
+        "0 @I5@ INDI",
+        "1 NAME Kid /Smith/",
+        "0 @I6@ INDI",
+        "1 NAME Stranger /Quill/",
+        "0 @F1@ FAM",
+        "1 HUSB @I1@",
+        "1 WIFE @I2@",
+        "1 CHIL @I3@",
+        "0 @F2@ FAM",
+        "1 HUSB @I3@",
+        "1 WIFE @I4@",
+        "1 CHIL @I5@",
+        "0 TRLR",
+        "",
+    ]
+)
+
+
+class TestExtractSubtreeRealGraph:
+    """extract_subtree against a graph built from the records it was handed.
+
+    Every other extract_subtree test stubs the graph out, so none of them
+    would notice if the record walk stopped finding families at all.
+    """
+
+    def _records(self) -> list[GedcomRecord]:
+        return group_records(parse_lines(_SUBTREE_GED))
+
+    def _kept(
+        self,
+        root: str,
+        ancestors: int | None,
+        descendants: int,
+        spouses: bool,
+    ) -> set[str]:
+        kept, _ = extract_subtree(
+            self._records(), root, ancestors, descendants, spouses
+        )
+        return {r.xref for r in kept if r.xref}
+
+    def test_ancestors_one_generation(self) -> None:
+        assert self._kept("@I5@", 1, 0, False) == {
+            "@I5@",
+            "@I3@",
+            "@I4@",
+            "@F1@",  # kept: @I3@ is its CHIL
+            "@F2@",
+        }
+
+    def test_ancestors_unlimited(self) -> None:
+        assert self._kept("@I5@", None, 0, False) == {
+            "@I1@",
+            "@I2@",
+            "@I3@",
+            "@I4@",
+            "@I5@",
+            "@F1@",
+            "@F2@",
+        }
+
+    def test_descendants(self) -> None:
+        assert self._kept("@I1@", 0, 1, False) == {"@I1@", "@I3@", "@F1@", "@F2@"}
+
+    def test_spouses(self) -> None:
+        assert self._kept("@I1@", 0, 0, True) == {"@I1@", "@I2@", "@F1@"}
+
+    def test_root_alone_drops_everyone_else(self) -> None:
+        kept, removed = extract_subtree(self._records(), "@I6@", 0, 0, False)
+        assert {r.xref for r in kept if r.xref} == {"@I6@"}
+        assert "@I1@" in removed
+        assert "@F1@" in removed
+
+    def test_unknown_root_rejected(self) -> None:
+        with pytest.raises(ValueError, match="@I99@"):
+            extract_subtree(self._records(), "@I99@", 0, 0, False)

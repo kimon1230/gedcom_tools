@@ -15,6 +15,8 @@ gedcom-tools validate <file> [options]
 | `--quick` | Fail fast on first error (default) |
 | `--full` | Collect all errors with IDs and line numbers |
 | `--strict {5.5.1,5.5.5}` | Validate against a specific GEDCOM version |
+| `--no-color` | Disable colored output |
+| `--ascii` | ASCII-only decorations in progress output and results |
 
 ### Modes
 
@@ -79,6 +81,24 @@ Warnings indicate potential issues that don't make the file invalid.
 | W004 | **Custom tag** - Non-standard tag starting with underscore |
 | W005 | **Missing SUBM** - No submitter record found |
 
+Per-line warnings (W002, W003, and W032 under `--strict`) report the first 10
+occurrences of each code, then one summary line giving the number suppressed.
+A file with trailing whitespace on every line would otherwise produce one
+warning per line — millions of them on a large file — burying everything else.
+
+Under `--format json` this means `summary.warnings` counts what was reported,
+not what the file contains. Two keys carry the difference:
+
+- `summary.total_warnings` — the uncapped count. Always present, and equal to
+  `summary.warnings` when nothing was suppressed.
+- `summary.suppressed` — `{code: count}` of the issues dropped. Present only
+  when at least one code was capped.
+
+A gate thresholding on `summary.warnings` should read `total_warnings` instead,
+or it will read the cap as the file having improved. Note that the W004
+custom-tag cap is not tallied in `suppressed`, so a file with more than ten
+distinct custom tags has a `total_warnings` low by the dropped-tag count.
+
 ### Orphaned Records (W010-W015)
 
 | Code | Description |
@@ -89,6 +109,8 @@ Warnings indicate potential issues that don't make the file invalid.
 | W013 | **Orphaned REPO** - REPO (repository) record not referenced |
 | W014 | **Isolated individual** - INDI with no family connections |
 | W015 | **Empty family** - FAM with no HUSB, WIFE, or CHIL |
+
+A record counts as referenced if a pointer to it appears anywhere inside another record, at any nesting depth — a NOTE cited under a SOUR under a BIRT event is not orphaned.
 
 ### Reference Warnings (W016-W017)
 
@@ -185,7 +207,8 @@ gedcom-tools --format json validate --full file.ged
   },
   "summary": {
     "errors": 1,
-    "warnings": 0
+    "warnings": 0,
+    "total_warnings": 0
   },
   "issues": [
     {
@@ -209,6 +232,13 @@ The validator auto-detects encoding:
 2. Reads CHAR declaration in header
 3. Defaults to UTF-8 if no BOM or CHAR declaration found
 4. Supports ANSEL encoding (common in older GEDCOM files)
+
+### File Size Limit
+
+Input files larger than 500 MB are rejected with an actionable error message
+showing the actual size and the limit, the same way `convert` and `filter`
+reject them. The figure is a backstop against absurd input rather than a
+supported size.
 
 ### Strict Mode
 

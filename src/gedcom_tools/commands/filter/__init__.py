@@ -34,11 +34,14 @@ from gedcom_tools.constants import (
 from gedcom_tools.progress import Colors, PhaseTracker
 from gedcom_tools.utils import (
     BOMS,
+    EncodingInfo,
     check_output_safety,
     detect_encoding,
     resolve_source_codec,
+    sanitize_error,
     strip_bom,
     validate_input_file,
+    write_output_securely,
 )
 
 if TYPE_CHECKING:
@@ -54,6 +57,13 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         type=Path,
         required=True,
         help="Output file path (always a new file)",
+    )
+    parser.add_argument(
+        "--from",
+        type=str,
+        default=None,
+        dest="from_encoding",
+        help="Override source encoding detection (any Python codec name)",
     )
     parser.add_argument(
         "--force", action="store_true", help="Overwrite existing output file"
@@ -120,6 +130,7 @@ def run(args: Namespace) -> int:
     output: Path = args.output
     force: bool = args.force
     dry_run: bool = args.dry_run
+    from_encoding: str | None = getattr(args, "from_encoding", None)
     quiet: bool = getattr(args, "quiet", False)
     verbose: bool = getattr(args, "verbose", False)
     no_color: bool = getattr(args, "no_color", False)
@@ -156,12 +167,14 @@ def run(args: Namespace) -> int:
         print("Error: At least one filter option is required.", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    safety_err = check_output_safety(file_path, output, force=force, dry_run=dry_run)
+    safety_err = check_output_safety(
+        file_path, output, force=force, dry_run=dry_run, command="Filter"
+    )
     if safety_err is not None:
         print(safety_err, file=sys.stderr)
         return EXIT_ERROR
 
-    colors = Colors(sys.stderr, force_disable=no_color)
+    colors = Colors(sys.stdout, force_disable=no_color)
     tracker = PhaseTracker(
         4, stream=sys.stderr, no_color=no_color, quiet=quiet, verbose=verbose
     )
@@ -177,12 +190,34 @@ def run(args: Namespace) -> int:
         )
         return EXIT_ERROR
 
+    # Resolved outside the phase on purpose: Spinner.__exit__ reports success
+    # whenever no exception escaped, so returning an exit code from inside a
+    # phase paints a green tick immediately above the error text.
+    #
+    # Detection parses the header, which throws on a broken CHAR value. --from
+    # exists to rescue exactly those files, so skip it when the user has
+    # already said what the encoding is.
+    if from_encoding is not None:
+        encoding_info = EncodingInfo(encoding=from_encoding)
+    else:
+        encoding_info = detect_encoding(file_path)
+    try:
+        source_codec = resolve_source_codec(encoding_info, from_encoding)
+    except ValueError as e:
+        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
     with tracker.phase("Reading input"):
         raw_bytes = file_path.read_bytes()
         stripped_bytes, bom_type = strip_bom(raw_bytes)
-        encoding_info = detect_encoding(file_path)
-        source_codec = resolve_source_codec(encoding_info, None)
-        text = stripped_bytes.decode(source_codec)
+        try:
+            text = stripped_bytes.decode(source_codec)
+        except (UnicodeDecodeError, LookupError, ValueError) as e:
+            # A --from the bytes will not survive is a usage error, not a crash:
+            # unguarded this surfaces as "Error: UnicodeDecodeError: ..." from
+            # the generic handler in cli.py.
+            print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
 
     with tracker.phase("Parsing GEDCOM"):
         line_ending = detect_line_ending(text)
@@ -204,7 +239,6 @@ def run(args: Namespace) -> int:
         if spec.subtree_root is not None:
             records, subtree_removed = extract_subtree(
                 records,
-                file_path,
                 spec.subtree_root,
                 spec.ancestor_depth,
                 spec.descendant_depth,
@@ -224,6 +258,16 @@ def run(args: Namespace) -> int:
 
         output_counts = count_records(records)
 
+    # Backstop: no transform may drop the structural records, whatever route
+    # it takes. Bail out before writing rather than emit a broken file.
+    if not has_head_and_trlr(records):
+        print(
+            "Error: Filtering removed HEAD or TRLR; "
+            "output would not be a valid GEDCOM.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
     removed_counts = RecordCounts(
         indi=source_counts.indi - output_counts.indi,
         fam=source_counts.fam - output_counts.fam,
@@ -235,20 +279,18 @@ def run(args: Namespace) -> int:
         other=source_counts.other - output_counts.other,
     )
 
+    write_err: str | None = None
     with tracker.phase("Writing output"):
         if not dry_run:
             out_text = serialize_records(records, line_ending)
             out_bytes = out_text.encode(source_codec)
             if bom_type is not None:
                 out_bytes = BOMS[bom_type] + out_bytes
-            output.write_bytes(out_bytes)
-            if sys.platform != "win32":
-                try:
-                    import os
+            write_err = write_output_securely(output, out_bytes, force=force)
 
-                    os.chmod(output, 0o600)
-                except OSError:
-                    pass
+    if write_err is not None:
+        print(write_err, file=sys.stderr)
+        return EXIT_ERROR
 
     result = FilterResult(
         source_path=str(file_path),

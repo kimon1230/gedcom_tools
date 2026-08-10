@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from rapidfuzz.distance import JaroWinkler
-
 from gedcom_tools.commands.compare.models import CompareIndividual, MatchScore
 
 _WEIGHTS: dict[str, float] = {
@@ -50,6 +48,11 @@ def _best_name_jw(
     candidates_b = [s for s in [primary_b] + alts_b if s]
     if not candidates_a or not candidates_b:
         return 0.0
+    # rapidfuzz costs ~30 ms to import and only compare/duplicates ever reach
+    # here, but cli.py pulls this module in on every invocation. Deferred the
+    # same way phonetics.double_metaphone defers doublemetaphone.
+    from rapidfuzz.distance import JaroWinkler
+
     best = 0.0
     for ca in candidates_a:
         for cb in candidates_b:
@@ -64,6 +67,8 @@ def _place_similarity(place_a: str, place_b: str) -> float:
     parts_b = [p.strip() for p in place_b.split(",") if p.strip()]
     if not parts_a or not parts_b:
         return 0.0
+
+    from rapidfuzz.distance import JaroWinkler
 
     if len(parts_a) <= len(parts_b):
         shorter, longer = parts_a, list(parts_b)

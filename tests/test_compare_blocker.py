@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from gedcom_tools.commands.compare.blocker import generate_candidates
+from gedcom_tools.commands.compare.blocker import (
+    DEFAULT_MAX_BLOCK_SIZE,
+    describe_oversized_blocks,
+    generate_candidates,
+)
 from gedcom_tools.commands.compare.models import CompareIndividual
 
 
@@ -169,6 +173,183 @@ class TestBlockSizeCap:
         pairs = generate_candidates(a, b, max_block_size=2)
         assert ("@I1@", "@I10@") in pairs
         assert ("@I1@", "@I11@") in pairs
+
+
+class TestOversizedBlockReporting:
+    def test_skipped_key_reported(self) -> None:
+        a = [_ind("@I1@", "A", surname_phonetic="S530", birth_decade="1850s")]
+        b = [
+            _ind(f"@I1{n}@", "B", surname_phonetic="S530", birth_decade="1850s")
+            for n in range(3)
+        ]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=2, oversized_keys=skipped)
+        assert skipped == {"S530|1850s"}
+
+    def test_one_fat_block_counts_once_not_once_per_individual(self) -> None:
+        # The size check sits inside the loop over side A, so a naive counter
+        # would report 40 skipped groups here instead of 1.
+        a = [
+            _ind(f"@A{n}@", "A", surname_phonetic="S530", birth_decade="1850s")
+            for n in range(40)
+        ]
+        b = [
+            _ind(f"@B{n}@", "B", surname_phonetic="S530", birth_decade="1850s")
+            for n in range(600)
+        ]
+        skipped: set[str] = set()
+        pairs = generate_candidates(a, b, oversized_keys=skipped)
+        assert len(skipped) == 1
+        assert pairs == set()
+
+    def test_distinct_keys_counted_separately(self) -> None:
+        a = [
+            _ind("@A1@", "A", surname_phonetic="S530", birth_decade="1850s"),
+            _ind("@A2@", "A", surname_phonetic="J525", birth_decade="1900s"),
+        ]
+        b = [
+            _ind(f"@B{n}@", "B", surname_phonetic="S530", birth_decade="1850s")
+            for n in range(3)
+        ] + [
+            _ind(f"@C{n}@", "B", surname_phonetic="J525", birth_decade="1900s")
+            for n in range(3)
+        ]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=2, oversized_keys=skipped)
+        assert len(skipped) == 2
+
+    def test_no_oversized_block_leaves_set_empty(self) -> None:
+        a = [_ind("@I1@", "A", surname_phonetic="S530", birth_decade="1850s")]
+        b = [_ind("@I2@", "B", surname_phonetic="S530", birth_decade="1850s")]
+        skipped: set[str] = set()
+        generate_candidates(a, b, oversized_keys=skipped)
+        assert skipped == set()
+
+    def test_block_at_limit_not_reported(self) -> None:
+        a = [_ind("@I1@", "A", surname_phonetic="S530", birth_decade="1850s")]
+        b = [
+            _ind("@I10@", "B", surname_phonetic="S530", birth_decade="1850s"),
+            _ind("@I11@", "B", surname_phonetic="S530", birth_decade="1850s"),
+        ]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=2, oversized_keys=skipped)
+        assert skipped == set()
+
+    def test_key_absent_from_side_b_not_reported(self) -> None:
+        # A's key has no block at all -- nothing was dropped, so nothing to say.
+        a = [_ind("@I1@", "A", surname_phonetic="S530", birth_decade="1850s")]
+        b = [_ind("@I2@", "B", surname_phonetic="J525", birth_decade="1900s")]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=1, oversized_keys=skipped)
+        assert skipped == set()
+
+    def test_multi_key_pass_reports_alt_code_key(self) -> None:
+        a = [
+            _ind(
+                "@I1@",
+                "A",
+                surname_phonetic="SM0",
+                surname_phonetic_alt="XMT",
+                birth_decade="1850s",
+            )
+        ]
+        b = [
+            _ind(
+                f"@B{n}@",
+                "B",
+                surname_phonetic="XMT",
+                surname_phonetic_alt="SMT",
+                birth_decade="1850s",
+            )
+            for n in range(3)
+        ]
+        skipped: set[str] = set()
+        generate_candidates(
+            a, b, max_block_size=2, algorithm="metaphone", oversized_keys=skipped
+        )
+        assert "XMT|1850s" in skipped
+
+    def test_soundex_run_ignores_multi_key_blocks(self) -> None:
+        a = [
+            _ind(
+                "@I1@",
+                "A",
+                surname_phonetic="SM0",
+                surname_phonetic_alt="XMT",
+                birth_decade="1850s",
+            )
+        ]
+        b = [
+            _ind(
+                f"@B{n}@",
+                "B",
+                surname_phonetic="XMT",
+                surname_phonetic_alt="SMT",
+                birth_decade="1850s",
+            )
+            for n in range(3)
+        ]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=2, oversized_keys=skipped)
+        assert skipped == set()
+
+    def test_omitting_the_set_still_works(self) -> None:
+        a = [_ind("@I1@", "A", surname_phonetic="S530", birth_decade="1850s")]
+        b = [
+            _ind(f"@B{n}@", "B", surname_phonetic="S530", birth_decade="1850s")
+            for n in range(3)
+        ]
+        assert generate_candidates(a, b, max_block_size=2) == set()
+
+    def test_same_key_from_two_passes_counted_once(self) -> None:
+        # Pass 1 (surname+birth) and pass 3 (given+birth) both produce
+        # "S530|1850s" here; it is one key string, so one skipped group.
+        a = [
+            _ind(
+                "@I1@",
+                "A",
+                surname_phonetic="S530",
+                given_phonetic="S530",
+                birth_decade="1850s",
+            )
+        ]
+        b = [
+            _ind(
+                f"@B{n}@",
+                "B",
+                surname_phonetic="S530",
+                given_phonetic="S530",
+                birth_decade="1850s",
+            )
+            for n in range(3)
+        ]
+        skipped: set[str] = set()
+        generate_candidates(a, b, max_block_size=2, oversized_keys=skipped)
+        # "S530|1850s" is produced by both passes and appears once.  Pass 5
+        # (surname + given) contributes a genuinely different group.
+        assert skipped == {"S530|1850s", "S530|S530"}
+
+
+class TestDescribeOversizedBlocks:
+    def test_singular_wording(self) -> None:
+        msg = describe_oversized_blocks(1, 500)
+        assert "1 blocking group exceeded" in msg
+        assert "was skipped" in msg
+
+    def test_plural_wording(self) -> None:
+        msg = describe_oversized_blocks(3, 500)
+        assert "3 blocking groups exceeded" in msg
+        assert "were skipped" in msg
+
+    def test_names_the_flag_that_actually_exists(self) -> None:
+        msg = describe_oversized_blocks(2, 1200)
+        # Rendered without a thousands separator: the advice below tells the
+        # user to re-run with a larger value, and type=int rejects "1,200".
+        assert "--max-block-size 1200" in msg
+        assert "Re-run with a larger --max-block-size" in msg
+
+    def test_default_constant_matches_signature_default(self) -> None:
+        assert DEFAULT_MAX_BLOCK_SIZE == 500
 
 
 class TestEdgeCases:

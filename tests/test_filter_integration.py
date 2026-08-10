@@ -213,6 +213,92 @@ class TestFilterStripTag:
 
 
 # ---------------------------------------------------------------------------
+# TestFilterStructuralTags
+# ---------------------------------------------------------------------------
+
+
+SUBM_GED = (
+    "0 HEAD\n1 SOUR TEST\n1 CHAR UTF-8\n1 SUBM @SUBM1@\n"
+    "0 @SUBM1@ SUBM\n1 NAME Kimon\n1 ADDR 1 Main St\n"
+    "0 @I1@ INDI\n1 NAME John /Smith/\n"
+    "0 TRLR\n"
+)
+
+
+class TestFilterStructuralTags:
+    def test_strip_trlr_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["TRLR"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert content.rstrip().endswith("0 TRLR")
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_strip_head_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["HEAD"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert content.startswith("0 HEAD")
+        assert "HEAD" in capsys.readouterr().err
+
+    def test_strip_subm_still_removes_the_record(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Stripping the submitter is a privacy workflow, not a structural break."""
+        src = _write_ged(tmp_path, SUBM_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["SUBM"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "SUBM" not in content
+        assert "Kimon" not in content
+        assert content.startswith("0 HEAD")
+        assert content.rstrip().endswith("0 TRLR")
+
+    def test_mixed_strip_tags_apply_the_valid_one(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_tag=["TRLR", "NOTE"]))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "NOTE" not in content
+        assert content.rstrip().endswith("0 TRLR")
+        assert "TRLR" in capsys.readouterr().err
+
+    def test_output_missing_trlr_aborts_without_writing(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Backstop for a transform that drops TRLR by some other route."""
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+
+        def _drop_trlr(
+            records: list[object], spec: object
+        ) -> tuple[list[object], set[str]]:
+            return [r for r in records if getattr(r, "tag", None) != "TRLR"], set()
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.filter.apply_strip_transforms", _drop_trlr
+        )
+        code = run(_make_args(src, out, strip_tag=["NAME"]))
+        assert code == EXIT_ERROR
+        assert not out.exists()
+        assert "would not be a valid GEDCOM" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
 # TestFilterCombined
 # ---------------------------------------------------------------------------
 
@@ -988,3 +1074,159 @@ class TestFilterOutputPermissions:
         assert code == EXIT_SUCCESS
         mode = os.stat(out).st_mode & 0o777
         assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# TestFilterColorStream
+# ---------------------------------------------------------------------------
+
+
+class TestFilterColorStream:
+    def test_no_ansi_on_stdout_when_only_stderr_is_a_tty(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import io
+        import sys
+
+        class FakeTtyStream(io.StringIO):
+            """Stand-in for a terminal-attached stream, without the pty."""
+
+            def isatty(self) -> bool:
+                return True
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(sys, "stderr", FakeTtyStream())
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_notes=True, no_color=False))
+        assert code == EXIT_SUCCESS
+        assert "\x1b[" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# TestFilterSeesEveryGed4pyRecord
+# ---------------------------------------------------------------------------
+
+# Six lines that GedcomReader lexes as structure and `filter`'s old hand-written
+# pattern did not. Each unmatched line was kept with tag="" and copied straight
+# through, so no strip or subtree option could reach it -- while the summary
+# counted it among the records removed.
+DIVERGENCE_GED = (
+    "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
+    "0 @I1@ INDI\n1 NAME John /Smith/\n1 NOTE a legitimate note\n"
+    " 0 @I2@ INDI\n1 NAME Lead /Space/\n1 NOTE smuggled\n"
+    "\t0 @I6@ INDI\n1 NAME Lead /Tab/\n1 NOTE smuggled\n"
+    "000 @I3@ INDI\n1 NAME Wide /Level/\n1 NOTE smuggled\n"
+    "0@I4@ INDI\n1 NAME No /Delimiter/\n1 NOTE smuggled\n"
+    "0 @I5@ FOO-BAR\n1 _MY-TAG x\n"
+    "0 TRLR\n"
+)
+
+# Header lines of the five records that used to slip through, keyed for -k runs.
+SMUGGLED_HEADERS = [
+    pytest.param(" 0 @I2@ INDI", id="leading-space"),
+    pytest.param("\t0 @I6@ INDI", id="leading-tab"),
+    pytest.param("000 @I3@ INDI", id="three-digit-level"),
+    pytest.param("0@I4@ INDI", id="no-delimiter-before-xref"),
+    pytest.param("0 @I5@ FOO-BAR", id="hyphen-in-tag"),
+]
+
+
+class TestFilterSeesEveryGed4pyRecord:
+    def test_fixture_holds_five_individuals(self, tmp_path: Path) -> None:
+        # A fixture check, not an acceptance signal: this count comes from
+        # ged4py, so it is the same before and after the parser change. @I5@ is
+        # a FOO-BAR, not an INDI, and `1 _MY-TAG x` is a sub-line.
+        from ged4py import GedcomReader
+
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        with GedcomReader(str(src)) as reader:
+            assert {i.xref_id for i in reader.records0("INDI")} == {
+                "@I1@",
+                "@I2@",
+                "@I3@",
+                "@I4@",
+                "@I6@",
+            }
+
+    @pytest.mark.parametrize("header", SMUGGLED_HEADERS)
+    def test_subtree_removes_the_divergent_records(
+        self, tmp_path: Path, header: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, subtree="@I1@", ancestors=0))
+        assert code == EXIT_SUCCESS
+        assert header not in out.read_text(encoding="utf-8")
+
+    def test_subtree_keeps_only_the_requested_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, subtree="@I1@", ancestors=0))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert _xrefs_in_output(content) == {"@I1@"}
+        assert "0 HEAD" in content
+        assert "0 TRLR" in content
+
+    def test_summary_counts_match_what_was_written(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The reported "removed" figure used to be a claim the output did not
+        # honour: four individuals counted out, four still in the file.
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, subtree="@I1@", ancestors=0, format="json"))
+        assert code == EXIT_SUCCESS
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["source"]["individuals"] == 5
+        assert payload["output"]["individuals"] == 1
+        assert payload["removed"]["individuals"] == 4
+        assert _xrefs_in_output(out.read_text(encoding="utf-8")) == {"@I1@"}
+
+    def test_strip_notes_reaches_the_divergent_records(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # NOTE is both a record tag and a line tag, so the sub-lines go and the
+        # INDIs (which is what the smuggled records are) stay.
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_notes=True))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "smuggled" not in content
+        assert "1 NOTE" not in content
+        for header in [" 0 @I2@ INDI", "\t0 @I6@ INDI", "000 @I3@ INDI", "0@I4@ INDI"]:
+            assert header in content
+
+    def test_strip_custom_tags_reaches_a_hyphenated_custom_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `_strip_custom_lines` filters children only and never inspects a record
+        # header, so `1 _MY-TAG x` goes and `0 @I5@ FOO-BAR` stays. Under the old
+        # tag class `[A-Za-z0-9_]+` the hyphenated line did not parse at all and
+        # survived untouched.
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_custom_tags=True))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert "_MY-TAG" not in content
+        assert "0 @I5@ FOO-BAR" in content
+
+    def test_untouched_lines_keep_their_original_spacing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Matching strips leading whitespace; writing must not.
+        src = _write_ged(tmp_path, DIVERGENCE_GED)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, out, strip_custom_tags=True))
+        assert code == EXIT_SUCCESS
+        content = out.read_text(encoding="utf-8")
+        assert " 0 @I2@ INDI\n" in content
+        assert "\t0 @I6@ INDI\n" in content

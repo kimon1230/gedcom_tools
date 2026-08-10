@@ -215,6 +215,53 @@ class TestValidationResult:
         assert "Valid" not in text
 
 
+class TestSuppressedCounts:
+    """The JSON suppression tally, exercised without going through the engine."""
+
+    def _result(self, suppressed):
+        return ValidationResult(
+            file_path="/test/file.ged",
+            issues=[
+                ValidationIssue(code=ErrorCode.W002_TRAILING_WHITESPACE, message="ws"),
+                ValidationIssue(
+                    code=ErrorCode.W002_TRAILING_WHITESPACE,
+                    message="40 more lines with this issue were suppressed",
+                ),
+            ],
+            suppressed_counts=suppressed,
+        )
+
+    def test_suppressed_absent_when_nothing_was_dropped(self):
+        summary = json.loads(self._result({}).format_json())["summary"]
+        assert "suppressed" not in summary
+        assert summary["total_warnings"] == 2
+
+    def test_total_warnings_present_without_suppression(self):
+        result = ValidationResult(file_path="/test/file.ged")
+        summary = json.loads(result.format_json())["summary"]
+        # Always emitted, so a consumer reads one key rather than branching.
+        assert summary["total_warnings"] == 0
+
+    def test_suppressed_emitted_when_non_empty(self):
+        summary = json.loads(self._result({"W002": 40}).format_json())["summary"]
+        assert summary["suppressed"] == {"W002": 40}
+        # 2 reported, 40 dropped, 1 of the reported is the stand-in summary.
+        assert summary["warnings"] == 2
+        assert summary["total_warnings"] == 41
+
+    def test_two_capped_codes_each_lose_one_stand_in(self):
+        result = ValidationResult(
+            file_path="/test/file.ged",
+            issues=[
+                ValidationIssue(code=ErrorCode.W002_TRAILING_WHITESPACE, message="a"),
+                ValidationIssue(code=ErrorCode.W003_LINE_TOO_LONG, message="b"),
+            ],
+            suppressed_counts={"W002": 5, "W003": 7},
+        )
+        summary = json.loads(result.format_json())["summary"]
+        assert summary["total_warnings"] == 2 + 12 - 2
+
+
 class TestAsciiDecorations:
     def _result_with_context(self):
         return ValidationResult(

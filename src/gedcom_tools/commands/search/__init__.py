@@ -123,7 +123,9 @@ def run(args: Namespace) -> int:
             phonetic_algo=phonetic,
         )
     except ValueError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        from gedcom_tools.utils import sanitize_error
+
+        print(f"Error: {sanitize_error(str(exc))}", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
     # Determine phase count for progress tracking
@@ -221,10 +223,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        from gedcom_tools.utils import sanitize_error
+        from gedcom_tools.utils import report_error
 
-        print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
+        report_error(e)
         return EXIT_ERROR

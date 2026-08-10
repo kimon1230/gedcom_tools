@@ -2,19 +2,40 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unicodedata
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
-
-from fast_langdetect import (  # type: ignore[import-untyped]
-    LangDetectConfig,
-    LangDetector,
-)
 
 MIN_TEXT_LENGTH_DEFAULT = 10
 CONFIDENCE_FLOOR = 0.4
 MARGIN_THRESHOLD = 0.15
+
+# fast-langdetect drags in requests/urllib3 and costs a couple hundred
+# milliseconds to import, which every CLI invocation would otherwise pay.
+# The handles are resolved on first use and cached here as module attributes
+# so callers (and tests) can still reach them by name.
+LangDetectConfig: Any = None
+LangDetector: Any = None
+
+
+def _load_backend() -> None:
+    """Import fast-langdetect on first use and cache the handles."""
+    global LangDetectConfig, LangDetector
+    if LangDetectConfig is not None and LangDetector is not None:
+        return
+    from fast_langdetect import (  # type: ignore[import-untyped]
+        LangDetectConfig as _Config,
+    )
+    from fast_langdetect import LangDetector as _Detector
+
+    if LangDetectConfig is None:
+        LangDetectConfig = _Config
+    if LangDetector is None:
+        LangDetector = _Detector
+
 
 # fasttext returns "no" for Norwegian; we normalise to Bokmål.
 FASTTEXT_CODE_MAP: dict[str, str] = {
@@ -80,9 +101,47 @@ LANGUAGE_NAMES: dict[str, str] = {
 }
 
 
+def _cache_dir() -> Path:
+    """Return the per-user directory the language model is cached in.
+
+    fast-langdetect defaults to /tmp/fasttext-langdetect, which on a shared
+    machine any user can write to. The model is a 126 MB binary handed to
+    fasttext's native loader on nothing but a filename check, so a pre-planted
+    file there would be parsed as the real thing. A per-user path removes that.
+
+    Every LangDetectConfig in this module must go through here: the download
+    and the availability probe agreeing on one path is the whole point.
+    """
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
+    path = Path(base) / "gedcom-tools"
+
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+
+    # A symlinked leaf is left as the user configured it. Symlinking a cache
+    # onto a bigger volume is an ordinary thing to do, and refusing to run --
+    # or chmod'ing through the link onto a directory that is not ours -- costs
+    # more than it buys here: reaching the target needs local write access to
+    # the cache path already. Skipping the chmod means the 0700 promise below
+    # does not hold for that setup, which is the honest trade.
+    if sys.platform != "win32" and not path.is_symlink():
+        # mkdir applies `mode` only to a leaf it creates itself, and the umask
+        # eats it on any parent it has to create along the way. Without this,
+        # an already-existing cache -- or an XDG_CACHE_HOME aimed at a
+        # group-writable directory -- keeps whatever permissions it had, and
+        # the promise above would hold on the first run only.
+        #
+        # Suppressed rather than propagated: a cache directory we do not own
+        # (a shared CI cache, a read-only mount) works today, and a failed
+        # tightening is not a reason to refuse to run.
+        with suppress(OSError):
+            os.chmod(path, 0o700)
+
+    return path
+
+
 def _full_model_cache_dir() -> Path:
     """Return the cache directory that fast-langdetect actually uses."""
-    return Path(LangDetectConfig().cache_dir)
+    return _cache_dir()
 
 
 def _full_model_available() -> bool:
@@ -96,11 +155,14 @@ def _ensure_full_model(stream: Any = None) -> None:
         return
     out = stream or sys.stderr
     print(
-        "Downloading language model (126 MB, one-time)...",
+        f"Downloading language model (126 MB) to {_cache_dir()}...",
         file=out,
         flush=True,
     )
-    config = LangDetectConfig(model="full", max_input_length=100)
+    _load_backend()
+    config = LangDetectConfig(
+        model="full", max_input_length=100, cache_dir=str(_cache_dir())
+    )
     detector = LangDetector(config)
     detector.detect("test", k=1)  # triggers download
     print("Download complete.", file=out, flush=True)
@@ -116,7 +178,10 @@ class GedcomLanguageDetector:
     ) -> None:
         self.min_length = min_length
         _ensure_full_model(stream)
-        config = LangDetectConfig(model="full", max_input_length=2000)
+        _load_backend()
+        config = LangDetectConfig(
+            model="full", max_input_length=2000, cache_dir=str(_cache_dir())
+        )
         self._detector = LangDetector(config)
 
     def detect(self, text: str | None) -> tuple[str, bool]:

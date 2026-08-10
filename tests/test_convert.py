@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import sys
 import unicodedata
 from pathlib import Path
 
 import ansel  # type: ignore[import-untyped]
 import pytest
 
+from gedcom_tools.cli import create_parser, main
 from gedcom_tools.commands.convert import run
 from gedcom_tools.commands.convert.transcoder import (
     CODEC_TO_CHAR,
@@ -22,6 +25,17 @@ from gedcom_tools.progress import Colors
 from gedcom_tools.utils import BOMS, EncodingInfo, resolve_source_codec, strip_bom
 
 ansel.register()
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    """Args built the way the CLI builds them: real dest names, real defaults."""
+    return create_parser().parse_args(argv)
+
+
+def _run_cli(argv: list[str]) -> int:
+    """Drive the published entry point end to end, parser and dispatch included."""
+    return main(argv)
+
 
 MINIMAL_GED = (
     "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
@@ -39,24 +53,38 @@ def _make_args(
     file_path: Path,
     to_encoding: str,
     output: Path,
-    **kwargs: object,
+    *,
+    from_encoding: str | None = None,
+    force: bool = False,
+    bom: bool = False,
+    no_normalize: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+    quiet: bool = False,
+    no_color: bool = True,
+    format: str = "text",
 ) -> argparse.Namespace:
-    defaults: dict[str, object] = {
-        "file": file_path,
-        "to_encoding": to_encoding,
-        "output": output,
-        "from_encoding": None,
-        "force": False,
-        "bom": False,
-        "no_normalize": False,
-        "dry_run": False,
-        "verbose": False,
-        "quiet": False,
-        "no_color": True,
-        "format": "text",
-    }
-    defaults.update(kwargs)
-    return argparse.Namespace(**defaults)
+    argv = [f"--format={format}"]
+    if quiet:
+        argv.append("--quiet")
+    if verbose:
+        argv.append("--verbose")
+    if no_color:
+        argv.append("--no-color")
+    # --to and --from carry dest overrides (to_encoding / from_encoding); going
+    # through the parser is what keeps this file honest about them.
+    argv += ["convert", str(file_path), f"--to={to_encoding}", "--output", str(output)]
+    if from_encoding is not None:
+        argv.append(f"--from={from_encoding}")
+    if force:
+        argv.append("--force")
+    if bom:
+        argv.append("--bom")
+    if no_normalize:
+        argv.append("--no-normalize")
+    if dry_run:
+        argv.append("--dry-run")
+    return _parse(argv)
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +137,52 @@ class TestResolveSourceCodec:
         assert resolve_source_codec(info, None) == "utf-8"
 
     def test_detect_fallback_codecs_lookup(self) -> None:
-        # "iso-8859-1" is not in SOURCE_ENCODING_MAP or GEDCOM_CHARSETS,
-        # but codecs.lookup("iso-8859-1") succeeds.
+        # "iso-8859-1" is not in SOURCE_ENCODING_MAP or GEDCOM_CHARSETS, but it
+        # canonicalizes to an allowlisted name, so the fallback still resolves.
         info = EncodingInfo(encoding="iso-8859-1")
         assert resolve_source_codec(info, None) == "iso8859-1"
+
+    def test_detect_fallback_refuses_non_allowlisted(self) -> None:
+        # Same fallback path, but utf-7 turns +AAo- into a line break and would
+        # let the file's own header manufacture records downstream.
+        info = EncodingInfo(encoding="utf-7")
+        with pytest.raises(ValueError, match="Cannot determine source encoding"):
+            resolve_source_codec(info, None)
+
+    @pytest.mark.parametrize(
+        "declared", ["utf-7", "unicode_escape", "raw_unicode_escape"]
+    )
+    def test_detect_rejects_line_breaking_codecs(self, declared: str) -> None:
+        info = EncodingInfo(encoding=declared)
+        with pytest.raises(ValueError, match="Cannot determine source encoding"):
+            resolve_source_codec(info, None)
+
+    @pytest.mark.parametrize(
+        "declared", ["utf-7", "unicode_escape", "raw_unicode_escape"]
+    )
+    def test_override_still_allows_line_breaking_codecs(self, declared: str) -> None:
+        # The gate is about a file naming its own decoder. A user who types
+        # --from has made the choice themselves.
+        info = EncodingInfo(encoding=declared)
+        assert resolve_source_codec(info, declared)
+
+    @pytest.mark.parametrize(
+        ("declared", "expected"),
+        [
+            ("UTF8", "utf-8"),
+            ("UTF-16", "utf-16"),
+            ("MACINTOSH", "mac-roman"),
+            ("ISO8859-1", "iso8859-1"),
+            ("CP1252", "cp1252"),
+        ],
+    )
+    def test_detect_accepts_spelling_variants(
+        self, declared: str, expected: str
+    ) -> None:
+        # Real files spell these every which way; canonicalizing before the
+        # allowlist check is what keeps them working.
+        info = EncodingInfo(encoding=declared)
+        assert resolve_source_codec(info, None) == expected
 
     def test_detect_unknown_encoding_raises(self) -> None:
         info = EncodingInfo(encoding="BOGUS-ENCODING")
@@ -248,6 +318,41 @@ class TestUpdateCharHeader:
         assert "1 CHARSET ANSI" in result
         assert "1 CHAR ANSEL" in result
 
+    def test_mixed_eol_insert_keeps_every_line_intact(self) -> None:
+        # HEAD ends with LF while the next line ends with CRLF; the insert must
+        # follow HEAD's own terminator rather than a file-wide guess.
+        text = "0 HEAD\n1 SOUR TEST\r\n0 TRLR\n"
+        result = update_char_header(text, "UTF-8")
+        assert result.splitlines() == [
+            "0 HEAD",
+            "1 CHAR UTF-8",
+            "1 SOUR TEST",
+            "0 TRLR",
+        ]
+        assert "1 SOUR TEST\r\n" in result
+
+    def test_valueless_char_on_crlf_not_duplicated(self) -> None:
+        text = "0 HEAD\r\n1 CHAR\r\n0 TRLR\r\n"
+        result = update_char_header(text, "UTF-8")
+        char_lines = [ln for ln in result.splitlines() if ln.startswith("1 CHAR")]
+        assert char_lines == ["1 CHAR UTF-8"]
+
+    def test_valueless_char_on_cr_only_not_duplicated(self) -> None:
+        text = "0 HEAD\r1 CHAR\r0 TRLR\r"
+        result = update_char_header(text, "UTF-8")
+        char_lines = [ln for ln in result.splitlines() if ln.startswith("1 CHAR")]
+        assert char_lines == ["1 CHAR UTF-8"]
+
+    def test_valued_char_on_crlf_replaced_in_place(self) -> None:
+        text = "0 HEAD\r\n1 CHAR ANSEL\r\n0 TRLR\r\n"
+        result = update_char_header(text, "UTF-8")
+        assert result == "0 HEAD\r\n1 CHAR UTF-8\r\n0 TRLR\r\n"
+
+    def test_head_as_last_line_gets_terminator(self) -> None:
+        text = "0 HEAD"
+        result = update_char_header(text, "UTF-8")
+        assert result == "0 HEAD\n1 CHAR UTF-8\n"
+
 
 # ---------------------------------------------------------------------------
 # TestCountLongLines
@@ -287,6 +392,37 @@ class TestCountLongLines:
         total, over = count_long_lines(line, "utf-16-le")
         assert total == 1
         assert over == 1
+
+    def test_cr_only_lines_counted_individually(self) -> None:
+        # Classic Mac files terminate lines with a bare CR. Splitting on "\n"
+        # alone collapsed the whole file into a single over-long "line".
+        rows = ["0 HEAD", "1 CHAR ANSEL", "1 NOTE " + "x" * 120, "0 TRLR"]
+        total, over = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        assert total == 4
+        assert over == 0
+
+    def test_line_ending_styles_agree(self) -> None:
+        rows = ["0 HEAD", "1 CHAR ANSEL", "1 NOTE " + "x" * 120, "0 TRLR"]
+        cr = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        lf = count_long_lines("\n".join(rows) + "\n", "utf-8")
+        crlf = count_long_lines("\r\n".join(rows) + "\r\n", "utf-8")
+        assert cr == lf == crlf == (4, 0)
+
+    def test_long_line_counted_for_every_line_ending(self) -> None:
+        rows = ["0 HEAD", "1 NOTE " + "x" * 256, "0 TRLR"]
+        cr = count_long_lines("\r".join(rows) + "\r", "utf-8")
+        lf = count_long_lines("\n".join(rows) + "\n", "utf-8")
+        crlf = count_long_lines("\r\n".join(rows) + "\r\n", "utf-8")
+        assert cr == lf == crlf == (3, 1)
+
+    def test_unterminated_final_line_still_counted(self) -> None:
+        # Only one trailing terminator is dropped; a file that ends without one
+        # keeps its last line.
+        assert count_long_lines("0 HEAD\r0 TRLR", "utf-8") == (2, 0)
+
+    def test_blank_line_before_terminator_kept(self) -> None:
+        # Two consecutive CRs mean an empty line, not a line ending to swallow.
+        assert count_long_lines("0 HEAD\r\r0 TRLR\r", "utf-8") == (3, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -903,3 +1039,147 @@ class TestConvertRun:
         # ANSEL codec decodes \xe2 + e as e + combining acute (NFD).
         # run() normalizes ANSEL sources to NFC by default.
         assert "\u00e9" in content or "e\u0301" in content
+
+
+BROKEN_CHAR_GED = (
+    "0 HEAD\n1 SOUR TEST\n1 CHAR FOOBAR\n" "0 @I1@ INDI\n1 NAME John /Smith/\n0 TRLR\n"
+)
+
+
+class _FakeTtyStream(io.StringIO):
+    """Stand-in for a terminal-attached stream, without the pty machinery."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+# ---------------------------------------------------------------------------
+# TestConvertBrokenCharHeader
+# ---------------------------------------------------------------------------
+
+
+class TestConvertBrokenCharHeader:
+    def test_from_override_rescues_unknown_charset(self, tmp_path: Path) -> None:
+        src = tmp_path / "broken.ged"
+        src.write_text(BROKEN_CHAR_GED, encoding="ascii")
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out, from_encoding="ascii"))
+        assert code == EXIT_SUCCESS
+        assert "1 CHAR UTF-8" in out.read_text(encoding="utf-8")
+
+    def test_unknown_charset_without_override_suggests_from(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = tmp_path / "broken.ged"
+        src.write_text(BROKEN_CHAR_GED, encoding="ascii")
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out))
+        assert code == EXIT_ERROR
+        captured = capsys.readouterr()
+        assert "FOOBAR" in captured.err
+        assert "--from" in captured.err
+
+    def test_error_text_is_sanitized(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The charset name is echoed back from file content, so it must not be
+        # able to smuggle ANSI escapes into the terminal.
+        src = tmp_path / "escape.ged"
+        src.write_text(
+            "0 HEAD\n1 SOUR TEST\n1 CHAR \x1b[31mBAD\n0 TRLR\n", encoding="ascii"
+        )
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out))
+        assert code == EXIT_ERROR
+        assert "\x1b[" not in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# TestConvertColorStream
+# ---------------------------------------------------------------------------
+
+
+class TestConvertColorStream:
+    def test_no_ansi_on_stdout_when_only_stderr_is_a_tty(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(sys, "stderr", _FakeTtyStream())
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        code = run(_make_args(src, "utf-8", out, no_color=False))
+        assert code == EXIT_SUCCESS
+        assert "\x1b[" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# TestCliEndToEnd
+# ---------------------------------------------------------------------------
+
+
+class TestCliEndToEnd:
+    """No hand-built Namespace anywhere: argv in, exit status out."""
+
+    def test_convert_via_main(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        src = _write_ged(tmp_path)
+        out = tmp_path / "out.ged"
+        rc = _run_cli(
+            ["--no-color", "convert", str(src), "--to", "utf-8", "-o", str(out)]
+        )
+        assert rc == EXIT_SUCCESS
+        assert "John /Smith/" in out.read_text(encoding="utf-8")
+
+    def test_from_and_to_renamed_dests_reach_the_command(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # --to/--from are the two flags whose dest differs from their name, so
+        # they are exactly the ones a hand-built Namespace could drift from.
+        latin1 = (
+            "0 HEAD\n1 SOUR TEST\n1 CHAR ASCII\n"
+            "0 @I1@ INDI\n1 NAME \xe9mile /Duval/\n0 TRLR\n"
+        )
+        src = tmp_path / "src.ged"
+        src.write_bytes(latin1.encode("latin-1"))
+        out = tmp_path / "out.ged"
+        rc = _run_cli(
+            [
+                "--format",
+                "json",
+                "--no-color",
+                "convert",
+                str(src),
+                "--to",
+                "unicode",
+                "--from",
+                "latin-1",
+                "--output",
+                str(out),
+            ]
+        )
+        assert rc == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        assert data["target_encoding"] == "UNICODE"
+        assert "émile" in out.read_bytes().decode("utf-16-le")
+
+    def test_missing_input_reaches_the_exit_status(self, tmp_path: Path) -> None:
+        rc = _run_cli(
+            [
+                "convert",
+                str(tmp_path / "gone.ged"),
+                "--to",
+                "utf-8",
+                "-o",
+                str(tmp_path / "out.ged"),
+            ]
+        )
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_missing_required_to_is_a_parser_error(self, tmp_path: Path) -> None:
+        src = _write_ged(tmp_path)
+        with pytest.raises(SystemExit):
+            _run_cli(["convert", str(src), "-o", str(tmp_path / "out.ged")])

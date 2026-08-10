@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
-import os
 import re
-import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,11 +12,12 @@ from pathlib import Path
 import ansel  # type: ignore[import-untyped]
 
 from gedcom_tools import __version__
-from gedcom_tools.progress import Colors
+from gedcom_tools.progress import Colors, glyphs
 from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
     strip_bom,
+    write_output_securely,
 )
 
 ansel.register()
@@ -49,11 +48,12 @@ class ConvertResult:
     dry_run: bool
 
     def format_text(self, colors: Colors, quiet: bool) -> str:
+        g = glyphs()
         if quiet:
             line = (
                 f"Converted {self.source_file.name} "
-                f"({self.source_encoding} \u2192 {self.target_encoding}) "
-                f"\u2192 {self.output_file}"
+                f"({self.source_encoding} {g.arrow} {self.target_encoding}) "
+                f"{g.arrow} {self.output_file}"
             )
             if self.dry_run:
                 line += " (dry run)"
@@ -84,7 +84,7 @@ class ConvertResult:
             )
 
         if self.dry_run:
-            lines.append("\n  (dry run \u2014 no file written)")
+            lines.append("\n  (dry run -- no file written)")
 
         return "\n".join(lines)
 
@@ -111,8 +111,28 @@ def resolve_target_codec(target: str) -> str:
     return GEDCOM_CHARSETS[target]
 
 
-_CHAR_RE = re.compile(r"^1 CHAR(?:$| [^\r\n]*)", re.MULTILINE)
-_HEAD_RE = re.compile(r"^0 HEAD[^\r\n]*", re.MULTILINE)
+# Line anchors are EOL-agnostic: MULTILINE ^ handles LF and CRLF, the lookbehind
+# handles classic Mac CR-only files. Terminators are matched the same way so a
+# valueless "1 CHAR" is recognised regardless of the line ending that follows it.
+_LINE_START = r"(?:^|(?<=\r))"
+_CHAR_RE = re.compile(
+    _LINE_START + r"1 CHAR(?:(?=[\r\n])|$| [^\r\n]*)",
+    re.MULTILINE,
+)
+# Group 1 captures HEAD's own terminator (absent when HEAD is the final line).
+# The CRLF alternative must come first, otherwise a bare \r splits the pair.
+_HEAD_RE = re.compile(
+    _LINE_START + r"0 HEAD[^\r\n]*(\r\n|\r|\n)?",
+    re.MULTILINE,
+)
+
+
+def _dominant_eol(text: str) -> str:
+    if "\r\n" in text:
+        return "\r\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
 
 
 def update_char_header(text: str, new_char: str) -> str:
@@ -122,26 +142,33 @@ def update_char_header(text: str, new_char: str) -> str:
     if count > 0:
         return updated
 
-    eol = "\r\n" if "\r\n" in text else "\n"
     head_match = _HEAD_RE.search(text)
     if head_match is None:
-        msg = "No HEAD record found \u2014 not a valid GEDCOM file"
+        msg = "No HEAD record found -- not a valid GEDCOM file"
         raise ValueError(msg)
 
     insert_pos = head_match.end()
-    return text[:insert_pos] + eol + replacement + eol + text[insert_pos + len(eol) :]
+    eol = head_match.group(1)
+    if eol is None:
+        # HEAD is the last line and carries no terminator; supply one.
+        eol = _dominant_eol(text)
+        return text[:insert_pos] + eol + replacement + eol + text[insert_pos:]
+
+    return text[:insert_pos] + replacement + eol + text[insert_pos:]
 
 
 def count_long_lines(text: str, codec_name: str) -> tuple[int, int]:
-    raw_lines = text.split("\n")
+    # Splits on exactly the three GEDCOM line terminators, matching
+    # filter.parser.parse_lines. Splitting on "\n" alone collapses a classic
+    # Mac CR-only file into one line, which then trips the 255-byte check.
+    raw_lines = re.split(r"\r\n|\r|\n", text)
     # Filter trailing empty string from final newline
     if raw_lines and raw_lines[-1] == "":
         raw_lines = raw_lines[:-1]
 
     over = 0
     for line in raw_lines:
-        stripped = line.rstrip("\r")
-        if len(stripped.encode(codec_name, errors="replace")) > 255:
+        if len(line.encode(codec_name, errors="replace")) > 255:
             over += 1
 
     return len(raw_lines), over
@@ -157,6 +184,7 @@ def transcode(
     normalize: bool,
     add_bom: bool,
     dry_run: bool,
+    force: bool = False,
 ) -> ConvertResult:
     from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
 
@@ -210,12 +238,12 @@ def transcode(
         encoded = BOMS[target_codec] + encoded
 
     if not dry_run:
-        output_path.write_bytes(encoded)
-        if sys.platform != "win32":
-            try:
-                os.chmod(output_path, 0o600)
-            except OSError:
-                pass
+        # Pass the user's actual --force through rather than inferring it from
+        # the path existing: run() checked the path earlier, and a file that
+        # appeared in between is one nobody authorised overwriting.
+        write_err = write_output_securely(output_path, encoded, force=force)
+        if write_err is not None:
+            raise ValueError(write_err.removeprefix("Error: "))
 
     return ConvertResult(
         source_file=source_path,

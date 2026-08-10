@@ -29,7 +29,7 @@ gedcom-tools convert <file> --to <encoding> -o <output> [options]
 | `-v, --verbose` | Show progress phases with timing |
 | `-q, --quiet` | Errors only |
 | `--no-color` | Disable colored progress output |
-| `--ascii` | ASCII-only progress decorations (`[OK]`, `[!]`) |
+| `--ascii` | ASCII-only decorations in progress output and results (the `->` in the conversion line follows it) |
 
 ### Examples
 
@@ -58,7 +58,8 @@ gedcom-tools convert old_tree.ged --to utf-8 -o tree_utf8.ged --force
 The conversion pipeline:
 
 1. **Detect encoding** — auto-detects the source encoding from the CHAR header
-   and BOM, or uses the `--from` override.
+   and BOM. When `--from` is given this step is skipped entirely, so a file
+   whose CHAR header is unreadable can still be converted.
 2. **Read and decode** — reads the entire file as raw bytes, strips any BOM,
    and decodes using the resolved source codec.
 3. **Normalize** — applies NFC normalization when the source is ANSEL (which
@@ -98,6 +99,12 @@ gedcom-tools convert tree.ged --from iso-8859-7 --to utf-8 -o out.ged
 
 `--from` also accepts GEDCOM charset names (`ansel`, `unicode`, `utf-8`,
 `ascii`), which are mapped to their Python codec equivalents.
+
+Auto-detection is narrower than `--from`: a CHAR header naming a codec that can
+manufacture line breaks out of ordinary ASCII — UTF-7 and the `unicode_escape`
+family — is refused with `Cannot determine source encoding`, since `convert`
+decodes the whole file before splitting it and the header would otherwise choose
+where the lines fall. Naming the same codec with `--from` still works.
 
 ## CHAR Header Update
 
@@ -194,7 +201,7 @@ Converted old_tree.ged (ANSEL → UTF-8) → tree_utf8.ged
 
 ### Dry run
 
-Appends `(dry run — no file written)` to the output. No file is created.
+Appends `(dry run -- no file written)` to the output. No file is created.
 
 ### JSON (`--format json`)
 
@@ -217,11 +224,17 @@ Appends `(dry run — no file written)` to the output. No file is created.
 ## Safety
 
 - **File size limit** — input files larger than 500 MB are rejected with an
-  actionable error message showing the actual size and the limit.
+  actionable error message showing the actual size and the limit. That figure is
+  a backstop against absurd input rather than a supported size; `convert` holds
+  the whole file in memory twice over (raw bytes and decoded text), so very
+  large files will exhaust memory before reaching the limit.
 - **Output file required** — `-o` is mandatory. No stdout output for UTF-16
   targets (which are binary).
 - **Overwrite protection** — refuses to overwrite an existing file unless
   `--force` is specified.
+- **Symlink refusal** — a symlink at the output path is refused, even with
+  `--force`. Writing through a link would let a pre-planted link redirect the
+  output somewhere the user did not name. Write to the real path instead.
 - **Same-file protection** — detects when input and output are the same file
   (including via symlinks and hardlinks) and refuses. In-place conversion is
   not supported.
@@ -250,7 +263,9 @@ Appends `(dry run — no file written)` to the output. No file is created.
   is actually Latin-1, auto-detection returns UTF-8 and decoding fails. The
   error message suggests `--from` as the fix.
 - **Non-standard CHAR values** — values like `ANSI` or `IBM WINDOWS` are not
-  in the auto-detection map. Use `--from` to specify the actual codec.
+  in the auto-detection map. Use `--from` to specify the actual codec; it
+  bypasses header detection rather than overriding its result, so an
+  unrecognised CHAR value cannot fail the command.
 
 ## Related Commands
 

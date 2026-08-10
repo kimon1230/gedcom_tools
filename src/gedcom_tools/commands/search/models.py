@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
-from gedcom_tools.utils import EncodingInfo
+from gedcom_tools.utils import EncodingInfo, normalize_compare
 
 
 @dataclass
@@ -12,6 +13,19 @@ class SearchTerm:
     value: str  # raw query value
     is_wildcard: bool  # auto-detected * or ? (always False when regex_mode)
     date_range: tuple[int, int] | None  # parsed from "1800-1850" (inclusive)
+    # (primary, secondary) codes for `value`, or ("", "") for every operator
+    # other than "~". Populated by parse_query(), which owns the algorithm
+    # choice -- there is deliberately no default, so a hand-built term cannot
+    # quietly become an empty code that matches nothing.
+    phonetic_codes: tuple[str, str]
+    # normalize_compare(value). Query-invariant, so it is computed once here
+    # instead of once per individual inside the match loop.
+    # `dataclasses.field` is spelled out because the attribute above shadows
+    # the bare name inside this class body.
+    value_norm: str = dataclasses.field(init=False)
+
+    def __post_init__(self) -> None:
+        self.value_norm = normalize_compare(self.value)
 
 
 @dataclass

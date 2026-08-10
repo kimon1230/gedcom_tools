@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from gedcom_tools.commands.compare.blocker import generate_candidates
+from gedcom_tools.commands.compare.blocker import (
+    DEFAULT_MAX_BLOCK_SIZE,
+    describe_oversized_blocks,
+    generate_candidates,
+)
 from gedcom_tools.commands.compare.collector import collect_individuals
 from gedcom_tools.commands.compare.dedup import deduplicate_matches
 from gedcom_tools.commands.compare.formatters import format_json, format_text
@@ -77,6 +81,15 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         default="soundex",
         help="Phonetic algorithm for blocking/scoring (default: soundex)",
     )
+    parser.add_argument(
+        "--max-block-size",
+        type=int,
+        default=DEFAULT_MAX_BLOCK_SIZE,
+        help=(
+            "Max individuals sharing a blocking key before the group is "
+            f"skipped (default: {DEFAULT_MAX_BLOCK_SIZE})"
+        ),
+    )
 
 
 def run(args: Namespace) -> int:
@@ -93,6 +106,7 @@ def run(args: Namespace) -> int:
     list_unique: bool = args.list_unique
     reject_sex_mismatch: bool = args.reject_sex_mismatch
     phonetic: str = getattr(args, "phonetic", "soundex")
+    max_block_size: int = getattr(args, "max_block_size", DEFAULT_MAX_BLOCK_SIZE)
     limit: int | None = args.limit
 
     # Default limit: unlimited for JSON, 50 for text
@@ -109,6 +123,13 @@ def run(args: Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE_ERROR
+    if max_block_size < 1:
+        print(
+            "Error: --max-block-size must be at least 1. "
+            f"The default is {DEFAULT_MAX_BLOCK_SIZE}.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
 
     # Validate input files
     if err := validate_input_file(file_a):
@@ -118,15 +139,22 @@ def run(args: Namespace) -> int:
 
     # Same-file detection
     try:
-        if os.path.samefile(file_a, file_b):
+        same = os.path.samefile(file_a, file_b)
+    except OSError:
+        same = False  # Files may not exist yet (handled by validate above)
+    if same:
+        # Only samefile() belongs in a try here. BrokenPipeError is an OSError,
+        # so widening it to cover the print would drop the return with it and
+        # compare a file against itself.
+        try:
             print(
                 "Error: Both arguments point to the same file. "
                 "Did you mean to compare two different files?",
                 file=sys.stderr,
             )
-            return EXIT_USAGE_ERROR
-    except OSError:
-        pass  # Files may not exist yet (handled by validate above)
+        except OSError:
+            pass  # Dead stderr does not change the verdict.
+        return EXIT_USAGE_ERROR
 
     try:
         tracker = PhaseTracker(
@@ -143,9 +171,15 @@ def run(args: Namespace) -> int:
         with tracker.phase(f"Reading {file_b.name}"):
             individuals_b = collect_individuals(file_b, "B", algorithm=phonetic)
 
+        oversized_keys: set[str] = set()
+
         with tracker.phase("Finding matches"):
             candidates = generate_candidates(
-                individuals_a, individuals_b, algorithm=phonetic
+                individuals_a,
+                individuals_b,
+                max_block_size=max_block_size,
+                algorithm=phonetic,
+                oversized_keys=oversized_keys,
             )
 
             map_a = {ind.xref: ind for ind in individuals_a}
@@ -189,6 +223,7 @@ def run(args: Namespace) -> int:
                 probable_matches=probable_matches,
                 unique_to_a=unique_a,
                 unique_to_b=unique_b,
+                oversized_blocks_skipped=len(oversized_keys),
             )
 
             if output_format == "json":
@@ -210,13 +245,27 @@ def run(args: Namespace) -> int:
                     limit=limit,
                 )
 
+        if oversized_keys:
+            # Printed even under --quiet: this says the answer is incomplete,
+            # which is exactly what a user skimming a one-line summary needs.
+            print(
+                describe_oversized_blocks(len(oversized_keys), max_block_size),
+                file=sys.stderr,
+            )
+
         if output:
             print(output)
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import report_error
+
+        report_error(e)
         return EXIT_ERROR

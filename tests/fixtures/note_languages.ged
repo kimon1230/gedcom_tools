@@ -1,0 +1,41 @@
+0 HEAD
+1 SOUR gedcom_tools
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Harker/
+1 SEX M
+1 NOTE @N1@
+1 NOTE The harbour master kept a ledger of every vessel that wintered here, and his notes on the Harker family run to several pages of close handwriting.
+1 BIRT
+2 DATE 12 MAR 1847
+2 NOTE @N2@
+1 DEAT
+2 DATE 3 NOV 1911
+2 NOTE Brief.
+0 @I2@ INDI
+1 NAME Ελένη /Παπαδάκη/
+1 SEX F
+1 NOTE @N3@
+1 RESI
+2 NOTE Die Familie wohnte mehrere Jahrzehnte in demselben Haus am Hafen, bevor die jüngeren Kinder in die Hauptstadt zogen und dort eine Werkstatt eröffneten.
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 NOTE @N4@
+1 MARR
+2 DATE 8 JUN 1869
+2 NOTE @N5@
+1 DIV
+2 NOTE @N99@
+0 @N8@ NOTE
+0 @N1@ NOTE The family emigrated from the northern counties during the winter of eighteen forty seven and settled near the harbour, where work on the docks was plentiful for anyone willing to take it.
+0 @N2@ NOTE Le registre paroissial indique que le baptême a eu lieu trois jours après la naissance, en présence de deux témoins dont les noms sont malheureusement illisibles aujourd'hui.
+0 @N3@ NOTE Η οικογένεια μετανάστευσε από τα βόρεια χωριά τον χειμώνα του χίλια οκτακόσια σαράντα επτά και εγκαταστάθηκε κοντά στο λιμάνι, όπου υπήρχε άφθονη δουλειά.
+0 @N4@ NOTE Die Familie wanderte im Winter achtzehnhundertsiebenundvierzig aus den nördlichen Landkreisen aus und ließ sich in der Nähe des Hafens nieder, wo es reichlich Arbeit gab.
+0 @N5@ NOTE The marriage was recorded twice, once in the parish register and once in the civil ledger, and the two entries disagree about the bride's age by a full three years.
+0 @N6@ NOTE Nothing in the surviving correspondence explains why the youngest daughter was omitted from the family bible, though the omission was clearly deliberate.
+0 @N7@ NOTE Το ημερολόγιο του πλοιάρχου αναφέρει ότι το ταξίδι κράτησε δεκαπέντε ημέρες και ότι δύο επιβάτες αρρώστησαν σοβαρά κατά τη διάρκεια της διαδρομής.
+0 TRLR

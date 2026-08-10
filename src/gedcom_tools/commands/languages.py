@@ -11,65 +11,31 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ged4py.model import Pointer
-from ged4py.parser import GedcomReader
+from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
-from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
+from gedcom_tools.constants import (
+    EXIT_ERROR,
+    EXIT_SUCCESS,
+    EXIT_USAGE_ERROR,
+    FAM_NON_EVENT_TAGS,
+    INDI_NON_EVENT_TAGS,
+)
 from gedcom_tools.language_detect import (
     LANGUAGE_NAMES,
     MIN_TEXT_LENGTH_DEFAULT,
     GedcomLanguageDetector,
 )
-from gedcom_tools.progress import Colors, PhaseTracker
+from gedcom_tools.progress import Colors, PhaseTracker, glyphs
 from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
+    sanitize_error,
     validate_input_file,
     xref_sort_key,
 )
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
-
-# Tags on INDI sub-records that are NOT events/attributes
-INDI_NON_EVENT_TAGS = frozenset(
-    {
-        "NAME",
-        "SEX",
-        "NOTE",
-        "FAMC",
-        "FAMS",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "RFN",
-        "AFN",
-        "REFN",
-        "RIN",
-        "ALIA",
-        "ANCI",
-        "DESI",
-        "SUBM",
-        "ASSO",
-        "RESN",
-    }
-)
-
-# Tags on FAM sub-records that are NOT events
-FAM_NON_EVENT_TAGS = frozenset(
-    {
-        "HUSB",
-        "WIFE",
-        "CHIL",
-        "NCHI",
-        "NOTE",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "REFN",
-        "RIN",
-        "SUBM",
-    }
-)
 
 
 class EventMatch(NamedTuple):
@@ -137,6 +103,8 @@ class LanguagesResult:
         if self.language_filter:
             return self._format_filter_text(colors, quiet, show_text)
 
+        g = glyphs()
+
         if quiet:
             if self.total_texts == 0 and self.skipped_short == 0:
                 return ""
@@ -177,13 +145,13 @@ class LanguagesResult:
         # Table
         lines.append("")
         lines.append("  Language             Notes  Stories  Events   Total")
-        lines.append("  " + "\u2500" * 53)
+        lines.append("  " + g.rule * 53)
         for row in self.rows:
             lines.append(
                 f"  {row.language:<20} {row.notes:>5}"
                 f"  {row.stories:>7}  {row.events:>6}  {row.total:>6}"
             )
-        lines.append("  " + "\u2500" * 53)
+        lines.append("  " + g.rule * 53)
 
         # Totals row
         t_notes = sum(r.notes for r in self.rows)
@@ -226,6 +194,7 @@ class LanguagesResult:
         return "\n".join(lines)
 
     def _format_filter_text(self, colors: Colors, quiet: bool, show_text: bool) -> str:
+        g = glyphs()
         display = f"{self.language_filter_name} ({self.language_filter})"
         n_persons = len(self.person_xrefs)
         n_notes = len(self.note_xrefs)
@@ -308,7 +277,7 @@ class LanguagesResult:
                 if em.event_tag is None:
                     label = f"    {em.parent_xref}  (family note)"
                 elif em.name:
-                    label = f"    {em.parent_xref}  {em.event_tag}  \u2014 {em.name}"
+                    label = f"    {em.parent_xref}  {em.event_tag}  {g.dash} {em.name}"
                 else:
                     label = f"    {em.parent_xref}  {em.event_tag}"
                 lines.append(label)
@@ -484,7 +453,11 @@ class LanguagesCollector:
         # Detect language and bump the counter for the given category
         if not text or not text.strip():
             return
-        assert self.detector is not None, "_detect_and_count called before collect()"
+        # A mypy narrowing guard, not a runtime check. Converting it to a raise
+        # would change behaviour to satisfy a linter.
+        assert (  # noqa: S101
+            self.detector is not None
+        ), "_detect_and_count called before collect()"
 
         if xref and xref in self._detection_cache:
             lang, was_skipped = self._detection_cache[xref]
@@ -544,7 +517,15 @@ class LanguagesCollector:
         with tracker.phase("Detecting encoding"):
             try:
                 encoding_info = detect_encoding(self.file_path)
-            except Exception:
+            except (CodecError, ParserError, IntegrityError, OSError) as e:
+                if not self.quiet:
+                    # Byte-identical to the stats site; sanitized for the same
+                    # reason -- the exception text is attacker-influenced.
+                    print(
+                        "Warning: Could not detect encoding: "
+                        f"{sanitize_error(str(e))}",
+                        file=sys.stderr,
+                    )
                 encoding_info = EncodingInfo(encoding="Unknown")
 
         with tracker.phase("Loading language model"):
@@ -556,15 +537,16 @@ class LanguagesCollector:
         note_lookup: dict[str, str] = {}
         referenced_xrefs: set[str] = set()
 
-        with tracker.phase("Building note index"):
-            with GedcomReader(str(self.file_path)) as reader:
+        # One reader serves both passes — ged4py's index is lazy and seekable,
+        # so repeated records0() calls reuse it instead of re-scanning the file.
+        with GedcomReader(str(self.file_path)) as reader:
+            with tracker.phase("Building note index"):
                 for rec in reader.records0("NOTE"):
                     if rec.xref_id and rec.value:
                         note_lookup[rec.xref_id] = str(rec.value)
 
-        # Main pass: iterate INDI and FAM records
-        with tracker.phase("Analyzing text content"):
-            with GedcomReader(str(self.file_path)) as reader:
+            # Main pass: iterate INDI and FAM records
+            with tracker.phase("Analyzing text content"):
                 for rec in reader.records0("INDI"):
                     # Extract person name for filter mode
                     if self._language_filter and rec.xref_id:
@@ -797,8 +779,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import report_error
+
+        report_error(e)
         return EXIT_ERROR

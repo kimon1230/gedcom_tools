@@ -37,6 +37,11 @@ def _make_tty_stream():
     return stream
 
 
+@pytest.fixture
+def force_ascii(monkeypatch):
+    monkeypatch.setattr(progress, "_ascii_forced", True)
+
+
 @pytest.fixture(autouse=True)
 def _no_leaked_spinner_threads():
     yield
@@ -101,7 +106,7 @@ class TestSpinner:
         finally:
             s.stop()
         output = stream.getvalue()
-        braille_in_output = [c for c in output if c in Spinner.FRAMES]
+        braille_in_output = [c for c in output if c in UNICODE_GLYPHS.frames]
         assert len(braille_in_output) >= 2
 
     def test_spinner_success_shows_checkmark(self):
@@ -170,7 +175,7 @@ class TestSpinner:
         finally:
             s.stop()
         output = stream.getvalue()
-        distinct_frames = {c for c in output if c in Spinner.FRAMES}
+        distinct_frames = {c for c in output if c in UNICODE_GLYPHS.frames}
         assert len(distinct_frames) >= 2
 
     def test_animate_produces_distinct_frames(self):
@@ -179,7 +184,7 @@ class TestSpinner:
         s._stop_event.wait = _controlled_wait(3)
         s._animate()
         output = stream.getvalue()
-        frames_seen = [c for c in output if c in Spinner.FRAMES]
+        frames_seen = [c for c in output if c in UNICODE_GLYPHS.frames]
         assert len(frames_seen) >= 2
 
     def test_spinner_update_stores_suffix(self):
@@ -423,6 +428,18 @@ class TestAsciiMode:
         spinner._stop_event.wait = _controlled_wait(12)
         spinner._animate()
         assert set(stream.getvalue()) & set(ASCII_GLYPHS.frames)
+
+    def test_animate_renders_ascii_frames(self, force_ascii):
+        """The rendered frames come from self.glyphs, resolved per instance,
+        so --ascii is only proven by what hits the stream: the braille set
+        must be absent and the ASCII set must be cycling."""
+        stream = _make_tty_stream()
+        spinner = Spinner("Working", stream=stream)
+        spinner._stop_event.wait = _controlled_wait(4)
+        spinner._animate()
+        output = stream.getvalue()
+        assert len({c for c in output if c in ASCII_GLYPHS.frames}) >= 2
+        assert not set(output) & set(UNICODE_GLYPHS.frames)
 
     def test_ascii_output_encodes_to_ascii(self):
         set_ascii_mode(True)

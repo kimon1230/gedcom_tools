@@ -4,13 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimon-gedcom-tools"
-version = "1.2.0"
+version = "1.3.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "ged4py>=0.5.2,<0.6",
+    # Imported directly by commands/convert/transcoder.py. ged4py pulls it in
+    # too, but relying on that transitive edge breaks `convert` at import time
+    # the day ged4py drops it.
+    "ansel>=1.0,<2",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.
@@ -30,6 +34,9 @@ dev = [
     "pip-audit>=2.10",
     "jsonschema>=4.26",
 ]
+# Reserved, not yet consumed by any import. The REPL command's `graph` subcommand
+# is what will use it; the extra ships ahead of that because README and the 1.1.1
+# release notes already document `pip install kimon-gedcom-tools[graph]`.
 graph = ["kimon-gedgraph>=1.0.0,<2.0.0"]
 
 [project.scripts]
@@ -50,7 +57,17 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "UP"]
+# S is flake8-bandit in full; S110 is one of its members and is dropped as
+# redundant now that the whole ruleset is on.
+select = ["E", "W", "F", "I", "B", "UP", "S", "BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101: pytest is built on bare asserts; ~4,900 of them is the test suite, not a
+# finding. S108: the five hits are inert "/tmp/test.ged" string literals used as
+# JSON data (one of them asserts the cache dir is *not* under /tmp) -- nothing
+# touches the filesystem, so they do not contradict the tmp_path convention and
+# five inline noqas would be pure churn.
+"tests/**" = ["S101", "S108"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -60,6 +77,9 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --cov=gedcom_tools --cov-report=term-missing --cov-fail-under=95"
+markers = [
+    "network: downloads the 126 MB language-detection model on a cold cache; deselect with -m 'not network'",
+]
 
 [tool.coverage.run]
 source = ["src/gedcom_tools"]

@@ -36,13 +36,17 @@ gedcom-tools <command> [options] <file>
 | `-q, --quiet` | Suppress non-essential output |
 | `--format {text,json}` | Output format (default: text) |
 | `--no-color` | Disable colored output |
-| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`) instead of `✓ ✗ →` |
+| `--ascii` | Use ASCII-only decorations (`[OK]`, `[!]`, `->`, `<->`, `x`, `-`, `--`) instead of `✓ ✗ → ↔ × ─ —` |
 
-Redirected output is written as UTF-8 regardless of the system codepage, so
-`gedcom-tools search tree.ged 'surname=Müller' > out.txt` produces a UTF-8 file
-on Windows as well as on Unix. `--ascii` is for consoles whose fonts cannot draw
-the decorations; it can also be set with `GEDCOM_TOOLS_ASCII=1`. Setting
-`PYTHONIOENCODING` yourself takes precedence over the UTF-8 default.
+Output is safe to redirect and to pipe. It is written as UTF-8 regardless of the
+system codepage, so `gedcom-tools search tree.ged 'surname=Müller' > out.txt`
+produces a UTF-8 file on Windows as well as on Unix; and piping into a consumer
+that stops reading early — `gedcom-tools --format json stats tree.ged | head` —
+exits 0 rather than reporting a broken pipe as a failure.
+
+`--ascii` is for consoles whose fonts cannot draw the decorations; it can also
+be set with `GEDCOM_TOOLS_ASCII=1`. Setting `PYTHONIOENCODING` yourself takes
+precedence over the UTF-8 default.
 
 ### Commands
 
@@ -620,7 +624,7 @@ Encoding: UTF-8
 
   Persons with biographical notes (2):
     Eleni Papadopoulos (@I5@)
-    Nikolaos Andreou (@I12@)
+    Theodora Zografou (@I12@)
 
   Standalone notes (1):
     @N7@
@@ -1058,7 +1062,8 @@ $ gedcom-tools export family.ged --format json
     "gedcom_tools_version": "1.0.0",
     "individual_count": 150,
     "family_count": 45,
-    "redacted_living": false
+    "redacted_living": false,
+    "redacted_count": 0
   },
   "individuals": [
     {
@@ -1082,13 +1087,14 @@ $ gedcom-tools export family.ged --format json
 
 | Option | Description |
 |--------|-------------|
-| `--format {csv,json}` | Export format (default: csv) |
+| `--to {csv,json}` | Export format (default: csv) |
+| `--format {csv,json}` | Deprecated alias for `--to`; still accepted |
 | `--table {individuals,families}` | Table to export in CSV mode (default: individuals; ignored for JSON) |
 | `--no-bom` | Omit UTF-8 BOM when writing CSV to a file |
 | `-o, --output FILE` | Write to file instead of stdout |
 | `--force` | Overwrite output file if it already exists |
 | `--redact-living` | Replace names and dates of estimated-living individuals |
-| `--max-age N` | Maximum age for living estimation (default: 110) |
+| `--max-age N` | Maximum plausible lifespan in years for living estimation (default: 110, minimum: 1) |
 
 **Note on `--format`:** For most commands, `--format json` means "format
 command results as JSON." For `export`, `--format json` means "export data as
@@ -1098,12 +1104,14 @@ in a specific format. See [Export Command](docs/export.md) for full details.
 **CSV output:**
 - UTF-8 BOM included only when writing to a file (`-o`), for Excel compatibility. Use `--no-bom` to suppress.
 - Multi-valued fields (family xrefs, children) are semicolon-delimited within cells.
+- A value starting `=`, `+`, `-`, `@`, TAB or CR gets a leading apostrophe so spreadsheets read it as text rather than a live formula. The apostrophe is literal data: a value that is legitimately `-` reads back as `'-`. JSON is unaffected.
 - See [Export Command](docs/export.md) for full column reference.
 
 **Living estimation:**
-- Uses birth year and death records to estimate whether someone is living
-- Only individuals with a birth year within `--max-age` years and no death record are redacted
-- Individuals with no birth year are not redacted (conservative default)
+- Uses birth year, death records, and any custom living tags in the file to estimate whether someone is living
+- Unknown means living: an individual with no usable birth date and no death record **is** redacted, so a file thin on dates loses more rows than a birth-year-only rule would take
+- A living couple's `marriage_date`, `marriage_year` and `marriage_place` are cleared too — one living spouse is enough, since a wedding date and venue re-identify the pair
+- `meta.redacted_count` in JSON reports how many individuals were actually redacted; `meta.redacted_living` only reports that the flag was set
 
 #### convert
 
@@ -1166,7 +1174,7 @@ File: old_tree.ged
   BOM:             none
   Output:          tree_utf8.ged
 
-  (dry run — no file written)
+  (dry run -- no file written)
 ```
 
 </details>
@@ -1318,7 +1326,7 @@ Filtered tree.ged (780 → 730 records) → clean.ged
 - Strip operations remove whole records and/or inline sub-lines, with automatic child-line cascading
 - Subtree extraction uses BFS traversal on a directed parent-child graph, then transitively collects referenced SOUR/NOTE/OBJE/REPO records
 - After filtering, dangling pointer references are cleaned and empty families are cascade-removed
-- Encoding, BOM, and line endings are preserved from the input
+- Encoding, BOM, and line endings are preserved from the input. Source encoding is auto-detected from the CHAR header; `--from CODEC` overrides that with any Python codec name, for a file whose header is missing, wrong, or names a codec auto-detection refuses
 - See [Filter Command](docs/filter.md) for full algorithm details
 
 ## Documentation

@@ -6,12 +6,15 @@ import json
 from dataclasses import dataclass, field
 
 from gedcom_tools import __version__
-from gedcom_tools.progress import Colors
+from gedcom_tools.progress import Colors, glyphs
 
 UNLIMITED_DEPTH: int = 2**20
 
 
-@dataclass
+# GedcomLine and GedcomRecord are allocated once per input line/record, so
+# slots=True is worth roughly 30% of the parsed-file footprint. The remaining
+# models are slotted for consistency, not for the memory.
+@dataclass(slots=True)
 class GedcomLine:
     level: int
     xref: str | None
@@ -21,7 +24,7 @@ class GedcomLine:
     line_number: int
 
 
-@dataclass
+@dataclass(slots=True)
 class GedcomRecord:
     header: GedcomLine
     children: list[GedcomLine]
@@ -35,7 +38,11 @@ class GedcomRecord:
         return self.header.tag
 
 
-@dataclass
+# parser.count_records() bumps these fields via setattr() driven by
+# _TAG_TO_FIELD. Under slots that only works while every value in that mapping
+# names a field declared here -- adding a key without its field raises
+# AttributeError instead of silently creating one.
+@dataclass(slots=True)
 class RecordCounts:
     indi: int = 0
     fam: int = 0
@@ -60,7 +67,7 @@ class RecordCounts:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class FilterSpec:
     strip_custom_tags: bool = False
     strip_notes: bool = False
@@ -73,7 +80,7 @@ class FilterSpec:
     include_spouses: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class FilterResult:
     source_path: str
     output_path: str
@@ -85,12 +92,13 @@ class FilterResult:
     dry_run: bool
 
     def format_text(self, colors: Colors, quiet: bool) -> str:
+        g = glyphs()
         if quiet:
             line = (
                 f"Filtered {self.source_path} "
-                f"({self.source_counts.total:,} \u2192 "
+                f"({self.source_counts.total:,} {g.arrow} "
                 f"{self.output_counts.total:,} records) "
-                f"\u2192 {self.output_path}"
+                f"{g.arrow} {self.output_path}"
             )
             if self.dry_run:
                 line += " (dry run)"
@@ -180,7 +188,7 @@ class FilterResult:
         lines.append(f"\n  Output: {self.output_path}")
 
         if self.dry_run:
-            lines.append("\n  (dry run \u2014 no file written)")
+            lines.append("\n  (dry run -- no file written)")
 
         return "\n".join(lines)
 

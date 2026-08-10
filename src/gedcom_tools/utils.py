@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import errno
+import io
 import os
 import re
+import stat
 import sys
 import unicodedata
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ged4py.parser import GedcomReader
+# BinaryFileCR is absent from ged4py.parser.__all__ but is what GedcomReader
+# itself wraps every file in -- see _declared_charset for why we need it too.
+from ged4py.parser import (  # type: ignore[attr-defined]
+    BinaryFileCR,
+    GedcomReader,
+    guess_codec,
+)
 
 from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
 
@@ -55,18 +65,103 @@ def strip_bom(data: bytes) -> tuple[bytes, str | None]:
     return data, None
 
 
-def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
-    """Resolve the source codec name from encoding info or user override."""
+def _lookup_text_codec(name: str) -> str | None:
+    """Canonical codec name for `name`, or None if it is not a text codec.
+
+    ``codecs.lookup`` also resolves the byte-to-byte transforms -- base64, hex,
+    zlib, rot13 and friends. Those sail straight through a bare lookup and then
+    detonate hundreds of lines later inside the decode with "'base64' is not a
+    text encoding", which tells a user who typed ``--from base64`` nothing they
+    can act on. Rejecting them here routes them into the caller's own "unknown
+    encoding" message instead.
+
+    Probing ``info.decode(b"", ...)`` does not work as a test: base64 and hex
+    decode empty input happily (returning bytes, not str), while zlib and
+    rot13 raise things that are not LookupError. ``_is_text_encoding`` is the
+    private flag CPython itself consults to raise that LookupError, so it is
+    the exact predicate we want. The ``True`` default keeps an exotic
+    ``CodecInfo`` that lacks the attribute working rather than rejecting a
+    perfectly good codec -- notably ``gedcom``, the ANSEL codec everything
+    here depends on.
+    """
     import codecs
 
+    try:
+        info = codecs.lookup(name)
+    except LookupError:
+        return None
+    if not getattr(info, "_is_text_encoding", True):
+        return None
+    return info.name
+
+
+# Canonical codec names the auto-detect branch will accept from a file's own
+# ``1 CHAR`` header. Without this gate the file names its own decoder, and
+# ``utf-7`` is enough to manufacture records: ``+AAo-`` is plain-ASCII source
+# text that decodes to U+000A, so a NOTE value holding no newline at all becomes
+# extra level-0 lines once ``filter`` and ``convert`` decode the whole file and
+# split afterwards. An explicit ``--from`` is a different matter -- the user
+# asked for it -- so the override branch stays ungated.
+#
+# The membership below is enumerated, not generated. ``iso8859-12`` was never
+# assigned and ``codecs.lookup`` raises ``LookupError`` on it, so completing the
+# 1..16 run by hand puts a name in here that cannot resolve.
+#
+# ``gedcom`` (ANSEL) is deliberately absent: ``SOURCE_ENCODING_MAP["ANSEL"]``
+# returns it well before this gate, so an entry would be dead weight, and
+# ``codecs.lookup("gedcom")`` only succeeds once ``ansel.register()`` has run --
+# membership that depends on import order is worse than no membership at all.
+#
+# An allowlist rather than a denylist because "single-byte charmaps are safe"
+# is simply false: ``cp037`` decodes byte ``0x25`` to ``\n``, and every other
+# EBCDIC page does the same. There is no rule to write here, only a list.
+AUTO_DECLARED_CODECS: frozenset[str] = frozenset(
+    {
+        "utf-8",
+        "ascii",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "iso8859-1",
+        "iso8859-2",
+        "iso8859-3",
+        "iso8859-4",
+        "iso8859-5",
+        "iso8859-6",
+        "iso8859-7",
+        "iso8859-8",
+        "iso8859-9",
+        "iso8859-10",
+        "iso8859-11",
+        "iso8859-13",
+        "iso8859-14",
+        "iso8859-15",
+        "iso8859-16",
+        "cp1250",
+        "cp1251",
+        "cp1252",
+        "cp1253",
+        "cp1254",
+        "cp1255",
+        "cp1256",
+        "cp1257",
+        "cp1258",
+        "mac-roman",
+        "koi8-r",
+        "koi8-u",
+    }
+)
+
+
+def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
+    """Resolve the source codec name from encoding info or user override."""
     if from_override is not None:
         key = from_override.lower()
         if key in GEDCOM_CHARSETS:
             return GEDCOM_CHARSETS[key]
-        try:
-            return codecs.lookup(from_override).name
-        except LookupError:
-            pass
+        resolved = _lookup_text_codec(from_override)
+        if resolved is not None:
+            return resolved
         msg = f"Unknown source encoding: {from_override}"
         raise ValueError(msg)
 
@@ -76,16 +171,26 @@ def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None)
     key = enc.lower()
     if key in GEDCOM_CHARSETS:
         return GEDCOM_CHARSETS[key]
-    try:
-        return codecs.lookup(enc).name
-    except LookupError:
-        pass
+    # _lookup_text_codec folds the spelling variants ("UTF8", "ISO8859-1",
+    # "MACINTOSH") that real files carry; the gate then judges the canonical
+    # name rather than whatever the header happened to say.
+    resolved = _lookup_text_codec(enc)
+    if resolved is not None and resolved in AUTO_DECLARED_CODECS:
+        return resolved
     msg = f"Cannot determine source encoding from '{enc}'. Use --from to specify."
     raise ValueError(msg)
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_C0_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# DEL and the C1 block go too. U+009B is an 8-bit CSI introducer -- a terminal in
+# 8-bit mode reads it as ESC[ -- so leaving it in defeats the whole point of a
+# function that exists to remove escape introducers. The range stops at \x9f:
+# \xa0 is NBSP and is ordinary text.
+#
+# \x0a is deliberately NOT stripped. It would stop a multi-line exception forging
+# a second "Error:" line, but it is also how every legitimately wrapped message
+# renders -- a visible change to all of them for a low-value spoof.
+_C0_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _BIDI_CHARS = frozenset(
     "\u200e\u200f\u061c"
     "\u202a\u202b\u202c\u202d\u202e"
@@ -101,33 +206,147 @@ def sanitize_error(msg: str) -> str:
     return "".join(c for c in result if c not in _BIDI_CHARS)
 
 
+def report_error(e: Exception) -> None:
+    """Print an unexpected exception to stderr in the one house format.
+
+    Every generic ``except Exception`` handler routes through here so the same
+    failure reads the same way whichever command hit it. The type name matters:
+    a bare ``Error: 'foo'`` from a KeyError tells the user nothing.
+    """
+    print(f"Error: {type(e).__name__}: {sanitize_error(str(e))}", file=sys.stderr)
+    print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+
+
 def check_output_safety(
-    input_path: Path, output_path: Path, *, force: bool, dry_run: bool
+    input_path: Path,
+    output_path: Path,
+    *,
+    force: bool,
+    dry_run: bool,
+    command: str,
 ) -> str | None:
     """Return error message if output path is unsafe, or None if OK.
 
-    Note: TOCTOU race between this check and the caller's write.
-    Acceptable for a local CLI tool — not practically exploitable.
+    `command` names the caller ("Convert", "Filter") for the error text.
+
+    This runs before any work starts so a doomed run fails fast with a useful
+    message. It is not the security boundary: the path can change underneath
+    us between here and the write. `write_output_securely` is what actually
+    decides whether the bytes land.
     """
     parent = output_path.parent
     if not parent.exists():
         return f"Error: Directory {parent} does not exist"
 
+    same_file_error = (
+        "Error: Output path resolves to the input file. "
+        f"{command} always produces a new file."
+    )
     try:
         if os.path.samefile(input_path, output_path):
-            return (
-                "Error: Output path resolves to the input file. "
-                "Filter always produces a new file."
-            )
+            return same_file_error
     except OSError:
+        # samefile stats both paths, so a missing file lands here too.
         if output_path.resolve() == input_path.resolve():
-            return (
-                "Error: Output path resolves to the input file. "
-                "Filter always produces a new file."
-            )
+            return same_file_error
 
     if not dry_run and output_path.exists() and not force:
         return f"Error: {output_path} already exists. Use --force to overwrite."
+
+    return None
+
+
+SYMLINK_OUTPUT_ERROR = "Output path is a symlink; refusing to follow it."
+
+
+def write_output_securely(
+    path: Path,
+    data: str | bytes,
+    *,
+    force: bool,
+    encoding: str = "utf-8",
+) -> str | None:
+    """Write `data` to `path` through a single create-or-fail open.
+
+    Returns an error message for the caller to print, or None on success.
+    `encoding` applies to str data only; bytes go out untouched.
+
+    One `os.open` does the work that a `write_bytes` + `chmod` pair used to:
+    the file is created 0600 (never briefly world-readable), symlinks are
+    refused instead of followed, and there is no window between deciding the
+    path is safe and writing to it.
+
+    Platform split: O_NOFOLLOW and the creation mode are POSIX-only. On
+    Windows both flags are absent, so the open is still atomically
+    create-or-fail but symlinks are followed and the mode is ignored — the
+    same concession the `sys.platform != "win32"` chmod guard already made.
+    """
+    target_mode: int | None
+    try:
+        target_mode = os.lstat(path).st_mode
+    except OSError:
+        # Nothing there yet (or the parent is unreadable): let the atomic open
+        # below decide. A propagating FileNotFoundError here would break every
+        # ordinary "create a new file" write.
+        target_mode = None
+
+    if target_mode is not None and (
+        stat.S_ISCHR(target_mode) or stat.S_ISFIFO(target_mode)
+    ):
+        # /dev/null and named pipes: nothing to create, nothing to truncate,
+        # and no mode worth setting. Write them the plain way.
+        #
+        # lstat, not stat: stat() follows symlinks, so a link aimed at a FIFO
+        # or a device would look identical to the real thing and get written
+        # through — exactly what the symlink guard below exists to stop.
+        # Anything else, links included, falls through to O_NOFOLLOW.
+        if isinstance(data, str):
+            path.write_text(data, encoding=encoding, newline="")
+        else:
+            path.write_bytes(data)
+        return None
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)  # POSIX only; absent on Windows
+        | getattr(os, "O_BINARY", 0)  # Windows only; keeps the CRT out of it
+        | (os.O_TRUNC if force else os.O_EXCL)
+    )
+
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as e:
+        # O_NOFOLLOW gives ELOOP on a live symlink; O_EXCL gives EEXIST on a
+        # dangling one, which is why islink is checked too. Either way the
+        # answer is not "use --force" — that path is refused as well.
+        if e.errno == errno.ELOOP or path.is_symlink():
+            return f"Error: {SYMLINK_OUTPUT_ERROR}"
+        if path.is_dir():
+            # Checked before FileExistsError: a directory also raises EEXIST
+            # under O_EXCL, and "use --force" would be false advice — with
+            # --force the open raises EISDIR instead.
+            return f"Error: {path} is a directory. Give a file path instead."
+        if isinstance(e, FileExistsError):
+            return f"Error: {path} already exists. Use --force to overwrite."
+        raise
+
+    if force:
+        # O_TRUNC reuses the existing file's mode, so an overwrite of a
+        # world-readable file would stay world-readable. fchmod acts on the
+        # open descriptor, so no path lookup and nothing to race.
+        with suppress(OSError, AttributeError):
+            os.fchmod(fd, 0o600)
+
+    if isinstance(data, str):
+        # newline="" is load-bearing: the default rewrites every \n as
+        # os.linesep, which on Windows turns csv.writer's own \r\n into \r\r\n.
+        # O_BINARY only silences the CRT; Python's translation is its own layer.
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as text_out:
+            text_out.write(data)
+    else:
+        with os.fdopen(fd, "wb") as byte_out:
+            byte_out.write(data)
 
     return None
 
@@ -167,10 +386,86 @@ class EncodingInfo:
         return " ".join(parts)
 
 
+# Real GEDCOM headers are a few hundred bytes. The window only needs to be big
+# enough that _declared_charset's reconciliation fallback stays a rarity.
+_CHAR_SCAN_WINDOW = 65536
+
+
+def _scan_declared_charset(
+    stream: io.BufferedReader, bom_size: int
+) -> tuple[str | None, bool]:
+    """Find the raw `1 CHAR` value by scanning bytes, never decoding the body.
+
+    Returns the charset and whether the caller must reconcile against the
+    unbounded reader because the CHAR line may lie past the window.
+    """
+    stream.seek(bom_size)
+    chunk = stream.read(_CHAR_SCAN_WINDOW)
+    lines = re.split(b"\r\n|\r|\n", chunk)
+
+    window_full = len(chunk) == _CHAR_SCAN_WINDOW
+    if window_full:
+        # The last element is a partial line. Keeping it matches a straddling
+        # "1 CHAR ANSEL" as "ANS" and hands back a silently wrong encoding.
+        lines.pop()
+
+    declared: str | None = None
+    found_head_end = False
+    for raw in lines:
+        parts = raw.strip().split()
+        if len(parts) >= 2 and parts[0] == b"0" and parts[1] != b"HEAD":
+            found_head_end = True
+            break
+        if len(parts) >= 3 and parts[0] == b"1" and parts[1] == b"CHAR":
+            # Charset names are ASCII, so decode only the value. Decoding the
+            # whole buffer raises UnicodeDecodeError on a multi-byte character
+            # straddling the cut, and on `1 CHAR ASCII` with a latin-1 body byte.
+            declared = b" ".join(parts[2:]).decode("ascii", errors="replace")
+            break
+
+    return declared, declared is None and window_full and not found_head_end
+
+
+def _declared_charset_via_reader(file_path: Path) -> str | None:
+    """Fallback: let ged4py lex the file. Slow, but it reads without a bound."""
+    with GedcomReader(str(file_path)) as reader:
+        if reader.header:
+            char_rec = reader.header.sub_tag("CHAR")
+            if char_rec and char_rec.value:
+                return str(char_rec.value)
+    return None
+
+
+def _declared_charset(file_path: Path) -> str | None:
+    """Read the `1 CHAR` value, preferring a bounded read over a full lex.
+
+    `guess_codec` is the same function GedcomReader uses, so every alias table,
+    tokenisation rule and raise path is preserved by construction -- but it stops
+    at the end of the header instead of indexing the whole file.
+
+    BinaryFileCR is load-bearing: a plain file handle makes guess_codec raise
+    OSError on CR-only files, which would send every one of them to the fallback.
+    """
+    try:
+        with BinaryFileCR(io.FileIO(str(file_path))) as stream:
+            _codec, bom_size = guess_codec(stream, require_char=False, warn=False)
+            declared, needs_reconcile = _scan_declared_charset(stream, bom_size)
+    except (OSError, UnicodeDecodeError):
+        # Truncated or otherwise malformed header. UnicodeDecodeError is a
+        # ValueError, not an OSError -- guess_codec documents it as a raise path.
+        return _declared_charset_via_reader(file_path)
+
+    if needs_reconcile:
+        # The window ran out mid-header. Returning None here would downgrade an
+        # ANSEL file to the UTF-8 default; the reader is the only thing that can
+        # still find the CHAR line.
+        return _declared_charset_via_reader(file_path)
+    return declared
+
+
 def detect_encoding(file_path: Path) -> EncodingInfo:
     """Detect GEDCOM file encoding from BOM and CHAR header."""
     has_bom = False
-    declared_charset = None
 
     with open(file_path, "rb") as f:
         bom = f.read(3)
@@ -179,11 +474,7 @@ def detect_encoding(file_path: Path) -> EncodingInfo:
         elif bom[:2] in (b"\xff\xfe", b"\xfe\xff"):
             has_bom = True
 
-    with GedcomReader(str(file_path)) as reader:
-        if reader.header:
-            char_rec = reader.header.sub_tag("CHAR")
-            if char_rec and char_rec.value:
-                declared_charset = str(char_rec.value)
+    declared_charset = _declared_charset(file_path)
 
     detected = "UTF-8"
     if has_bom:

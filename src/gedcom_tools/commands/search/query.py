@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 
+from gedcom_tools.commands.search.matcher import _fold_marks
 from gedcom_tools.commands.search.models import SearchQuery, SearchTerm
 
 VALID_FIELDS = frozenset(
@@ -31,6 +32,7 @@ _OVERLAPPING_ALT_RE = re.compile(r"\(([^)]*\|[^)]*)\)\s*[+*?{]")
 _MAX_REGEX_LENGTH = 256
 _MAX_NESTING_DEPTH = 3
 _XREF_RE = re.compile(r"^@[A-Za-z0-9_]+@$")
+_HOME_PREFIXES = ("/home/", "/Users/")
 
 
 def _tokenize(query_string: str) -> list[str]:
@@ -140,7 +142,7 @@ def _validate_wildcard(value: str) -> None:
     if len(non_wild) < 3:
         raise ValueError(
             f"Wildcard pattern '{value}' is too broad "
-            f"\N{EM DASH} add more characters, e.g. 'Sm*th'"
+            "-- add more characters, e.g. 'Sm*th'"
         )
 
 
@@ -163,32 +165,53 @@ def _count_nesting_depth(value: str) -> int:
 
 
 def _validate_regex(value: str) -> None:
+    """Reject patterns whose matching cost could blow up.
+
+    The matcher compiles the diacritic-folded pattern and only falls back to
+    the raw one when the folded form will not compile, so the guard has to
+    inspect whichever form actually gets compiled: stripping combining marks
+    can reassemble a construct such as ``(a+́)́+b`` into ``(a+)+b``. Error
+    messages always quote what the user typed — the folded form is an internal
+    detail they never asked for.
+    """
     if len(value) > _MAX_REGEX_LENGTH:
         raise ValueError(
             f"Regex pattern is too long ({len(value)} chars, max {_MAX_REGEX_LENGTH}). "
             f"Simplify the pattern"
         )
-    if _count_nesting_depth(value) > _MAX_NESTING_DEPTH:
+
+    folded = _fold_marks(value)
+    try:
+        re.compile(folded)
+    except re.error:
+        pattern, folded_compiles = value, False
+    else:
+        pattern, folded_compiles = folded, True
+
+    if _count_nesting_depth(pattern) > _MAX_NESTING_DEPTH:
         raise ValueError(
             f"Regex pattern has too many nested groups "
             f"(max {_MAX_NESTING_DEPTH} levels). Simplify the pattern"
         )
-    if _NESTED_QUANTIFIER_RE.search(value):
+    if _NESTED_QUANTIFIER_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains nested quantifiers which could "
             f"cause slow matching. Simplify the pattern"
         )
-    if _QUANTIFIED_INNER_RE.search(value):
+    if _QUANTIFIED_INNER_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains a quantified group with "
             f"quantified subexpressions. Simplify the pattern"
         )
-    if _OVERLAPPING_ALT_RE.search(value):
+    if _OVERLAPPING_ALT_RE.search(pattern):
         raise ValueError(
             f"Regex pattern '{value}' contains alternation inside a "
             f"quantified group which could cause slow matching. "
             f"Simplify the pattern"
         )
+
+    if folded_compiles:
+        return
     try:
         re.compile(value)
     except re.error as exc:
@@ -198,16 +221,43 @@ def _validate_regex(value: str) -> None:
         ) from None
 
 
-def _check_tilde_expansion(value: str, operator: str) -> None:
-    """Warn if shell expanded ~ into a home directory path."""
-    if operator != "~":
+def _check_tilde_expansion(value: str) -> None:
+    """Reject a term where a home directory path stands in for a ``~`` query.
+
+    The mishap arrives in two shapes: the shell expands ``~kimon`` before argv
+    is built and the token arrives as a bare ``/home/kimon`` with no operator,
+    or it lands in the value of a ``surname~...`` term. One substring test on
+    the value covers both -- a bare token parses to a ``name:`` term whose
+    value is the path, so the operator is irrelevant.
+
+    Deliberately not gated on the operator. The check used to fire only for
+    ``~`` terms, which is precisely the case where the shell did *not* expand
+    anything -- the bug it exists to catch was the one shape it could not see.
+    The cost is that a value legitimately containing ``/home/`` is unsearchable;
+    genealogy values do not look like that.
+    """
+    if not any(prefix in value for prefix in _HOME_PREFIXES):
         return
-    if "/home/" in value or "/Users/" in value:
-        raise ValueError(
-            f"Value '{value}' looks like a home directory path \N{EM DASH} "
-            f"the shell likely expanded ~. Wrap the query in single quotes: "
-            f"gedcom-tools search tree.ged 'surname~Schmidt'"
-        )
+    raise ValueError(
+        f"Value '{value}' looks like a home directory path -- "
+        f"the shell likely expanded ~. Wrap the query in single quotes: "
+        f"gedcom-tools search tree.ged 'surname~Schmidt'"
+    )
+
+
+def _encode_phonetic(value: str, operator: str, algorithm: str) -> tuple[str, str]:
+    """Phonetic codes for a query value, or ("", "") when it will never be used.
+
+    Only ``~`` terms consult the codes, and the encode is pure overhead for the
+    rest, so date, sex and xref terms skip it entirely.
+    """
+    if operator != "~":
+        return ("", "")
+
+    from gedcom_tools.phonetics import phonetic_encode
+    from gedcom_tools.utils import normalize_compare
+
+    return phonetic_encode(normalize_compare(value), algorithm)
 
 
 def parse_query(
@@ -237,7 +287,7 @@ def parse_query(
 
         _validate_field(field)
         _validate_operator_field(field, operator)
-        _check_tilde_expansion(value, operator)
+        _check_tilde_expansion(value)
 
         date_range = _parse_date_range(value, field, operator)
 
@@ -267,6 +317,7 @@ def parse_query(
                 value=value,
                 is_wildcard=is_wildcard,
                 date_range=date_range,
+                phonetic_codes=_encode_phonetic(value, operator, phonetic_algo),
             )
         )
 

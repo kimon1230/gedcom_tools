@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import itertools
+import random
+import re
+import sys
 import unicodedata
+from collections.abc import Iterable
+from pathlib import Path
+
+import pytest
+from ged4py import GedcomReader
+
+# Deliberately the real private symbol, not a copy: hand-inlining this pattern is
+# how three earlier attempts at the parity fix shipped a gate that agreed with the
+# bug. Under the ged4py>=0.5.2,<0.6 pin a rename should break this test loudly.
+from ged4py.parser import _RE_GEDCOM_LINE
 
 from gedcom_tools.commands.filter.models import GedcomLine, GedcomRecord
 from gedcom_tools.commands.filter.parser import (
@@ -14,6 +28,7 @@ from gedcom_tools.commands.filter.parser import (
     parse_line,
     parse_lines,
 )
+from gedcom_tools.commands.filter.writer import serialize_records
 
 # ---------------------------------------------------------------------------
 # parse_line
@@ -97,11 +112,21 @@ class TestParseLine:
         assert line.xref == "@I1@"
         assert line.tag == "INDI"
 
-    def test_tab_as_delimiter(self) -> None:
+    def test_internal_tab_is_not_a_delimiter(self) -> None:
+        # ged4py's delimiters are literal spaces, so a tab between fields makes
+        # the line unparseable there. `filter` used to accept it, which meant a
+        # tab-separated line was a record here and not to `validate`.
         line = parse_line("0\t@I1@\tINDI", 1)
+        assert line.tag == ""
+        assert line.raw == "0\t@I1@\tINDI"
+
+    def test_leading_tab_still_parses(self) -> None:
+        # A *leading* tab is stripped before matching, exactly as ged4py does.
+        line = parse_line("\t0 @I6@ INDI", 1)
         assert line.level == 0
-        assert line.xref == "@I1@"
+        assert line.xref == "@I6@"
         assert line.tag == "INDI"
+        assert line.raw == "\t0 @I6@ INDI"
 
     def test_value_with_spaces(self) -> None:
         line = parse_line("2 ADDR 123 Main Street, Apt 4B", 1)
@@ -496,3 +521,321 @@ class TestIsPointerValue:
 
     def test_pointer_with_hyphen(self) -> None:
         assert is_pointer_value("@NOTE-42@") is True
+
+
+# ---------------------------------------------------------------------------
+# Line terminators: only CRLF/CR/LF may split a line
+# ---------------------------------------------------------------------------
+
+# Separators str.splitlines() breaks on but GEDCOM (and ged4py) do not.
+NON_TERMINATORS = [
+    pytest.param("\v", id="VT-000B"),
+    pytest.param("\f", id="FF-000C"),
+    pytest.param("\x1c", id="FS-001C"),
+    pytest.param("\x1d", id="GS-001D"),
+    pytest.param("\x1e", id="RS-001E"),
+    pytest.param("\x85", id="NEL-0085"),
+    pytest.param("\u2028", id="LS-2028"),
+    pytest.param("\u2029", id="PS-2029"),
+]
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _smuggling_ged(separator: str) -> str:
+    """A file whose single NOTE value hides a forged level-0 INDI record."""
+    return (
+        "0 HEAD\n1 SOUR TEST\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
+        "0 @I1@ INDI\n1 NAME John /Smith/\n"
+        f"1 NOTE harmless{separator}0 @I99@ INDI{separator}1 NAME Smuggled /Record/\n"
+        "0 TRLR\n"
+    )
+
+
+class TestLineTerminators:
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_separator_stays_inside_value(self, separator: str) -> None:
+        lines = parse_lines(f"1 NOTE before{separator}after\n")
+        assert len(lines) == 1
+        assert lines[0].tag == "NOTE"
+        assert lines[0].value == f"before{separator}after"
+
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_separator_cannot_forge_a_record(self, separator: str) -> None:
+        records = group_records(parse_lines(_smuggling_ged(separator)))
+        assert [r.xref for r in records if r.tag == "INDI"] == ["@I1@"]
+
+    @pytest.mark.parametrize("separator", NON_TERMINATORS)
+    def test_agrees_with_ged4py_record_count(
+        self, tmp_path: Path, separator: str
+    ) -> None:
+        # The security invariant: what ged4py (and so `validate`) treats as a
+        # value must not become structure to `filter`.
+        ged = tmp_path / "smuggle.ged"
+        ged.write_bytes(_smuggling_ged(separator).encode("utf-8"))
+
+        with GedcomReader(str(ged)) as reader:
+            reference = {i.xref_id for i in reader.records0("INDI")}
+
+        records = group_records(parse_lines(ged.read_text(encoding="utf-8")))
+        assert {r.xref for r in records if r.tag == "INDI"} == reference
+
+    @pytest.mark.parametrize("terminator", ["\n", "\r\n", "\r"])
+    def test_real_terminators_still_split(self, terminator: str) -> None:
+        lines = parse_lines(f"0 HEAD{terminator}0 TRLR{terminator}")
+        assert [ln.tag for ln in lines] == ["HEAD", "TRLR"]
+
+    def test_no_trailing_blank_line(self) -> None:
+        lines = parse_lines("0 HEAD\n0 TRLR\n")
+        assert len(lines) == 2
+        assert lines[-1].tag == "TRLR"
+
+    def test_final_line_without_terminator_kept(self) -> None:
+        lines = parse_lines("0 HEAD\n0 TRLR")
+        assert [ln.tag for ln in lines] == ["HEAD", "TRLR"]
+
+    def test_only_one_trailing_empty_dropped(self) -> None:
+        # A genuine blank line before EOF is content and must survive
+        lines = parse_lines("0 HEAD\n\n0 TRLR\n")
+        assert [ln.raw for ln in lines] == ["0 HEAD", "", "0 TRLR"]
+
+
+class TestSerializeRoundTrip:
+    @pytest.mark.parametrize(
+        "name", ["555sample.ged", "non_ascii_names.ged", "missing_trlr.ged"]
+    )
+    def test_fixture_roundtrip_is_byte_identical(self, name: str) -> None:
+        text = (FIXTURES / name).read_text(encoding="utf-8")
+        records = group_records(parse_lines(text))
+        assert serialize_records(records, detect_line_ending(text)) == text
+
+    @pytest.mark.parametrize("terminator", ["\n", "\r\n"])
+    def test_roundtrip_preserves_trailing_terminator(self, terminator: str) -> None:
+        text = terminator.join(["0 HEAD", "1 CHAR UTF-8", "0 TRLR", ""])
+        records = group_records(parse_lines(text))
+        assert serialize_records(records, detect_line_ending(text)) == text
+
+
+# ---------------------------------------------------------------------------
+# Lines ged4py parses that `filter` used to miss
+# ---------------------------------------------------------------------------
+
+# Each of these is a level-0 record to GedcomReader. Under the old hand-written
+# pattern none of them matched, so they were kept with tag="" -- copied verbatim
+# into the "filtered" output while the summary counted them as removed.
+SMUGGLED = [
+    pytest.param(" 0 @I2@ INDI", "@I2@", "INDI", id="leading-space"),
+    pytest.param("\t0 @I6@ INDI", "@I6@", "INDI", id="leading-tab"),
+    pytest.param("000 @I3@ INDI", "@I3@", "INDI", id="three-digit-level"),
+    pytest.param("0@I4@ INDI", "@I4@", "INDI", id="no-delimiter-before-xref"),
+    pytest.param("0 @I5@ FOO-BAR", "@I5@", "FOO-BAR", id="hyphen-in-tag"),
+]
+
+
+class TestGed4pyDivergences:
+    @pytest.mark.parametrize(("raw", "xref", "tag"), SMUGGLED)
+    def test_level0_divergence_now_parses(self, raw: str, xref: str, tag: str) -> None:
+        line = parse_line(raw, 1)
+        assert line.level == 0
+        assert line.xref == xref
+        assert line.tag == tag
+
+    def test_hyphen_in_custom_sub_tag(self) -> None:
+        line = parse_line("1 _MY-TAG x", 1)
+        assert line.level == 1
+        assert line.tag == "_MY-TAG"
+        assert line.value == "x"
+
+    @pytest.mark.parametrize(("raw", "xref", "tag"), SMUGGLED)
+    def test_divergence_is_a_record_boundary(
+        self, raw: str, xref: str, tag: str
+    ) -> None:
+        # The security-relevant consequence: these start records now, so every
+        # strip/subtree transform can actually see and remove them.
+        records = group_records(parse_lines(f"0 HEAD\n{raw}\n1 NOTE x\n0 TRLR\n"))
+        assert [r.xref for r in records] == [None, xref, None]
+        assert records[1].tag == tag
+
+    def test_raw_is_untouched_by_the_lstrip(self) -> None:
+        line = parse_line("  \t0 @I2@ INDI", 4)
+        assert line.tag == "INDI"
+        # The strip happens for matching only; serialize_records writes raw back.
+        assert line.raw == "  \t0 @I2@ INDI"
+
+
+class TestNarrowedAcceptance:
+    """Lines `filter` used to accept and now rejects, to agree with ged4py."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("0 @.X@ INDI", id="xref-starts-with-dot"),
+            pytest.param("0 @ X@ INDI", id="xref-starts-with-space"),
+        ],
+    )
+    def test_xref_first_character_is_constrained(self, raw: str) -> None:
+        # ged4py's xref class is @[A-Z-a-z0-9][^@]*@ -- the first character after
+        # the @ must be alphanumeric.
+        assert parse_line(raw, 1).tag == ""
+
+    def test_narrowed_xref_is_no_longer_a_record_boundary(self) -> None:
+        records = group_records(parse_lines("0 @I1@ INDI\n0 @.X@ INDI\n1 NAME X\n"))
+        assert len(records) == 1
+        assert records[0].xref == "@I1@"
+        # It and its subtree now hang off the preceding record, as they do to ged4py.
+        assert [c.raw for c in records[0].children] == ["0 @.X@ INDI", "1 NAME X"]
+
+    def test_unicode_digit_level_rejected(self) -> None:
+        # Without re.A on the decoded pattern, \d would accept U+0660 here while
+        # ged4py's bytes pattern never could -- and int("٠١") is 1.
+        assert parse_line("٠ @IEVIL@ INDI", 1).tag == ""
+
+    def test_unicode_whitespace_prefix_rejected(self) -> None:
+        # bytes.lstrip() does not remove NBSP, so neither may we. A bare
+        # str.lstrip() would strip it and parse a record ged4py never sees.
+        line = parse_line("\xa00 @IEVIL@ INDI", 1)
+        assert line.tag == ""
+        assert line.raw == "\xa00 @IEVIL@ INDI"
+
+    def test_absurdly_long_level_rejected(self) -> None:
+        # ged4py's level group is unbounded \d+; CPython's int() refuses past
+        # 4300 digits, which would otherwise be an uncaught ValueError.
+        raw = "9" * 5000 + " INDI"
+        line = parse_line(raw, 3)
+        assert line.tag == ""
+        assert line.level == 0
+        assert line.raw == raw
+
+
+# ---------------------------------------------------------------------------
+# Parity gate: `filter` must see exactly the lines ged4py's lexer sees
+# ---------------------------------------------------------------------------
+
+# Every character str.isspace() accepts that bytes.lstrip() does not remove.
+# Derived, not hand-listed: an earlier draft of this file capped the scan at
+# 0x3000 and thereby excluded U+3000 itself, which is the whole point.
+UNICODE_ONLY_WS = {c for c in map(chr, range(sys.maxunicode + 1)) if c.isspace()} - set(
+    " \t\r\n\x0b\x0c"
+)
+assert len(UNICODE_ONLY_WS) == 23, sorted(UNICODE_ONLY_WS)
+
+# NUL, every real terminator, the delimiters, the characters that decide the xref
+# and tag classes, Unicode digits, an accented letter -- plus the whitespace above.
+# Shorten the sample lengths if this gets slow; never shorten the alphabet. A
+# trimmed alphabet is how two earlier fuzzers reported zero violations while real
+# divergences (`.` in an xref, NBSP in front of a level) sat in the code.
+GATE_ALPHABET = sorted(
+    set(" \t\r\n\x0b\x0c\x00.-_@/+%[]^0123456789AZazIND")
+    | {"٠", "０", "é"}
+    | UNICODE_ONLY_WS
+)
+
+
+def _ged4py_parses(s: str) -> re.Match[bytes] | None:
+    """Mirror ged4py's real pipeline -- preprocessing included.
+
+    ``GedcomReader.gedcom_lines`` does not match the raw line: it matches
+    ``line.lstrip().rstrip(b"\\r\\n")`` on **bytes** (ged4py/parser.py:388).
+    Comparing regex to regex without that step is what let three earlier
+    attempts at this fix pass their own gate.
+    """
+    return _RE_GEDCOM_LINE.match(s.encode().lstrip().rstrip(b"\r\n"))
+
+
+def _filter_parses(s: str) -> GedcomLine | None:
+    # Calls production parse_line on purpose. Restating the strip set here makes
+    # the gate vacuous for the one hand-written thing it exists to guard:
+    # measured, a bare lstrip() in production yields 480 violations through this
+    # form and 0 through a restated copy.
+    line = parse_line(s, 1)
+    return line if line.tag else None
+
+
+def _disagreement(s: str) -> str | None:
+    """Return a description of how the two parsers differ on ``s``, or None.
+
+    What this still tests now that the pattern is derived from ged4py's: not the
+    grammar -- that is shared by construction and cannot drift. It tests the two
+    things that are still hand-written and can. First, the lstrip strip-set, since
+    ged4py works in bytes and ``str.lstrip()`` with no argument removes 23 more
+    characters. Second, whether ``re.A`` on the decoded copy really does reproduce
+    the bytes pattern's semantics, which is what keeps a Unicode digit from being
+    a level number here and nowhere else. Do not delete this as tautological.
+    """
+    ged = _ged4py_parses(s)
+    line = _filter_parses(s)
+    if ged is None:
+        if line is not None:
+            return f"filter parsed {s!r} as {line!r}; ged4py did not"
+        return None
+    if line is None:
+        return f"ged4py parsed {s!r} as {ged.groups()!r}; filter did not"
+
+    xref = ged["xref"]
+    value = ged["value"]
+    expected = (
+        int(ged["level"].decode("ascii")),
+        None if xref is None else xref.decode("utf-8"),
+        ged["tag"].decode("ascii"),
+        None if value is None else value.decode("utf-8"),
+    )
+    actual = (line.level, line.xref, line.tag, line.value)
+    if actual != expected:
+        return f"{s!r}: filter gave {actual!r}, ged4py gave {expected!r}"
+    return None
+
+
+def _run_gate(samples: Iterable[str]) -> None:
+    violations = [v for v in map(_disagreement, samples) if v is not None]
+    assert not violations, (
+        f"{len(violations)} line(s) parse differently in `filter` and ged4py. "
+        f"First few: {violations[:5]}"
+    )
+
+
+class TestGed4pyParity:
+    def test_exhaustive_short_lines(self) -> None:
+        alphabet = GATE_ALPHABET
+        _run_gate(
+            "".join(combo)
+            for length in (1, 2, 3)
+            for combo in itertools.product(alphabet, repeat=length)
+        )
+
+    def test_random_longer_lines(self) -> None:
+        # Seeded: an unseeded fuzzer that passes here and fails in CI is worse
+        # than no fuzzer at all.
+        # A deterministic fuzz corpus, not a security primitive.
+        rng = random.Random(0x6ED4)  # noqa: S311
+        alphabet = GATE_ALPHABET
+        _run_gate(
+            "".join(rng.choices(alphabet, k=rng.randint(1, 12))) for _ in range(100_000)
+        )
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "0 @I1@ INDI",
+            " 0 @I2@ INDI",
+            "\t0 @I6@ INDI",
+            "000 @I3@ INDI",
+            "0@I4@ INDI",
+            "0 @I5@ FOO-BAR",
+            "1 _MY-TAG x",
+            "0 @.X@ INDI",
+            "0 @ X@ INDI",
+            "0\t@I1@\tINDI",
+            "٠0 @IEVIL@ INDI",
+            "٠ @IEVIL@ INDI",
+            " 0 @IEVIL@ INDI",
+            "　0 @IEVIL@ INDI",
+            "\x1c0 @IEVIL@ INDI",
+            "\x850 @IEVIL@ INDI",
+            "0 @I1@ INDI\r",
+            "  \t\v\f0 @I1@ INDI",
+            "1 NAME René /Dupont/",
+            "",
+        ],
+    )
+    def test_named_cases_agree(self, raw: str) -> None:
+        assert _disagreement(raw) is None

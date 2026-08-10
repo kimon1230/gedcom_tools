@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from ged4py.parser import GedcomReader
 
@@ -101,50 +102,146 @@ class ParentChildGraph:
     couples: dict[str, set[str]] = field(default_factory=dict)
 
 
-def build_parent_child_graph(file_path: Path) -> ParentChildGraph:
+class SubLineLike(Protocol):
+    """A GEDCOM line below level 0, as seen by the graph builder."""
+
+    @property
+    def level(self) -> int: ...
+
+    @property
+    def tag(self) -> str: ...
+
+    @property
+    def value(self) -> str | None: ...
+
+
+class RecordLike(Protocol):
+    """A parsed level-0 record with its sub-lines flattened into one list.
+
+    Structural match for ``filter.models.GedcomRecord``, declared here so
+    the graph builder does not have to import a command package.
+    """
+
+    @property
+    def xref(self) -> str | None: ...
+
+    @property
+    def tag(self) -> str: ...
+
+    @property
+    def children(self) -> Sequence[SubLineLike]: ...
+
+
+# Family membership as the graph builder consumes it: (fam xref, parents, children)
+_FamilyTriple = tuple[str | None, list[str], list[str]]
+
+
+def _sort_pointer(
+    tag: str | None, value: Any, parents: list[str], children: list[str]
+) -> None:
+    """Append a FAM sub-line's pointer to the parent or child list.
+
+    Sub-lines that are not HUSB/WIFE/CHIL, carry no value, or whose value
+    is not a resolvable xref are ignored -- a dangling pointer is still an
+    xref and is kept, but ``1 CHIL`` with nothing after it is not.
+    """
+    if tag in ("HUSB", "WIFE"):
+        target = parents
+    elif tag == "CHIL":
+        target = children
+    else:
+        return
+    if not value:
+        return
+    xref = extract_xref(value)
+    if xref:
+        target.append(xref)
+
+
+def _families_from_file(file_path: Path) -> Iterator[_FamilyTriple]:
+    """Yield family membership by re-parsing the file with ged4py."""
+    with GedcomReader(str(file_path)) as reader:
+        for fam_rec in reader.records0("FAM"):
+            parents: list[str] = []
+            children: list[str] = []
+            for sub in fam_rec.sub_records:
+                _sort_pointer(sub.tag, sub.value, parents, children)
+            yield fam_rec.xref_id, parents, children
+
+
+def _families_from_records(records: Iterable[RecordLike]) -> Iterator[_FamilyTriple]:
+    """Yield family membership from already-parsed records."""
+    for rec in records:
+        if rec.tag != "FAM":
+            continue
+        parents: list[str] = []
+        children: list[str] = []
+        for line in rec.children:
+            # ged4py exposes only immediate subordinates; this child list is
+            # flat and spans every level, so anything deeper than 1 would add
+            # edges the file-path route never sees.
+            if line.level == 1:
+                _sort_pointer(line.tag, line.value, parents, children)
+        yield rec.xref, parents, children
+
+
+def _add_family(
+    graph: ParentChildGraph,
+    fam_xref: str | None,
+    parents: list[str],
+    children: list[str],
+) -> None:
+    """Add one family's parent-child and couple edges to the graph."""
+    for child in children:
+        for parent in parents:
+            child_parents = graph.parents_of.setdefault(child, [])
+            if parent not in child_parents:
+                child_parents.append(parent)
+            parent_children = graph.children_of.setdefault(parent, [])
+            if child not in parent_children:
+                parent_children.append(child)
+
+    # Cap to 2 parents for couples ONLY — child-parent edges use full list
+    if len(parents) > 2:
+        logger.warning(
+            "FAM %s has %d parents; using first 2 for couples",
+            fam_xref,
+            len(parents),
+        )
+    couple_parents = parents[:2]
+    for i, p1 in enumerate(couple_parents):
+        for p2 in couple_parents[i + 1 :]:
+            graph.couples.setdefault(p1, set()).add(p2)
+            graph.couples.setdefault(p2, set()).add(p1)
+
+
+def build_parent_child_graph(
+    source: Path | str | os.PathLike[str] | Iterable[RecordLike],
+) -> ParentChildGraph:
     """Build directed parent-child graph from FAM records.
+
+    ``source`` is either a path to a GEDCOM file, which is parsed with
+    ged4py, or an iterable of level-0 records that has already been parsed.
+    Both forms feed the same edge-building code and produce equal graphs;
+    callers that already hold the records should pass them rather than pay
+    for a second parse of the file.
+
+    A path may be a ``Path``, a ``str`` or any other ``os.PathLike``. A bare
+    ``str`` is always a path and never a sequence of records -- it is
+    iterable, so the records branch would walk it one character at a time.
 
     Processes HUSB/WIFE as parents and CHIL as children.
     Builds edges per-parent (not per-couple) to handle single-parent families.
     """
     graph = ParentChildGraph()
 
-    with GedcomReader(str(file_path)) as reader:
-        for fam_rec in reader.records0("FAM"):
-            parents: list[str] = []
-            children: list[str] = []
-
-            for sub in fam_rec.sub_records:
-                if sub.tag in ("HUSB", "WIFE") and sub.value:
-                    xref = extract_xref(sub.value)
-                    if xref:
-                        parents.append(xref)
-                elif sub.tag == "CHIL" and sub.value:
-                    xref = extract_xref(sub.value)
-                    if xref:
-                        children.append(xref)
-
-            for child in children:
-                for parent in parents:
-                    child_parents = graph.parents_of.setdefault(child, [])
-                    if parent not in child_parents:
-                        child_parents.append(parent)
-                    parent_children = graph.children_of.setdefault(parent, [])
-                    if child not in parent_children:
-                        parent_children.append(child)
-
-            # Cap to 2 parents for couples ONLY — child-parent edges use full list
-            if len(parents) > 2:
-                logger.warning(
-                    "FAM %s has %d parents; using first 2 for couples",
-                    fam_rec.xref_id,
-                    len(parents),
-                )
-            couple_parents = parents[:2]
-            for i, p1 in enumerate(couple_parents):
-                for p2 in couple_parents[i + 1 :]:
-                    graph.couples.setdefault(p1, set()).add(p2)
-                    graph.couples.setdefault(p2, set()).add(p1)
+    families = (
+        _families_from_file(Path(source))
+        if isinstance(source, (str, os.PathLike))
+        else _families_from_records(source)
+    )
+    for fam_xref, parents, children in families:
+        _add_family(graph, fam_xref, parents, children)
 
     return graph
 

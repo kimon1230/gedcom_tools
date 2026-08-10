@@ -19,5 +19,67 @@ MAX_MARRIAGE_AGE = 80
 MAX_FIRST_CHILD_AGE = 70  # Exclude implausible ages from first-child stats
 MAX_SPOUSAL_AGE_GAP = 50
 
-# File size limit for byte-level operations (filter, convert)
+# Reject threshold for byte-level operations (filter, convert). This is a
+# backstop against absurd input, NOT a statement that files near it will work:
+# filter holds the raw bytes, the decoded text, one object per line and one per
+# record all at once, which measures at roughly 25x the file size (more on files
+# with very short lines). A file at this cap would need something like 12 GB of
+# RAM and would die of memory exhaustion long before the check mattered.
+#
+# The practical ceiling on an ordinary machine is nearer 50-80 MB. Lowering the
+# constant to match was considered and rejected: it would reject files that
+# process fine today to guard against a user exhausting their own memory with
+# their own file. The real fix is to stream the filter parse - see the note in
+# ~/.claude/plans/gedcom_tools/ on why that is not a small change.
 MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024  # 500 MB
+
+# Ceiling on the note text `stats` holds in memory while collecting, so that
+# language detection can run off a single read of the file. A tree big enough
+# to blow this is pathological - the whole royal92 fixture has no notes at all
+# - but a file that is mostly note text would otherwise balloon. Past the cap
+# the buffer is dropped and detection falls back to a second pass over the
+# file, trading the time back for a bounded footprint.
+MAX_NOTE_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
+
+# Tags on INDI sub-records that are NOT events/attributes.
+# Shared by the languages command and the stats collector so both agree on
+# what counts as an event when attributing notes.
+INDI_NON_EVENT_TAGS = frozenset(
+    {
+        "NAME",
+        "SEX",
+        "NOTE",
+        "FAMC",
+        "FAMS",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "RFN",
+        "AFN",
+        "REFN",
+        "RIN",
+        "ALIA",
+        "ANCI",
+        "DESI",
+        "SUBM",
+        "ASSO",
+        "RESN",
+    }
+)
+
+# Tags on FAM sub-records that are NOT events
+FAM_NON_EVENT_TAGS = frozenset(
+    {
+        "HUSB",
+        "WIFE",
+        "CHIL",
+        "NCHI",
+        "NOTE",
+        "SOUR",
+        "OBJE",
+        "CHAN",
+        "REFN",
+        "RIN",
+        "SUBM",
+    }
+)

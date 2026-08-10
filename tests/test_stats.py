@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gedcom_tools.commands.stats import (
     CoverageStats,
     FamilyData,
@@ -16,16 +18,30 @@ from gedcom_tools.commands.stats import (
     StatsResult,
     TimelineEntry,
 )
+from gedcom_tools.commands.stats import collector as stats_collector
+from gedcom_tools.constants import EXIT_ERROR
 from gedcom_tools.progress import Colors
 from gedcom_tools.utils import EncodingInfo
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# StatsCollector builds a GedcomLanguageDetector for any file with INDI or FAM
+# records, and on a cold cache that pulls a 126 MB model off a CDN. Nearly every
+# test in here goes down that path, so the whole module runs against the stub
+# from conftest; the handful of tests that care what the detector says install
+# their own. See tests/conftest.py::_fast_lingua.
+pytestmark = pytest.mark.usefixtures("_fast_lingua")
 
-def _collect(ged: Path, *, top_n: int = 10) -> StatsResult:
+
+def _collector(ged: Path, *, top_n: int = 10) -> StatsCollector:
+    """Build a collector for tests that need to inspect it after collection."""
     return StatsCollector(
         file_path=ged, quiet=True, verbose=False, no_color=True, top_n=top_n
-    ).collect()
+    )
+
+
+def _collect(ged: Path, *, top_n: int = 10) -> StatsResult:
+    return _collector(ged, top_n=top_n).collect()
 
 
 class TestDataClasses:
@@ -593,6 +609,320 @@ class TestCollectorBasic:
         assert result.generation_depth == 3
 
 
+def _write_father_chain(path: Path, generations: int) -> None:
+    """Write a pedigree that is a single unbroken father chain.
+
+    @I1@ is the youngest; @I{generations}@ is the apical ancestor.
+    """
+    lines = ["0 HEAD", "1 SOUR Test", "1 GEDC", "2 VERS 5.5.1", "1 CHAR UTF-8"]
+
+    for i in range(1, generations + 1):
+        lines.append(f"0 @I{i}@ INDI")
+        lines.append(f"1 NAME Person{i} /Chain/")
+        lines.append("1 SEX M")
+        if i < generations:
+            lines.append(f"1 FAMC @F{i}@")
+        if i > 1:
+            lines.append(f"1 FAMS @F{i - 1}@")
+
+    for i in range(1, generations):
+        lines.append(f"0 @F{i}@ FAM")
+        lines.append(f"1 HUSB @I{i + 1}@")
+        lines.append(f"1 CHIL @I{i}@")
+
+    lines.append("0 TRLR")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestGenerationDepthTraversal:
+
+    def test_very_long_chain_does_not_overflow_stack(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "deep_chain.ged"
+        _write_father_chain(gedcom, 3000)
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 3000
+        assert result.earliest_generation is not None
+        assert result.earliest_generation.xref == "@I1@"
+
+    def test_shared_ancestor_depth_is_order_independent(self, tmp_path: Path) -> None:
+        # @S1@ is an ancestor of @X1@ twice over: once as the father (a
+        # single hop) and once through a four-generation maternal line.
+        gedcom = tmp_path / "pedigree_collapse.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @A1@ INDI
+1 NAME Apex /Collapse/
+1 SEX M
+1 FAMS @FA1@
+0 @A2@ INDI
+1 NAME Second /Collapse/
+1 SEX M
+1 FAMC @FA1@
+1 FAMS @FA2@
+0 @A3@ INDI
+1 NAME Third /Collapse/
+1 SEX M
+1 FAMC @FA2@
+1 FAMS @FA3@
+0 @S1@ INDI
+1 NAME Shared /Collapse/
+1 SEX M
+1 FAMC @FA3@
+1 FAMS @FM1@
+1 FAMS @FX1@
+0 @M1@ INDI
+1 NAME Mother1 /Collapse/
+1 SEX F
+1 FAMC @FM1@
+1 FAMS @FM2@
+0 @M2@ INDI
+1 NAME Mother2 /Collapse/
+1 SEX F
+1 FAMC @FM2@
+1 FAMS @FM3@
+0 @M3@ INDI
+1 NAME Mother3 /Collapse/
+1 SEX F
+1 FAMC @FM3@
+1 FAMS @FX1@
+0 @X1@ INDI
+1 NAME Descendant /Collapse/
+1 SEX F
+1 FAMC @FX1@
+0 @FA1@ FAM
+1 HUSB @A1@
+1 CHIL @A2@
+0 @FA2@ FAM
+1 HUSB @A2@
+1 CHIL @A3@
+0 @FA3@ FAM
+1 HUSB @A3@
+1 CHIL @S1@
+0 @FM1@ FAM
+1 HUSB @S1@
+1 CHIL @M1@
+0 @FM2@ FAM
+1 WIFE @M1@
+1 CHIL @M2@
+0 @FM3@ FAM
+1 WIFE @M2@
+1 CHIL @M3@
+0 @FX1@ FAM
+1 HUSB @S1@
+1 WIFE @M3@
+1 CHIL @X1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 8
+        assert result.earliest_generation is not None
+        assert result.earliest_generation.xref == "@X1@"
+
+        # The shared ancestor holds a node property, not a traversal
+        # counter, so the memo must come out identical whichever end of
+        # the file the outer loop starts from.
+        forward: dict[str, int] = {}
+        for xref in collector.individuals:
+            collector._compute_generation_depth(xref, forward)
+
+        backward: dict[str, int] = {}
+        for xref in reversed(list(collector.individuals)):
+            collector._compute_generation_depth(xref, backward)
+
+        assert forward == backward
+        assert forward["@S1@"] == 4
+        assert forward["@M3@"] == 7
+        assert forward["@X1@"] == 8
+
+    def test_parent_cycle_terminates(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "cycle.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME First /Loop/
+1 SEX M
+1 FAMC @F2@
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Second /Loop/
+1 SEX M
+1 FAMC @F1@
+1 FAMS @F2@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I2@
+0 @F2@ FAM
+1 HUSB @I2@
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 2
+
+    def test_self_parent_cycle_terminates(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "self_parent.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Own /Father/
+1 SEX M
+1 FAMC @F1@
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 1
+
+    def test_five_generation_tree(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "five_gen.ged"
+        _write_father_chain(gedcom, 5)
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 5
+
+    def test_individual_without_famc_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "no_famc.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Alone /Rootless/
+1 SEX F
+0 @I2@ INDI
+1 NAME Also /Rootless/
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 1
+        assert collector._parent_xrefs("@I1@") == []
+
+    def test_famc_pointing_at_missing_family_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "dangling_famc.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Orphan /Pointer/
+1 SEX M
+1 FAMC @F99@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        result = collector.collect()
+
+        assert result.generation_depth == 1
+        assert collector._parent_xrefs("@I1@") == []
+
+    def test_famc_family_without_parents_is_depth_one(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "childless_parents.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Only /Child/
+1 SEX M
+1 FAMC @F1@
+0 @F1@ FAM
+1 CHIL @I1@
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        result = _collect(gedcom)
+
+        assert result.generation_depth == 1
+
+    def test_unknown_xref_has_no_parents(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "lookup.ged"
+        _write_father_chain(gedcom, 2)
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        collector.collect()
+
+        assert collector._parent_xrefs("@NOPE@") == []
+
+    def test_memo_is_reused_across_calls(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "memo.ged"
+        _write_father_chain(gedcom, 4)
+
+        collector = StatsCollector(
+            file_path=gedcom, quiet=True, verbose=False, no_color=True
+        )
+        collector.collect()
+
+        memo: dict[str, int] = {}
+        assert collector._compute_generation_depth("@I1@", memo) == 4
+        assert memo == {"@I1@": 4, "@I2@": 3, "@I3@": 2, "@I4@": 1}
+
+        # Second call for an already-resolved xref is a pure cache hit.
+        assert collector._compute_generation_depth("@I3@", memo) == 2
+        assert len(memo) == 4
+
+
 class TestEdgeCases:
 
     def test_empty_file(self, tmp_path: Path) -> None:
@@ -1126,6 +1456,9 @@ class TestEdgeCases:
         assert result.family_size is None or result.family_size.sample_size == 0
 
     def test_implausible_ages_filtered(self, tmp_path: Path) -> None:
+        # @I1@/@I2@ marry at 5 and 0; @I3@/@I4@ marry at 35 and 25. The second
+        # couple is the control: without it a regression that stopped emitting
+        # the statistic altogether would look identical to correct filtering.
         gedcom = tmp_path / "implausible.ged"
         gedcom.write_text(
             """\
@@ -1139,14 +1472,33 @@ class TestEdgeCases:
 1 SEX M
 1 BIRT
 2 DATE 1850
+1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Also /Young/
 1 SEX F
 1 BIRT
 2 DATE 1855
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Plausible /Groom/
+1 SEX M
+1 BIRT
+2 DATE 1820
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Plausible /Bride/
+1 SEX F
+1 BIRT
+2 DATE 1830
+1 FAMS @F2@
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I2@
+1 MARR
+2 DATE 1855
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
 1 MARR
 2 DATE 1855
 0 TRLR
@@ -1156,20 +1508,19 @@ class TestEdgeCases:
 
         result = _collect(gedcom)
 
-        if result.age_at_first_marriage:
-            male_n = (
-                result.age_at_first_marriage.male.sample_size
-                if result.age_at_first_marriage.male
-                else 0
-            )
-            female_n = (
-                result.age_at_first_marriage.female.sample_size
-                if result.age_at_first_marriage.female
-                else 0
-            )
-            assert male_n == 0 or female_n == 0
+        assert result.age_at_first_marriage is not None
+        male = result.age_at_first_marriage.male
+        female = result.age_at_first_marriage.female
+        assert male is not None
+        assert male.sample_size == 1
+        assert male.average == 35.0
+        assert female is not None
+        assert female.sample_size == 1
+        assert female.average == 25.0
 
     def test_marriage_without_spouse_birth(self, tmp_path: Path) -> None:
+        # @I1@/@I2@ have no birth dates, so their marriage yields no age.
+        # @I3@/@I4@ are the control that keeps the statistic populated.
         gedcom = tmp_path / "no_birth.ged"
         gedcom.write_text(
             """\
@@ -1181,12 +1532,31 @@ class TestEdgeCases:
 0 @I1@ INDI
 1 NAME John /Doe/
 1 SEX M
+1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Jane /Smith/
 1 SEX F
+1 FAMS @F1@
+0 @I3@ INDI
+1 NAME Dated /Groom/
+1 SEX M
+1 BIRT
+2 DATE 1850
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Dated /Bride/
+1 SEX F
+1 BIRT
+2 DATE 1855
+1 FAMS @F2@
 0 @F1@ FAM
 1 HUSB @I1@
 1 WIFE @I2@
+1 MARR
+2 DATE 1875
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
 1 MARR
 2 DATE 1875
 0 TRLR
@@ -1196,9 +1566,15 @@ class TestEdgeCases:
 
         result = _collect(gedcom)
 
-        if result.age_at_first_marriage:
-            assert result.age_at_first_marriage.male is None
-            assert result.age_at_first_marriage.female is None
+        assert result.age_at_first_marriage is not None
+        male = result.age_at_first_marriage.male
+        female = result.age_at_first_marriage.female
+        assert male is not None
+        assert male.sample_size == 1
+        assert male.average == 25.0
+        assert female is not None
+        assert female.sample_size == 1
+        assert female.average == 20.0
 
     def test_individual_without_xref_skipped(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "no_xref.ged"
@@ -1327,8 +1703,9 @@ class TestEdgeCases:
         result = _collect(gedcom)
 
         # John's first marriage age should be 25 (1875-1850), not 40
-        if result.age_at_first_marriage and result.age_at_first_marriage.male:
-            assert result.age_at_first_marriage.male.average == 25.0
+        assert result.age_at_first_marriage is not None
+        assert result.age_at_first_marriage.male is not None
+        assert result.age_at_first_marriage.male.average == 25.0
 
     def test_age_at_first_child_in_text_output(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "child_age_text.ged"
@@ -1423,20 +1800,22 @@ class TestEdgeCases:
         bad_file = tmp_path / "bad.ged"
         bad_file.write_text("not a valid gedcom file at all", encoding="utf-8")
 
-        args = Namespace(
-            file=bad_file,
-            format="text",
-            quiet=False,
-            verbose=True,
-            no_color=True,
-            top=10,
-        )
+        def make_args(*, verbose: bool) -> Namespace:
+            return Namespace(
+                file=bad_file,
+                format="text",
+                quiet=False,
+                verbose=verbose,
+                no_color=True,
+                top=10,
+            )
 
-        try:
-            result = run(args)
-            assert result != 0
-        except Exception:
-            pass
+        # Verbose keeps the traceback: the parse failure escapes run().
+        with pytest.raises(OSError, match="Unexpected EOF"):
+            run(make_args(verbose=True))
+
+        # Without it the same failure is reported as an exit code.
+        assert run(make_args(verbose=False)) == EXIT_ERROR
 
     def test_name_suffix_handling(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "suffix.ged"
@@ -1589,6 +1968,86 @@ class TestEdgeCases:
 
         assert result.individuals == 1
         assert len(result.top_surnames) == 0
+
+
+class TestEncodingDetectionFailure:
+    """The OSError arm on the encoding phase.
+
+    Driving this through `collect()` does not work: phase 2 opens its own
+    GedcomReader on the same truncated file and raises the identical OSError
+    with nothing to catch it, so the run dies before any assertion. The phase
+    is called on its own instead.
+    """
+
+    @staticmethod
+    def _truncated_header(tmp_path: Path) -> Path:
+        # guess_codec runs off the end of the header and raises OSError.
+        ged = tmp_path / "truncated.ged"
+        ged.write_bytes(b"0 HEAD\n1 CHAR")
+        return ged
+
+    def test_warns_and_reports_unknown(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        collector = StatsCollector(
+            file_path=self._truncated_header(tmp_path),
+            quiet=False,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        assert collector.encoding_info is not None
+        assert collector.encoding_info.encoding == "Unknown"
+        assert "Could not detect encoding" in capsys.readouterr().err
+
+    def test_quiet_suppresses_the_warning(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        collector = StatsCollector(
+            file_path=self._truncated_header(tmp_path),
+            quiet=True,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        assert collector.encoding_info is not None
+        assert collector.encoding_info.encoding == "Unknown"
+        assert capsys.readouterr().err == ""
+
+    def test_warning_text_is_sanitized(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The truncated-header fixture above cannot test this: its OSError
+        # carries no escape sequence, so the assertion would pass with the
+        # sanitize_error call reverted. The exception has to be injected.
+        # Patch the module-local name -- collector.py did `from ... import`.
+        def _boom(_path: Path) -> EncodingInfo:
+            raise OSError("boom \x1b[2J \x9b bad")
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.stats.collector.detect_encoding", _boom
+        )
+        collector = StatsCollector(
+            file_path=tmp_path / "anything.ged",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+        assert "[2J" not in err
+        assert "boom" in err and "bad" in err
 
 
 class TestCLIIntegration:
@@ -1748,6 +2207,90 @@ class TestGivenNameFrequency:
         assert result.top_given_names_male[0].name == "John"
         assert len(result.top_given_names_female) == 1
         assert result.top_given_names_female[0].name == "Mary"
+
+    def test_patronymic_name_ranks_its_given_name(self, tmp_path: Path) -> None:
+        """`/Ivanov/ Ivan Ivanovich` puts the given name after the surname.
+
+        ged4py hands that back as ("", "Ivanov", "Ivan Ivanovich"), and reading
+        the third element as a suffix dropped the person from the rankings.
+        """
+        gedcom = tmp_path / "patronymic.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME /Ivanov/ Ivan Ivanovich
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert result.top_given_names_male[0].name == "Ivan"
+        assert collector.individuals["@I1@"].name == "Ivanov Ivan Ivanovich"
+
+    def test_suffix_does_not_displace_the_given_name(self, tmp_path: Path) -> None:
+        """A real suffix must not reach the rankings, and must stay in `name`."""
+        gedcom = tmp_path / "suffix_given.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Smith/ Jr.
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        indi = collector.individuals["@I1@"]
+        assert indi.given_name == "John"
+        assert indi.name == "John Smith Jr."
+        assert result.top_given_names_male[0].name == "John"
+
+    def test_bare_suffix_ranks_as_a_given_name(self, tmp_path: Path) -> None:
+        """Documents the ambiguity we accepted rather than resolved.
+
+        `/Smith/ Jr.` is indistinguishable from the patronymic form at the
+        GEDCOM level, so the suffix is ranked as a given name. The patronymic
+        spelling is far commoner, and the old behaviour - excluding the person
+        from the rankings altogether - was the worse answer for both.
+        """
+        gedcom = tmp_path / "bare_suffix.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME /Smith/ Jr.
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert collector.individuals["@I1@"].name == "Smith Jr."
+        assert result.top_given_names_male[0].name == "Jr."
 
     def test_given_name_from_givn_subrecord(self, tmp_path: Path) -> None:
         gedcom = tmp_path / "givn_subrecord.ged"
@@ -3133,3 +3676,239 @@ class TestBirthPatterns:
 
         assert "Approximate:" in output
         assert "with full date:" in output
+
+
+class _ScriptDetector:
+    """Stand-in for GedcomLanguageDetector that classifies by Unicode block.
+
+    The real model costs seconds to load and these tests only care about which
+    notes reach the detector, not about what it makes of them.
+    """
+
+    min_length = 20
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def detect(self, text: str) -> tuple[str, bool]:
+        if len(text) < self.min_length:
+            return ("unknown", True)
+        for ch in text:
+            if "Ͱ" <= ch <= "Ͽ":
+                return ("el", False)
+            if "Ѐ" <= ch <= "ӿ":
+                return ("ru", False)
+        return ("en", False)
+
+
+NOTE_BUFFER_GEDCOM = """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Harker/
+1 SEX M
+1 NOTE @N1@
+1 NOTE The harbour master kept a ledger of every vessel that wintered here.
+1 BIRT
+2 DATE 12 MAR 1847
+2 NOTE @N2@
+1 DEAT
+2 NOTE
+1 RESI
+2 NOTE @N99@
+0 @I2@ INDI
+1 NAME Eleni /Papadaki/
+1 SEX F
+1 NOTE Η οικογένεια \
+μετανάστευσε \
+από τα βόρεια \
+χωριά τον χειμώνα.
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 NOTE @N1@
+1 MARR
+2 NOTE Another English note, comfortably past the minimum length for detection.
+0 @N1@ NOTE The family emigrated from the northern counties during the winter.
+0 @N2@ NOTE Δεύτερη \
+σημείωση στα \
+ελληνικά με αρκετό \
+κείμενο για \
+ανίχνευση.
+0 @N3@ NOTE Семья переехала \
+из северных деревень \
+зимой тысяча \
+восемьсот сорок \
+седьмого года.
+0 TRLR
+"""
+
+FANOUT_NOTE = (
+    "The parish register was rebound in 1893 and the earlier entries "
+    "were recopied by hand."
+)
+
+
+def _fanout_gedcom(records: int) -> str:
+    """A file where every individual points at the same top-level note."""
+    lines = ["0 HEAD", "1 SOUR Test", "1 GEDC", "2 VERS 5.5.1", "1 CHAR UTF-8"]
+    for i in range(1, records + 1):
+        lines += [f"0 @I{i}@ INDI", f"1 NAME Person{i} /Shared/", "1 NOTE @N1@"]
+    lines += [f"0 @N1@ NOTE {FANOUT_NOTE}", "0 TRLR", ""]
+    return "\n".join(lines)
+
+
+class TestNoteLanguageBuffering:
+    """Language detection runs off one read of the file, not two.
+
+    English lives in inline INDI/FAM notes and a referenced top-level note,
+    Greek in an inline note and a pointer target, Russian only in @N3@ which
+    nothing references - so the assertions cover the buffered walk, the
+    pointer resolution and the unreferenced-note post-pass at once.
+    """
+
+    EXPECTED = {"en", "el", "ru"}
+
+    @pytest.fixture
+    def note_ged(self, tmp_path: Path) -> Path:
+        path = tmp_path / "note_buffer.ged"
+        path.write_text(NOTE_BUFFER_GEDCOM, encoding="utf-8")
+        return path
+
+    @pytest.fixture(autouse=True)
+    def _stub_detector(
+        self, monkeypatch: pytest.MonkeyPatch, _fast_lingua: None
+    ) -> None:
+        # Depends on _fast_lingua so the module-wide stub is installed first and
+        # this one lands on top of it; relying on fixture ordering alone would
+        # leave which stub wins up to pytest.
+        monkeypatch.setattr(stats_collector, "GedcomLanguageDetector", _ScriptDetector)
+
+    @staticmethod
+    def _count_readers(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """Record every GedcomReader the collector opens."""
+        opened: list[str] = []
+        real = stats_collector.GedcomReader
+
+        def spy(path: str, *args: object, **kwargs: object) -> object:
+            opened.append(path)
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(stats_collector, "GedcomReader", spy)
+        return opened
+
+    def test_detects_within_budget_from_one_pass(
+        self, note_ged: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(note_ged)
+        result = collector.collect()
+
+        assert collector.detected_languages == self.EXPECTED
+        assert result.distinct_languages == 3
+        assert collector._note_buffer_overflow is False
+        assert len(opened) == 1
+
+    def test_detects_the_same_set_over_budget(
+        self, note_ged: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        budget = 200
+        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", budget)
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(note_ged)
+        result = collector.collect()
+
+        assert collector.detected_languages == self.EXPECTED
+        assert result.distinct_languages == 3
+        assert collector._note_buffer_overflow is True
+        # Pointer targets no longer contribute, so pin that the inline notes
+        # alone are what blow the budget. Without this the test goes vacuous
+        # the moment someone trims a note out of the fixture.
+        assert collector._note_bytes > budget
+        # The partial buffer is dropped, not detected on alongside the reread.
+        assert collector._note_texts == []
+        assert len(opened) == 2
+
+    def test_pointer_targets_are_not_buffered(self, note_ged: Path) -> None:
+        """@N1@ is referenced twice and buffered neither time."""
+        collector = _collector(note_ged)
+        collector.collect()
+
+        shared = "The family emigrated from the northern counties during the winter."
+        assert shared not in collector._note_texts
+        # It still gets detected - via the note_lookup post-pass.
+        assert collector.note_lookup["@N1@"] == shared
+        assert "en" in collector.detected_languages
+
+    def test_empty_note_is_skipped(self, note_ged: Path) -> None:
+        collector = _collector(note_ged)
+        collector.collect()
+
+        assert all(text for text in collector._note_texts)
+
+    def test_shared_note_reaches_the_detector_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gedcom = tmp_path / "fanout.ged"
+        gedcom.write_text(_fanout_gedcom(40), encoding="utf-8")
+
+        seen: list[str] = []
+
+        class CountingDetector(_ScriptDetector):
+            def detect(self, text: str) -> tuple[str, bool]:
+                seen.append(text)
+                return super().detect(text)
+
+        monkeypatch.setattr(stats_collector, "GedcomLanguageDetector", CountingDetector)
+
+        collector = _collector(gedcom)
+        collector.collect()
+
+        assert seen.count(FANOUT_NOTE) == 1
+        assert collector.detected_languages == {"en"}
+
+    def test_fan_out_does_not_trip_the_budget(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gedcom = tmp_path / "fanout.ged"
+        gedcom.write_text(_fanout_gedcom(40), encoding="utf-8")
+        # One copy of the shared note would already overrun this.
+        monkeypatch.setattr(StatsCollector, "max_note_buffer_bytes", 20)
+        opened = self._count_readers(monkeypatch)
+
+        collector = _collector(gedcom)
+        collector.collect()
+
+        assert collector._note_buffer_overflow is False
+        assert collector._note_bytes == 0
+        assert collector.detected_languages == {"en"}
+        assert len(opened) == 1
+
+    def test_no_notes_leaves_the_buffer_empty(self, tmp_path: Path) -> None:
+        gedcom = tmp_path / "no_notes.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Doe/
+1 SEX M
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+
+        collector = _collector(gedcom)
+        result = collector.collect()
+
+        assert collector._note_texts == []
+        assert collector._note_bytes == 0
+        assert result.distinct_languages == 0

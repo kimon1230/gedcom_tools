@@ -8,7 +8,7 @@ extracting subtrees rooted at a specific individual.
 
 from __future__ import annotations
 
-from pathlib import Path
+import sys
 
 from gedcom_tools.commands.filter.models import (
     UNLIMITED_DEPTH,
@@ -26,6 +26,12 @@ from gedcom_tools.graph import (
     find_ancestors,
     find_descendants,
 )
+
+# Tags whose removal would leave the output structurally invalid. These are
+# silently dropped from user-supplied --strip-tag values. Note that SUBM is
+# deliberately absent: stripping the submitter record is a legitimate privacy
+# operation and must keep working.
+_UNSTRIPPABLE_TAGS = frozenset({"HEAD", "TRLR"})
 
 
 def apply_strip_transforms(
@@ -68,9 +74,19 @@ def apply_strip_transforms(
     # 4. Strip-tag (user-specified tags, both record and line level)
     if spec.strip_tags:
         user_tags = {t.upper() for t in spec.strip_tags}
-        records, removed = _strip_records_by_tag(records, user_tags)
-        all_removed_xrefs.update(removed)
-        records = _strip_lines_by_tag(records, user_tags)
+        ignored = user_tags & _UNSTRIPPABLE_TAGS
+        if ignored:
+            names = ", ".join(sorted(ignored))
+            print(
+                f"Warning: Ignoring --strip-tag {names}: removing "
+                "these tags would produce an invalid GEDCOM file.",
+                file=sys.stderr,
+            )
+            user_tags -= ignored
+        if user_tags:
+            records, removed = _strip_records_by_tag(records, user_tags)
+            all_removed_xrefs.update(removed)
+            records = _strip_lines_by_tag(records, user_tags)
 
     return records, all_removed_xrefs
 
@@ -230,7 +246,6 @@ def _collect_dependent_xrefs(
 
 def extract_subtree(
     records: list[GedcomRecord],
-    file_path: Path,
     root_xref: str,
     ancestor_depth: int | None,
     descendant_depth: int,
@@ -245,7 +260,7 @@ def extract_subtree(
 
     Returns the filtered record list and the set of removed xrefs.
     """
-    graph = build_parent_child_graph(file_path)
+    graph = build_parent_child_graph(records)
 
     all_xrefs = collect_xrefs(records)
     if root_xref not in all_xrefs:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from gedcom_tools import cli
-from gedcom_tools.cli import _harden_streams, main
+from gedcom_tools.cli import _harden_streams, main, scrub_terminal_controls
 from gedcom_tools.constants import EXIT_SUCCESS
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -62,9 +62,9 @@ def test_redirected_stream_becomes_utf8(monkeypatch):
 def test_redirected_stream_then_writes_astral_text(monkeypatch):
     out, _ = _install(monkeypatch, _wrapper())
     _harden_streams()
-    out.write("Ανδρέου → Müller ✓\n")
+    out.write("Ζωγράφου → Müller ✓\n")
     out.flush()
-    assert out.buffer.getvalue().decode("utf-8") == "Ανδρέου → Müller ✓\n"
+    assert out.buffer.getvalue().decode("utf-8") == "Ζωγράφου → Müller ✓\n"
 
 
 def test_tty_keeps_encoding_and_only_gains_error_handler(monkeypatch):
@@ -131,6 +131,163 @@ def test_hardening_is_idempotent(monkeypatch):
     assert len(tty.calls) == 1
 
 
+class _TtyBytes(io.BytesIO):
+    """A buffer that claims to be a terminal, so the wrapper above it does too."""
+
+    def isatty(self):
+        return True
+
+
+def _tty_wrapper():
+    return io.TextIOWrapper(_TtyBytes(), encoding="utf-8", errors="strict", newline="")
+
+
+# Window title set, screen clear, an 8-bit CSI (which json.dumps passes through
+# raw), and a right-to-left override - all spelled inside a given name.
+OSC = "\x1b]0;pwned\x07"
+# The right-to-left override stays an escape on purpose: pasted raw, it
+# reorders this file in the editor of whoever reads it next.
+SPOOFED_NAME = f"Bob{OSC}\x1b[2J\x9b31m\u202e"
+
+RLO_UTF8 = "\u202e".encode()
+C1_CSI_UTF8 = "\x9b".encode()
+
+
+def _spoofed_file(tmp_path):
+    path = tmp_path / "spoofed.ged"
+    path.write_text(
+        "0 HEAD\n"
+        "1 SOUR test\n"
+        "1 GEDC\n"
+        "2 VERS 5.5.1\n"
+        "2 FORM LINEAGE-LINKED\n"
+        "1 CHAR UTF-8\n"
+        "0 @I1@ INDI\n"
+        f"1 NAME {SPOOFED_NAME} /Zed/\n"
+        "1 SEX M\n"
+        "0 TRLR\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestScrubTerminalControls:
+    def test_osc_c1_and_bidi_are_dropped(self):
+        scrubbed = scrub_terminal_controls(f"a{SPOOFED_NAME}b")
+        raw = scrubbed.encode("utf-8")
+        assert b"\x1b" not in raw
+        assert b"\x07" not in raw
+        assert C1_CSI_UTF8 not in raw
+        # An OSC stripped by a CSI-only regex leaves its payload on screen.
+        assert b"]0;pwned" not in raw
+        assert not set(scrubbed) & cli.BIDI_CHARS
+        assert scrubbed.startswith("aBob")
+
+    def test_every_bidi_character_goes(self):
+        assert scrub_terminal_controls("".join(cli.BIDI_CHARS)) == ""
+
+    def test_layout_whitespace_is_kept(self):
+        text = "name\tvalue\r\nnext\n"
+        assert scrub_terminal_controls(text) == text
+
+    def test_our_own_colour_and_erase_codes_survive(self):
+        # Colour only ever reaches a terminal, which is the one branch the
+        # filter sits on: stripping SGR here would disable colour outright.
+        line = "\r\x1b[K\x1b[32m✓ \x1b[2m[1/3]\x1b[0m done\x1b[0m"
+        assert scrub_terminal_controls(line) == line
+
+    @pytest.mark.parametrize(
+        "sequence", ["\x1b[2J", "\x1b[1;1H", "\x1b[?25l", "\x1b[3A"]
+    )
+    def test_other_escape_sequences_go(self, sequence):
+        assert scrub_terminal_controls(f"x{sequence}y") == "xy"
+
+    def test_unterminated_osc_loses_its_escape(self):
+        assert "\x1b" not in scrub_terminal_controls("\x1b]0;still typing")
+
+
+class TestTerminalControlFilter:
+    def test_writelines_is_filtered_too(self):
+        target = _wrapper(encoding="utf-8")
+        wrapped = cli._TerminalControlFilter(target)
+        wrapped.writelines([f"a{OSC}b\n", "c\n"])
+        wrapped.flush()
+        assert target.buffer.getvalue() == b"ab\nc\n"
+
+    def test_write_reports_the_length_it_was_given(self):
+        wrapped = cli._TerminalControlFilter(_wrapper(encoding="utf-8"))
+        assert wrapped.write("a\x1b[2Jb") == 6
+
+    def test_everything_else_reaches_the_real_stream(self):
+        target = _wrapper(encoding="utf-8")
+        wrapped = cli._TerminalControlFilter(target)
+        assert wrapped.encoding == "utf-8"
+        assert wrapped.isatty() is False
+
+
+class TestTerminalOutputIsFiltered:
+    """One command through the real CLI, on both formatters: the filter is
+    installed once, and this is what proves it is installed at all."""
+
+    def _run(self, monkeypatch, argv):
+        out = _tty_wrapper()
+        _install(monkeypatch, out, _tty_wrapper())
+        code = main(argv)
+        out.flush()
+        return code, out.buffer.getvalue()
+
+    def test_text_output(self, monkeypatch, tmp_path):
+        code, data = self._run(
+            monkeypatch, ["search", str(_spoofed_file(tmp_path)), "surname=Zed"]
+        )
+        assert code == EXIT_SUCCESS
+        assert b"Zed" in data
+        assert b"]0;pwned" not in data
+        assert b"\x07" not in data
+        assert b"\x1b[2J" not in data
+        assert C1_CSI_UTF8 not in data
+        assert RLO_UTF8 not in data
+        # The report's own colours are still there.
+        assert b"\x1b[36m" in data
+
+    def test_json_output(self, monkeypatch, tmp_path):
+        code, data = self._run(
+            monkeypatch,
+            ["--format", "json", "search", str(_spoofed_file(tmp_path)), "surname=Zed"],
+        )
+        assert code == EXIT_SUCCESS
+        assert b'"surname": "Zed"' in data
+        # json.dumps escapes the C0 bytes for us but not these two.
+        assert C1_CSI_UTF8 not in data
+        assert RLO_UTF8 not in data
+
+
+class TestFileDestinedOutputIsNotFiltered:
+    """Two ways to end up with a file on disk, neither of which may lose a
+    byte: a command that opens the file itself, and a shell redirection."""
+
+    def test_filter_writes_the_bytes_it_read(self, monkeypatch, tmp_path):
+        source = _spoofed_file(tmp_path)
+        target = tmp_path / "filtered.ged"
+        _install(monkeypatch, _tty_wrapper(), _tty_wrapper())
+        assert main(["filter", str(source), "-o", str(target), "--strip-notes"]) == 0
+        written = target.read_bytes()
+        assert OSC.encode("utf-8") in written
+        assert C1_CSI_UTF8 in written
+        assert RLO_UTF8 in written
+
+    def test_export_through_redirected_stdout_keeps_the_bytes(
+        self, monkeypatch, tmp_path
+    ):
+        out, _ = _install(monkeypatch, _wrapper())
+        assert main(["export", str(_spoofed_file(tmp_path)), "--to", "csv"]) == 0
+        out.flush()
+        written = out.buffer.getvalue()
+        assert OSC.encode("utf-8") in written
+        assert C1_CSI_UTF8 in written
+        assert RLO_UTF8 in written
+
+
 class TestNonAsciiDataSurvivesRedirection:
     """The reported crash, at the level that actually matters: the tool's
     own glyphs are a small part of it, the user's names are the rest."""
@@ -145,10 +302,10 @@ class TestNonAsciiDataSurvivesRedirection:
 
     def test_search_text_output(self, monkeypatch):
         code, text = self._run(
-            monkeypatch, ["--no-color", "search", str(self.fixture), "surname=Ανδρέου"]
+            monkeypatch, ["--no-color", "search", str(self.fixture), "surname=Ζωγράφου"]
         )
         assert code == EXIT_SUCCESS
-        assert "Ανδρέου" in text
+        assert "Ζωγράφου" in text
 
     def test_search_json_output(self, monkeypatch):
         # search/formatter.py dumps with ensure_ascii=False, so the codec sees
@@ -156,10 +313,10 @@ class TestNonAsciiDataSurvivesRedirection:
         # regression test - Muller-with-umlaut encodes fine and proves nothing.
         code, text = self._run(
             monkeypatch,
-            ["--format", "json", "search", str(self.fixture), "surname=Ανδρέου"],
+            ["--format", "json", "search", str(self.fixture), "surname=Ζωγράφου"],
         )
         assert code == EXIT_SUCCESS
-        assert "Ανδρέου" in text
+        assert "Ζωγράφου" in text
 
     def test_validate_report(self, monkeypatch):
         code, text = self._run(

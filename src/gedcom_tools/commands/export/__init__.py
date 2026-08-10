@@ -11,7 +11,11 @@ from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_csv, format_json
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.utils import validate_input_file
+from gedcom_tools.utils import (
+    check_output_safety,
+    validate_input_file,
+    write_output_securely,
+)
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -33,10 +37,20 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         help="GEDCOM file to export",
     )
     parser.add_argument(
-        "--format",
+        "--to",
         choices=["csv", "json"],
         default=argparse.SUPPRESS,
         help="Export format (default: csv)",
+    )
+    # Deprecated alias for --to. Kept working so existing scripts do not break,
+    # but hidden because it collides with the global --format. It accepts the
+    # global vocabulary -- including "text" -- because both positions share one
+    # Namespace slot; run() folds "text" onto csv.
+    parser.add_argument(
+        "--format",
+        choices=["csv", "json", "text"],
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--table",
@@ -70,7 +84,8 @@ def register_subcommand(subparsers: _SubParsersAction[argparse.ArgumentParser]) 
         "--max-age",
         type=int,
         default=110,
-        help="Maximum age for living estimation (default: 110)",
+        help="Maximum plausible lifespan in years for living estimation "
+        "(default: 110, minimum: 1)",
     )
 
 
@@ -86,14 +101,19 @@ def run(args: Namespace) -> int:
     output_path: Path | None = getattr(args, "output", None)
     force: bool = getattr(args, "force", False)
 
-    # Resolve export format
-    fmt = getattr(args, "format", "text")
-    if fmt == "text":
-        fmt = "csv"
-    elif fmt not in ("csv", "json"):
+    # Resolve export format: --to wins, then --format (subparser alias or the
+    # global flag, which share one Namespace slot), then csv. A global
+    # "--format text" means "unspecified" here — export has no text output.
+    requested = getattr(args, "to", None) or getattr(args, "format", None)
+    fmt: str = requested if requested in ("csv", "json") else "csv"
+
+    # A ceiling below one year puts every dated individual past the plausible
+    # lifespan, so nobody is estimated living and --redact-living quietly does
+    # nothing while the JSON metadata still reports it as active.
+    if max_age < 1:
         print(
-            f"Error: --format {fmt} is not valid for the export command. "
-            "Use --format csv or --format json.",
+            f"Error: argument --max-age: must be at least 1 (got {max_age}). "
+            "It is the maximum plausible lifespan in years.",
             file=sys.stderr,
         )
         return EXIT_USAGE_ERROR
@@ -101,13 +121,13 @@ def run(args: Namespace) -> int:
     if err := validate_input_file(file_path):
         return err
 
-    # Overwrite protection
-    if output_path and output_path.exists() and not force:
-        print(
-            f"Error: {output_path} already exists. Use --force to overwrite.",
-            file=sys.stderr,
+    if output_path is not None:
+        safety_err = check_output_safety(
+            file_path, output_path, force=force, dry_run=False, command="Export"
         )
-        return EXIT_ERROR
+        if safety_err is not None:
+            print(safety_err, file=sys.stderr)
+            return EXIT_ERROR
 
     try:
         tracker = PhaseTracker(
@@ -134,14 +154,12 @@ def run(args: Namespace) -> int:
                 )
 
         if output_path:
-            output_path.write_text(output, encoding="utf-8")
-            if sys.platform != "win32":
-                try:
-                    import os
-
-                    os.chmod(output_path, 0o600)
-                except OSError:
-                    pass
+            write_err = write_output_securely(
+                output_path, output, force=force, encoding="utf-8"
+            )
+            if write_err is not None:
+                print(write_err, file=sys.stderr)
+                return EXIT_ERROR
             if not quiet:
                 print(f"Exported to {output_path}", file=sys.stderr)
         else:
@@ -149,8 +167,14 @@ def run(args: Namespace) -> int:
 
         return EXIT_SUCCESS
 
+    except BrokenPipeError:
+        # cli._run_command turns this into a clean exit; catching it in the
+        # generic handler below would report a closed pipe as a failure.
+        raise
     except Exception as e:
         if verbose:
             raise
-        print(f"Error: {e}", file=sys.stderr)
+        from gedcom_tools.utils import report_error
+
+        report_error(e)
         return EXIT_ERROR

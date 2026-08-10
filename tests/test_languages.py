@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import stat
+import sys
 import unicodedata
 from argparse import Namespace
 from pathlib import Path
@@ -36,47 +38,33 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 # ---------------------------------------------------------------------------
 
 
+def _detector_or_skip(**kwargs):
+    """Build a real detector, or skip if the model cannot be obtained.
+
+    On a cold cache the constructor pulls a 126 MB model off a CDN, which is
+    why every caller carries the `network` mark. When the fetch itself fails
+    we skip rather than error: a CDN outage or an offline developer should not
+    read as a suite full of red, and a mark cannot express "the network was
+    meant to be there and wasn't".
+
+    Cheap once the model is cached — fast-langdetect loads it lazily on the
+    first detect(), so a second construction is a Path.exists() call.
+    """
+    # Imported here, not at module scope: fast-langdetect drags in
+    # requests/urllib3 and costs a couple of hundred milliseconds that
+    # collecting the deselected suite has no reason to pay.
+    from fast_langdetect import FastLangdetectError
+
+    try:
+        return GedcomLanguageDetector(**kwargs)
+    except FastLangdetectError as exc:  # download failed, or the model won't load
+        pytest.skip(f"language model unavailable: {exc}")
+
+
 @pytest.fixture(scope="module")
 def detector():
     """Shared detector — loads language models once for all unit tests."""
-    return GedcomLanguageDetector()
-
-
-class _StubDetector:
-    """Lightweight stand-in for GedcomLanguageDetector.
-
-    Classifies text by Unicode script instead of loading the full model.
-    Used in integration tests to avoid the ~5s model preload.
-    """
-
-    def __init__(
-        self, min_length: int = MIN_TEXT_LENGTH_DEFAULT, **kwargs: object
-    ) -> None:
-        self.min_length = min_length
-
-    def detect(self, text: str | None) -> tuple[str, bool]:
-        if text is None:
-            return ("unknown", True)
-        text = unicodedata.normalize("NFC", text).strip()
-        if len(text) < self.min_length:
-            return ("unknown", True)
-        if not any(ch.isalpha() for ch in text):
-            return ("unknown", False)
-        for ch in text:
-            if "\u0370" <= ch <= "\u03ff" or "\u1f00" <= ch <= "\u1fff":
-                return ("el", False)
-        return ("en", False)
-
-
-@pytest.fixture
-def _fast_lingua(monkeypatch):
-    """Replace GedcomLanguageDetector with a fast stub everywhere."""
-    monkeypatch.setattr(
-        "gedcom_tools.commands.languages.GedcomLanguageDetector", _StubDetector
-    )
-    monkeypatch.setattr(
-        "gedcom_tools.commands.stats.collector.GedcomLanguageDetector", _StubDetector
-    )
+    return _detector_or_skip()
 
 
 def _ged(tmp_path: Path, name: str, body: str) -> Path:
@@ -91,9 +79,20 @@ def _ged(tmp_path: Path, name: str, body: str) -> Path:
 
 # ---------------------------------------------------------------------------
 # GedcomLanguageDetector unit tests
+#
+# Everything below that touches a real GedcomLanguageDetector -- through the
+# `detector` fixture or by constructing one directly -- is marked `network`:
+# the first construction on a cold cache fetches a 126 MB model from a CDN.
+# Run `pytest -m "not network"` to stay offline.
 # ---------------------------------------------------------------------------
 
 
+class TestDefaults:
+    def test_default_min_length(self):
+        assert MIN_TEXT_LENGTH_DEFAULT == 10
+
+
+@pytest.mark.network
 class TestDetector:
     def test_builds_with_preloaded_models(self, detector):
         assert detector is not None
@@ -171,14 +170,11 @@ class TestDetector:
         assert skipped is False
 
     def test_custom_min_length(self):
-        det = GedcomLanguageDetector(min_length=50)
+        det = _detector_or_skip(min_length=50)
         assert det.min_length == 50
         code, skipped = det.detect("This text is under fifty characters.")
         assert code == "unknown"
         assert skipped is True
-
-    def test_default_min_length(self):
-        assert MIN_TEXT_LENGTH_DEFAULT == 10
 
     def test_alphabetic_prefilter_digits(self, detector):
         code, skipped = detector.detect("1234567890123456789")
@@ -198,6 +194,7 @@ class TestLanguageNames:
             assert code in LANGUAGE_NAMES, f"Missing name for {code}"
 
 
+@pytest.mark.network
 class TestMarginAndConfidence:
     """Margin-based rejection and confidence floor."""
 
@@ -214,7 +211,7 @@ class TestMarginAndConfidence:
     def test_low_confidence_mocked(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "en", "score": 0.2},
@@ -228,7 +225,7 @@ class TestMarginAndConfidence:
     def test_thin_margin_mocked(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "en", "score": 0.5},
@@ -242,7 +239,7 @@ class TestMarginAndConfidence:
     def test_wide_margin_mocked(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "en", "score": 0.8},
@@ -254,11 +251,12 @@ class TestMarginAndConfidence:
         assert skipped is False
 
 
+@pytest.mark.network
 class TestCodeMap:
     def test_norwegian_mapped_to_nb(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "no", "score": 0.9},
@@ -272,7 +270,7 @@ class TestCodeMap:
     def test_unsupported_language_returns_unknown(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "sw", "score": 0.9},
@@ -1090,11 +1088,12 @@ class TestAutoDownload:
             _ensure_full_model()
 
 
+@pytest.mark.network
 class TestDetectorEdgeCases:
     def test_empty_result_from_detector(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = []
         det._detector = mock_detector
@@ -1105,7 +1104,7 @@ class TestDetectorEdgeCases:
     def test_exception_from_detector(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.side_effect = RuntimeError("model error")
         det._detector = mock_detector
@@ -1116,7 +1115,7 @@ class TestDetectorEdgeCases:
     def test_single_result_no_second(self):
         from unittest.mock import MagicMock
 
-        det = GedcomLanguageDetector()
+        det = _detector_or_skip()
         mock_detector = MagicMock()
         mock_detector.detect.return_value = [
             {"lang": "en", "score": 0.9},
@@ -1776,14 +1775,20 @@ class TestShowText:
             tmp_path,
             "0 @I1@ INDI\n"
             "1 NAME John /Doe/\n"
-            "1 NOTE This is a biographical note about John Doe person\n",
+            "1 NOTE This is a biographical note about John Doe person\n"
+            "0 @N1@ NOTE This standalone note has enough text for detection\n",
             language_filter="en",
         )
         data = json.loads(result.format_json(show_text=False))
-        if data["persons"]:
-            assert "texts" not in data["persons"][0]
-        if data["notes"]:
-            assert "texts" not in data["notes"][0]
+        # Both buckets are asserted populated first: an absent-key assertion on
+        # an empty list is vacuously true, so without these the test would keep
+        # passing if the payload stopped carrying persons or notes at all. The
+        # standalone note is in the fixture for the same reason -- an inline
+        # INDI-level note alone leaves data["notes"] permanently empty.
+        assert [person["xref"] for person in data["persons"]] == ["@I1@"]
+        assert [note["xref"] for note in data["notes"]] == ["@N1@"]
+        assert "texts" not in data["persons"][0]
+        assert "texts" not in data["notes"][0]
 
     def test_no_text_lines_without_show_text(self, tmp_path):
         result = self._collect(
@@ -2101,3 +2106,427 @@ class TestStatsLanguageIntegration:
             file_path=f, quiet=True, verbose=False, no_color=True
         ).collect()
         assert result.distinct_languages >= 1
+
+
+class TestEncodingDetectionFailure:
+    """The encoding warning must match what `stats` reports for the same file."""
+
+    @staticmethod
+    def _raiser(exc):
+        def _fail(_path):
+            raise exc
+
+        return _fail
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_warns_and_continues(self, tmp_path, monkeypatch, capsys):
+        from ged4py.parser import CodecError
+
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(CodecError("CHAR codec ascii is different from BOM codec")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert "Warning: Could not detect encoding:" in captured.err
+        assert "Unknown" in captured.out
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_quiet_suppresses_warning(self, tmp_path, monkeypatch, capsys):
+        from ged4py.parser import ParserError
+
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(ParserError("bad record")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=True,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        assert "Could not detect encoding" not in capsys.readouterr().err
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_warning_text_is_sanitized(self, tmp_path, monkeypatch, capsys):
+        # Byte-identical site to stats/collector.py, and it was missed once
+        # already by a fix that assumed there was only one. Patch the
+        # module-local name -- languages.py did `from ... import`.
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(OSError("boom \x1b[2J \x9b bad")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+        assert "[2J" not in err
+        assert "boom" in err and "bad" in err
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_unexpected_error_is_not_swallowed(self, tmp_path, monkeypatch, capsys):
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(ValueError("something else entirely")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=True,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) != EXIT_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Shared-reader behaviour
+# ---------------------------------------------------------------------------
+
+NOTE_LANGUAGES_GED = FIXTURES_DIR / "note_languages.ged"
+
+
+class TestSharedReader:
+    """collect() drives the NOTE pre-pass and the INDI/FAM pass off one reader.
+
+    royal92.ged and 555sample.ged contain no NOTE lines whatsoever, so neither
+    regression corpus puts a single byte through the pre-pass. This fixture is
+    the only one that does, which makes it the guard for the merged loop.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _model_available(self, request):
+        """The network-marked tests here build their detector deep inside the
+        collector, so the skip-on-download-failure guard has to be installed
+        from out here rather than taken as a fixture argument."""
+        if request.node.get_closest_marker("network"):
+            _detector_or_skip()
+
+    def _collect(self, **kwargs):
+        defaults = {"quiet": True, "no_color": True}
+        defaults.update(kwargs)
+        return LanguagesCollector(NOTE_LANGUAGES_GED, **defaults).collect()
+
+    def test_regression_corpus_has_no_notes(self):
+        for name in ("royal92.ged", "555sample.ged"):
+            path = FIXTURES_DIR / name
+            if not path.exists():
+                pytest.skip(f"{name} not in fixtures")
+            assert "NOTE" not in path.read_bytes().decode("latin-1")
+
+    def test_fixture_has_level_zero_notes(self):
+        lines = NOTE_LANGUAGES_GED.read_text(encoding="utf-8").splitlines()
+        level0_notes = [ln for ln in lines if ln.startswith("0 @") and " NOTE" in ln]
+        assert len(level0_notes) == 8
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_collect_opens_one_reader(self, monkeypatch):
+        """Two of the three readers are merged. detect_encoding still opens its
+        own via utils, which this patch deliberately does not intercept."""
+        from gedcom_tools.commands import languages as languages_mod
+
+        real_reader = languages_mod.GedcomReader
+        opened: list[str] = []
+
+        def counting_reader(path, *args, **kwargs):
+            opened.append(path)
+            return real_reader(path, *args, **kwargs)
+
+        monkeypatch.setattr(languages_mod, "GedcomReader", counting_reader)
+        self._collect()
+        assert len(opened) == 1
+
+    @pytest.mark.usefixtures("_fast_lingua")
+    def test_note_index_survives_second_records0_call(self, monkeypatch):
+        """The pre-pass consumes records0("NOTE") first. If the shared reader
+        could not be re-iterated, the INDI/FAM pass would come back empty."""
+        result = self._collect()
+        assert result.total_texts > 0
+
+    # The rest of this class asserts what the real model makes of real German,
+    # Greek and French text, so the stub cannot stand in for it.
+    @pytest.mark.network
+    def test_aggregate_counts(self):
+        result = self._collect()
+        assert result.total_texts == 9
+        assert result.skipped_short == 1
+        assert result.distinct_languages == 4
+        by_code = {row.code: row for row in result.rows}
+        assert by_code["en"].notes == 1
+        assert by_code["en"].stories == 2
+        assert by_code["en"].events == 1
+        assert by_code["el"].notes == 1
+        assert by_code["el"].stories == 1
+        assert by_code["el"].events == 0
+        assert by_code["de"].events == 2
+        assert by_code["fr"].events == 1
+
+    @pytest.mark.network
+    def test_pointer_notes_resolve_through_the_lookup(self):
+        """@N1@ lives after the INDI that points at it, so a story only lands
+        in the totals if the pre-pass ran to completion first."""
+        result = self._collect()
+        assert sum(row.stories for row in result.rows) == 3
+
+    @pytest.mark.network
+    def test_unreferenced_notes_classified_as_notes(self):
+        result = self._collect(language_filter="en")
+        assert result.note_xrefs == ["@N6@"]
+
+    @pytest.mark.network
+    def test_greek_filter_matches(self):
+        result = self._collect(language_filter="el")
+        assert result.person_xrefs == [("@I2@", "Ελένη Παπαδάκη")]
+        assert result.note_xrefs == ["@N7@"]
+        assert result.event_matches == []
+
+    @pytest.mark.network
+    def test_german_filter_spans_indi_and_fam(self):
+        result = self._collect(language_filter="de")
+        assert [(m.parent_xref, m.event_tag) for m in result.event_matches] == [
+            ("@F1@", None),
+            ("@I2@", "RESI"),
+        ]
+
+    @pytest.mark.network
+    def test_dangling_pointer_contributes_nothing(self):
+        """The DIV event points at @N99@, which no record ever defines. The
+        pointer is still marked referenced, so it must not resurface as an
+        unreferenced standalone note in the post-pass either."""
+        result = self._collect()
+        assert sum(row.events for row in result.rows) == 4
+        assert sum(row.notes for row in result.rows) == 2
+
+    @pytest.mark.network
+    def test_text_output_snapshot(self):
+        result = self._collect()
+        out = result.format_text(Colors(None, force_disable=True))
+        assert "Texts analyzed: 9 (1 skipped, too short)" in out
+        assert "Distinct languages: 4 (excluding unknown)" in out
+        for language in ("English", "Greek", "German", "French"):
+            assert language in out
+
+    @pytest.mark.network
+    def test_json_output_snapshot(self):
+        payload = json.loads(self._collect().format_json())
+        assert payload["mode"] == "aggregate"
+        assert payload["encoding"]["detected"] == "UTF-8"
+        assert payload["summary"] == {
+            "total_texts": 9,
+            "skipped_short": 1,
+            "distinct_languages": 4,
+            "min_length": MIN_TEXT_LENGTH_DEFAULT,
+        }
+        assert [row["code"] for row in payload["languages"]] == ["en", "el", "de", "fr"]
+
+    @pytest.mark.network
+    def test_cli_end_to_end(self):
+        assert main(["languages", str(NOTE_LANGUAGES_GED)]) == EXIT_SUCCESS
+
+    @pytest.mark.network
+    def test_verbose_reports_all_five_phases(self, capsys):
+        LanguagesCollector(
+            NOTE_LANGUAGES_GED, quiet=False, verbose=True, no_color=True
+        ).collect()
+        err = capsys.readouterr().err
+        for phase in (
+            "Detecting encoding",
+            "Loading language model",
+            "Building note index",
+            "Analyzing text content",
+            "Classifying unreferenced notes",
+        ):
+            assert phase in err
+
+
+class TestModelCacheLocation:
+    """The 126 MB model is handed to fasttext's native loader on a filename
+    check alone, so where it is cached is a trust boundary, not a preference.
+    """
+
+    def test_cache_is_not_in_a_world_writable_tmp(self) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert not str(_cache_dir()).startswith("/tmp")
+
+    def test_probe_and_download_agree_on_one_path(self) -> None:
+        # If these ever diverge the result is either a permanent false
+        # "already cached" or a 126 MB re-download on every run.
+        from gedcom_tools.language_detect import _cache_dir, _full_model_cache_dir
+
+        assert _full_model_cache_dir() == _cache_dir()
+
+    def test_xdg_cache_home_is_honoured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        assert _cache_dir() == tmp_path / "gedcom-tools"
+
+    def test_falls_back_to_home_cache_without_xdg(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools import language_detect
+
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        monkeypatch.setattr(language_detect.Path, "home", lambda: tmp_path)
+        assert language_detect._cache_dir() == tmp_path / ".cache" / "gedcom-tools"
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="mkdir(mode=...) is ignored on Windows"
+    )
+    def test_cache_is_created_private(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        created = _cache_dir()
+        assert stat.S_IMODE(created.stat().st_mode) == 0o700
+
+    def test_repeated_calls_do_not_fail_on_existing_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from gedcom_tools.language_detect import _cache_dir
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        assert _cache_dir() == _cache_dir()
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="mkdir(mode=...) is ignored on Windows"
+    )
+    def test_existing_loose_cache_is_tightened(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The case mkdir(mode=...) cannot reach: the directory is already
+        # there, so the mode argument is never consulted.
+        existing = tmp_path / "gedcom-tools"
+        existing.mkdir(mode=0o775)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert stat.S_IMODE(_cache_dir().stat().st_mode) == 0o700
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="umask and directory modes are POSIX-only"
+    )
+    def test_parent_created_under_a_umask_is_tightened(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # parents=True creates intermediate directories with the umask
+        # applied, not with mode=0o700.
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "nested" / "cache"))
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert stat.S_IMODE(_cache_dir().stat().st_mode) == 0o700
+
+    def test_unchmodable_cache_still_returns_a_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Shared CI caches and read-only mounts work today. Tightening one we
+        # do not own fails, and that must not take the command down with it.
+        import os
+
+        def refuse(*args: object, **kwargs: object) -> None:
+            raise PermissionError("not yours")
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        monkeypatch.setattr(os, "chmod", refuse)
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert _cache_dir() == tmp_path / "gedcom-tools"
+
+    def test_chmod_is_skipped_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import os
+
+        calls: list[object] = []
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(os, "chmod", lambda *a, **k: calls.append(a))
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        _cache_dir()
+        assert calls == []
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="symlink creation needs privileges on Windows"
+    )
+    def test_symlinked_cache_dir_is_used_without_chmod(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Symlinking the cache onto a bigger volume is an ordinary setup, so
+        # it keeps working. The trade is that the 0700 promise does not hold
+        # there: chmod'ing through the link would tighten a directory that is
+        # not ours to tighten.
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir(mode=0o775)
+        (tmp_path / "cache").mkdir()
+        (tmp_path / "cache" / "gedcom-tools").symlink_to(elsewhere)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+        called: list[object] = []
+        monkeypatch.setattr("os.chmod", lambda *a, **k: called.append(a))
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        assert _cache_dir() == tmp_path / "cache" / "gedcom-tools"
+        assert not called, "must not chmod through a symlink"
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="symlink creation needs privileges on Windows"
+    )
+    def test_symlinked_parent_is_allowed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ~/.cache pointed at another volume is an ordinary setup; only the
+        # leaf is a trust boundary.
+        real = tmp_path / "volume"
+        real.mkdir()
+        link = tmp_path / "cache"
+        link.symlink_to(real)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(link))
+
+        from gedcom_tools.language_detect import _cache_dir
+
+        created = _cache_dir()
+        assert created == link / "gedcom-tools"
+        assert (real / "gedcom-tools").is_dir()

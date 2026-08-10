@@ -28,9 +28,12 @@ from gedcom_tools.commands.stats.models import (
     TimelineEntry,
 )
 from gedcom_tools.constants import (
+    FAM_NON_EVENT_TAGS,
+    INDI_NON_EVENT_TAGS,
     MAX_FIRST_CHILD_AGE,
     MAX_LIFESPAN,
     MAX_MARRIAGE_AGE,
+    MAX_NOTE_BUFFER_BYTES,
     MAX_SPOUSAL_AGE_GAP,
     MIN_MARRIAGE_AGE,
     MIN_PARENT_AGE,
@@ -53,9 +56,12 @@ from gedcom_tools.utils import (
     count_sources_recursive,
     detect_encoding,
     extract_xref,
+    sanitize_error,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from ged4py.model import Record
 
 # More conservative than MAX_LIFESPAN (120) used in validation.
@@ -66,49 +72,12 @@ MAX_LIFESPAN_YEARS = 110
 # Practical limit for place hierarchy traversal
 MAX_LOCATION_DEPTH = 10
 
-# Tags on INDI sub-records that are NOT events/attributes
-_INDI_NON_EVENT_TAGS = frozenset(
-    {
-        "NAME",
-        "SEX",
-        "NOTE",
-        "FAMC",
-        "FAMS",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "RFN",
-        "AFN",
-        "REFN",
-        "RIN",
-        "ALIA",
-        "ANCI",
-        "DESI",
-        "SUBM",
-        "ASSO",
-        "RESN",
-    }
-)
-
-# Tags on FAM sub-records that are NOT events
-_FAM_NON_EVENT_TAGS = frozenset(
-    {
-        "HUSB",
-        "WIFE",
-        "CHIL",
-        "NCHI",
-        "NOTE",
-        "SOUR",
-        "OBJE",
-        "CHAN",
-        "REFN",
-        "RIN",
-        "SUBM",
-    }
-)
-
 
 class StatsCollector:
+
+    # Bound on the buffered note text, as an attribute so a test can shrink it
+    # far enough to exercise the fallback without a 64 MB fixture.
+    max_note_buffer_bytes: int = MAX_NOTE_BUFFER_BYTES
 
     def __init__(
         self,
@@ -132,9 +101,16 @@ class StatsCollector:
 
         # Language detection state
         self.note_lookup: dict[str, str] = {}
-        self.referenced_xrefs: set[str] = set()
         self.detected_languages: set[str] = set()
         self.lang_detector: GedcomLanguageDetector | None = None
+
+        # Note text gathered during collection, detected on in phase 3 once
+        # the model is loaded. Reading it here saves a second pass over the
+        # file; `_note_buffer_overflow` records that the budget blew and the
+        # second pass is needed after all.
+        self._note_texts: list[str] = []
+        self._note_bytes = 0
+        self._note_buffer_overflow = False
 
         # Calculate living threshold dynamically
         self.living_threshold_year = date.today().year - MAX_LIFESPAN_YEARS
@@ -170,9 +146,15 @@ class StatsCollector:
     def _detect_encoding(self) -> None:
         try:
             self.encoding_info = detect_encoding(self.file_path)
-        except (CodecError, ParserError, IntegrityError) as e:
+        except (CodecError, ParserError, IntegrityError, OSError) as e:
             if not self.quiet:
-                print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
+                # The exception is a ParserError carrying the verbatim offending
+                # GEDCOM line, or an OSError carrying the input path -- both
+                # attacker-influenced, both printed straight to a terminal.
+                print(
+                    f"Warning: Could not detect encoding: {sanitize_error(str(e))}",
+                    file=sys.stderr,
+                )
             self.encoding_info = EncodingInfo(encoding="Unknown")
 
     def _collect_data(self, spinner: object) -> None:
@@ -197,66 +179,116 @@ class StatsCollector:
 
                 if tag == "INDI":
                     self._collect_individual(record)
+                    self._buffer_notes(record, INDI_NON_EVENT_TAGS)
                 elif tag == "FAM":
                     self._collect_family(record)
+                    self._buffer_notes(record, FAM_NON_EVENT_TAGS)
 
-    def _detect_note_language(self, sub: Any, category: str) -> None:
-        """Detect language of a NOTE sub-record and track it."""
-        if self.lang_detector is None:
-            return
+    @staticmethod
+    def _iter_note_subs(
+        record: Record, non_event_tags: frozenset[str]
+    ) -> Iterator[Any]:
+        """Yield an INDI/FAM record's NOTE sub-records, event notes included."""
+        for sub in record.sub_records:
+            if sub.tag == "NOTE":
+                yield sub
+            elif sub.tag not in non_event_tags:
+                for subsub in sub.sub_records:
+                    if subsub.tag == "NOTE":
+                        yield subsub
 
+    def _note_text(self, sub: Any) -> str | None:
+        """Return an inline NOTE sub-record's text, or None if it is blank.
+
+        Pointers are not resolved here. Every caller must skip them first -
+        handed a `Pointer` this returns the xref string as if it were note
+        text. Pointer targets reach detection through `note_lookup` instead,
+        once each, in `_detect_languages`.
+        """
+        if sub.value is None:
+            return None
+        text = str(sub.value)
+        return text if text.strip() else None
+
+    def _buffer_notes(self, record: Record, non_event_tags: frozenset[str]) -> None:
+        """Stash a record's inline note text for the language detection phase.
+
+        Detection needs the model that phase 3 loads, but the notes are only
+        cheap to reach while the record is already parsed. Buffering the text
+        keeps stats to one read of the file.
+
+        Pointer notes are skipped: their text is already resident in
+        `note_lookup`, so buffering it again would charge one shared note
+        once per reference and detect on it once per reference too. A file
+        where thousands of records point at one research note used to blow
+        the budget on a single note's worth of text.
+
+        Consequence, deliberate: the budget bounds *inline* note text only.
+        `note_lookup` holds every top-level NOTE, fully resident and never
+        counted, so a file with tens of MB of top-level notes exceeds the
+        intended ceiling without ever setting `_note_buffer_overflow`. That
+        predates the pointer skip - the lookup was never counted - and is
+        left alone here.
+        """
+        for sub in self._iter_note_subs(record, non_event_tags):
+            if isinstance(sub, Pointer):
+                continue
+
+            text = self._note_text(sub)
+            if text is None or self._note_buffer_overflow:
+                continue
+
+            self._note_bytes += len(text.encode("utf-8", "replace"))
+            if self._note_bytes > self.max_note_buffer_bytes:
+                # Drop the whole buffer, not just the overflowing note: phase
+                # 3 rereads the file, and detecting over a partial buffer as
+                # well would only duplicate the work.
+                self._note_buffer_overflow = True
+                self._note_texts.clear()
+                continue
+
+            self._note_texts.append(text)
+
+    def _detect_note_language(self, sub: Any) -> None:
+        """Detect the language of an inline NOTE sub-record and track it."""
         if isinstance(sub, Pointer):
-            xref = str(sub.value)
-            self.referenced_xrefs.add(xref)
-            text = self.note_lookup.get(xref)
-        elif sub.value is not None:
-            xref = None
-            text = str(sub.value)
-            if not text.strip():
-                return
-        else:
             return
-
-        if text is None:
-            return
-
-        text = unicodedata.normalize("NFC", text).strip()
-        if len(text) < self.lang_detector.min_length:
-            return
-
-        # Use xref as cache key for pointer notes
-        lang, was_skipped = self.lang_detector.detect(text)
-        if not was_skipped and lang != "unknown":
-            self.detected_languages.add(lang)
+        self._detect_note_language_text(self._note_text(sub))
 
     def _detect_languages(self) -> None:
-        """Run language detection across all collected INDI/FAM note sub-records."""
+        """Run language detection across all collected INDI/FAM note text."""
+        if self._note_buffer_overflow:
+            self._detect_languages_rereading()
+        else:
+            for text in self._note_texts:
+                self._detect_note_language_text(text)
+
+        # Post-pass over every top-level note, referenced or not. Neither the
+        # buffer nor the reread looks at pointers, so this is where a shared
+        # note gets detected - exactly once, however many records point at it.
+        for text in self.note_lookup.values():
+            self._detect_note_language_text(text)
+
+    def _detect_languages_rereading(self) -> None:
+        """Detect straight off the file when the note buffer blew its budget.
+
+        Slower, but only one note is resident at a time. The walk covers the
+        whole file rather than the tail: the notes already dropped from the
+        buffer would otherwise never be looked at. Pointer notes are skipped
+        here as they are in the buffer - `_detect_languages`' post-pass over
+        `note_lookup` covers them, once each.
+        """
         with GedcomReader(str(self.file_path)) as reader:
             for rec in reader.records0("INDI"):
-                for sub in rec.sub_records:
-                    if sub.tag == "NOTE":
-                        self._detect_note_language(sub, "stories")
-                    elif sub.tag not in _INDI_NON_EVENT_TAGS:
-                        for subsub in sub.sub_records:
-                            if subsub.tag == "NOTE":
-                                self._detect_note_language(subsub, "events")
+                for sub in self._iter_note_subs(rec, INDI_NON_EVENT_TAGS):
+                    self._detect_note_language(sub)
 
             for rec in reader.records0("FAM"):
-                for sub in rec.sub_records:
-                    if sub.tag == "NOTE":
-                        self._detect_note_language(sub, "events")
-                    elif sub.tag not in _FAM_NON_EVENT_TAGS:
-                        for subsub in sub.sub_records:
-                            if subsub.tag == "NOTE":
-                                self._detect_note_language(subsub, "events")
+                for sub in self._iter_note_subs(rec, FAM_NON_EVENT_TAGS):
+                    self._detect_note_language(sub)
 
-            # Post-pass: unreferenced top-level notes
-            for xref, text in self.note_lookup.items():
-                if xref not in self.referenced_xrefs:
-                    self._detect_note_language_text(text)
-
-    def _detect_note_language_text(self, text: str) -> None:
-        if self.lang_detector is None:
+    def _detect_note_language_text(self, text: str | None) -> None:
+        if self.lang_detector is None or text is None:
             return
         text = unicodedata.normalize("NFC", text).strip()
         if len(text) < self.lang_detector.min_length:
@@ -275,18 +307,28 @@ class StatsCollector:
         name_rec = record.sub_tag("NAME")
         if name_rec and name_rec.value:
             name_val = name_rec.value
-            # ged4py returns (given, surname, suffix) tuple
+            # ged4py returns (given, surname, trailing), where `trailing` is
+            # whatever followed the surname in the NAME value. That is a
+            # suffix in "John /Smith/ Jr." but further pieces of the given
+            # name in the patronymic form "/Ivanov/ Ivan Ivanovich".
             if isinstance(name_val, tuple) and len(name_val) >= 2:
                 given = name_val[0] or ""
                 surname = name_val[1] or ""
-                suffix = name_val[2] if len(name_val) > 2 else ""
-                # Store full name including suffix
+                trailing = name_val[2] if len(name_val) > 2 else ""
+                # Store full name including the trailing piece
                 name_parts = [given, surname]
-                if suffix:
-                    name_parts.append(suffix)
+                if trailing:
+                    name_parts.append(trailing)
                 data.name = " ".join(p for p in name_parts if p)
-                # Extract first given name (handle "John William" -> "John")
-                parts = given.split() if given else []
+                # Extract first given name (handle "John William" -> "John").
+                # With nothing before the surname, fall back to the trailing
+                # piece so "/Ivanov/ Ivan Ivanovich" ranks as "Ivan" instead
+                # of dropping out of the given-name rankings entirely.
+                # GEDCOM cannot tell a trailing given-name piece from a
+                # suffix here, so "/Smith/ Jr." does rank "Jr." as a given
+                # name. No rule gets both right; the patronymic form is the
+                # commoner one, and losing the person is worse either way.
+                parts = (given or trailing).split()
                 data.given_name = parts[0] if parts else ""
                 if not data.surname:
                     data.surname = surname
@@ -346,11 +388,11 @@ class StatsCollector:
         # Family links and other data
         for sub in record.sub_records:
             if sub.tag == "FAMC" and sub.value:
-                fam_xref = self._extract_xref(sub.value)
+                fam_xref = extract_xref(sub.value)
                 if fam_xref and not data.famc_xref:
                     data.famc_xref = fam_xref
             elif sub.tag == "FAMS" and sub.value:
-                fam_xref = self._extract_xref(sub.value)
+                fam_xref = extract_xref(sub.value)
                 if fam_xref:
                     data.fams_xrefs.append(fam_xref)
             elif sub.tag == "NOTE":
@@ -376,11 +418,11 @@ class StatsCollector:
 
         for sub in record.sub_records:
             if sub.tag == "HUSB" and sub.value:
-                data.husb_xref = self._extract_xref(sub.value)
+                data.husb_xref = extract_xref(sub.value)
             elif sub.tag == "WIFE" and sub.value:
-                data.wife_xref = self._extract_xref(sub.value)
+                data.wife_xref = extract_xref(sub.value)
             elif sub.tag == "CHIL" and sub.value:
-                chil_xref = self._extract_xref(sub.value)
+                chil_xref = extract_xref(sub.value)
                 if chil_xref:
                     data.chil_xrefs.append(chil_xref)
 
@@ -406,10 +448,6 @@ class StatsCollector:
         if date_rec is None or date_rec.value is None:
             return None
         return extract_year_from_date(date_rec.value)
-
-    @staticmethod
-    def _extract_xref(value: object) -> str | None:
-        return extract_xref(value)
 
     def _format_name(self, raw_name: str) -> str:
         """Format a GEDCOM name (remove slashes around surname)."""
@@ -593,7 +631,7 @@ class StatsCollector:
         deepest_indi: IndividualData | None = None
 
         for xref in self.individuals:
-            depth = self._compute_generation_depth(xref, memo, set())
+            depth = self._compute_generation_depth(xref, memo)
             if depth > max_depth:
                 max_depth = depth
                 deepest_indi = self.individuals[xref]
@@ -637,42 +675,71 @@ class StatsCollector:
                 avg_children=total_children / total_families,
             )
 
-    def _compute_generation_depth(
-        self, xref: str, memo: dict[str, int], visited: set[str]
-    ) -> int:
-        """Compute max ancestor depth for an individual using DFS."""
-        if xref in memo:
-            return memo[xref]
-        if xref in visited:  # Cycle detection
-            return 0
-        visited.add(xref)
-
+    def _parent_xrefs(self, xref: str) -> list[str]:
+        """Return the xrefs of an individual's recorded parents."""
         indi = self.individuals.get(xref)
         if not indi or not indi.famc_xref:
-            memo[xref] = 1
-            visited.discard(xref)
-            return 1
+            return []
 
         fam = self.families.get(indi.famc_xref)
         if not fam:
-            memo[xref] = 1
-            visited.discard(xref)
-            return 1
+            return []
 
-        parent_depths: list[int] = []
-        if fam.husb_xref:
-            parent_depths.append(
-                self._compute_generation_depth(fam.husb_xref, memo, visited)
-            )
-        if fam.wife_xref:
-            parent_depths.append(
-                self._compute_generation_depth(fam.wife_xref, memo, visited)
-            )
+        return [parent for parent in (fam.husb_xref, fam.wife_xref) if parent]
 
-        depth = 1 + max(parent_depths, default=0)
-        memo[xref] = depth
-        visited.discard(xref)
-        return depth
+    def _compute_generation_depth(self, xref: str, memo: dict[str, int]) -> int:
+        """Compute max ancestor depth for an individual.
+
+        Iterative post-order DFS over an explicit stack, so pedigrees with
+        very long parent chains cannot blow the interpreter stack. Results
+        are cached in ``memo`` and stay valid across calls: the depth of a
+        node is ``1 + max(parent depths)``, which never depends on the path
+        used to reach it. Ancestors currently on the traversal path are
+        skipped, contributing nothing to the max, which terminates cycles.
+        """
+        if xref in memo:
+            return memo[xref]
+
+        # Each entry is (xref, parents_expanded). A node is pushed once to
+        # queue its parents and a second time to fold their depths together.
+        stack: list[tuple[str, bool]] = [(xref, False)]
+        on_path: set[str] = set()
+
+        while stack:
+            current, expanded = stack.pop()
+
+            if expanded:
+                on_path.discard(current)
+                depths = [
+                    memo[parent]
+                    for parent in self._parent_xrefs(current)
+                    if parent in memo
+                ]
+                memo[current] = 1 + max(depths, default=0)
+                continue
+
+            # A node is never queued while it sits on the path, so any
+            # duplicate entry is resolved by the time it surfaces here.
+            if current in memo:
+                continue
+
+            parents = self._parent_xrefs(current)
+            if not parents:
+                memo[current] = 1
+                continue
+
+            on_path.add(current)
+            stack.append((current, True))
+            # Reversed, so parents pop in declaration order. A stack visits
+            # them backwards otherwise, and in a pedigree with a parent cycle
+            # the visit order decides which ancestor is still on the path when
+            # the other folds - so the two orders disagree on ~1% of cyclic
+            # inputs. Reversed matches the recursive version this replaced.
+            for parent in reversed(parents):
+                if parent not in memo and parent not in on_path:
+                    stack.append((parent, False))
+
+        return memo[xref]
 
     def _format_family_parents(self, fam: FamilyData) -> str:
         """Format family parents as 'Surname/Surname'."""
