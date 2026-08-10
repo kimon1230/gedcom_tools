@@ -95,6 +95,64 @@ def _lookup_text_codec(name: str) -> str | None:
     return info.name
 
 
+# Canonical codec names the auto-detect branch will accept from a file's own
+# ``1 CHAR`` header. Without this gate the file names its own decoder, and
+# ``utf-7`` is enough to manufacture records: ``+AAo-`` is plain-ASCII source
+# text that decodes to U+000A, so a NOTE value holding no newline at all becomes
+# extra level-0 lines once ``filter`` and ``convert`` decode the whole file and
+# split afterwards. An explicit ``--from`` is a different matter -- the user
+# asked for it -- so the override branch stays ungated.
+#
+# The membership below is enumerated, not generated. ``iso8859-12`` was never
+# assigned and ``codecs.lookup`` raises ``LookupError`` on it, so completing the
+# 1..16 run by hand puts a name in here that cannot resolve.
+#
+# ``gedcom`` (ANSEL) is deliberately absent: ``SOURCE_ENCODING_MAP["ANSEL"]``
+# returns it well before this gate, so an entry would be dead weight, and
+# ``codecs.lookup("gedcom")`` only succeeds once ``ansel.register()`` has run --
+# membership that depends on import order is worse than no membership at all.
+#
+# An allowlist rather than a denylist because "single-byte charmaps are safe"
+# is simply false: ``cp037`` decodes byte ``0x25`` to ``\n``, and every other
+# EBCDIC page does the same. There is no rule to write here, only a list.
+AUTO_DECLARED_CODECS: frozenset[str] = frozenset(
+    {
+        "utf-8",
+        "ascii",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "iso8859-1",
+        "iso8859-2",
+        "iso8859-3",
+        "iso8859-4",
+        "iso8859-5",
+        "iso8859-6",
+        "iso8859-7",
+        "iso8859-8",
+        "iso8859-9",
+        "iso8859-10",
+        "iso8859-11",
+        "iso8859-13",
+        "iso8859-14",
+        "iso8859-15",
+        "iso8859-16",
+        "cp1250",
+        "cp1251",
+        "cp1252",
+        "cp1253",
+        "cp1254",
+        "cp1255",
+        "cp1256",
+        "cp1257",
+        "cp1258",
+        "mac-roman",
+        "koi8-r",
+        "koi8-u",
+    }
+)
+
+
 def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None) -> str:
     """Resolve the source codec name from encoding info or user override."""
     if from_override is not None:
@@ -113,15 +171,26 @@ def resolve_source_codec(encoding_info: EncodingInfo, from_override: str | None)
     key = enc.lower()
     if key in GEDCOM_CHARSETS:
         return GEDCOM_CHARSETS[key]
+    # _lookup_text_codec folds the spelling variants ("UTF8", "ISO8859-1",
+    # "MACINTOSH") that real files carry; the gate then judges the canonical
+    # name rather than whatever the header happened to say.
     resolved = _lookup_text_codec(enc)
-    if resolved is not None:
+    if resolved is not None and resolved in AUTO_DECLARED_CODECS:
         return resolved
     msg = f"Cannot determine source encoding from '{enc}'. Use --from to specify."
     raise ValueError(msg)
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_C0_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# DEL and the C1 block go too. U+009B is an 8-bit CSI introducer -- a terminal in
+# 8-bit mode reads it as ESC[ -- so leaving it in defeats the whole point of a
+# function that exists to remove escape introducers. The range stops at \x9f:
+# \xa0 is NBSP and is ordinary text.
+#
+# \x0a is deliberately NOT stripped. It would stop a multi-line exception forging
+# a second "Error:" line, but it is also how every legitimately wrapped message
+# renders -- a visible change to all of them for a low-value spoof.
+_C0_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _BIDI_CHARS = frozenset(
     "\u200e\u200f\u061c"
     "\u202a\u202b\u202c\u202d\u202e"

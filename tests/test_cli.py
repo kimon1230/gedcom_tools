@@ -312,7 +312,8 @@ def test_broken_pipe_exits_success(tmp_path):
     wrong, and that only happens in a separate process.
     """
     sample = Path(__file__).parent / "fixtures" / "555sample.ged"
-    proc = subprocess.Popen(
+    # Fixed argv, no shell, no external input -- it runs this repo's own CLI.
+    proc = subprocess.Popen(  # noqa: S603
         [
             sys.executable,
             "-c",

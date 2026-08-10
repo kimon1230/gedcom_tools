@@ -137,10 +137,52 @@ class TestResolveSourceCodec:
         assert resolve_source_codec(info, None) == "utf-8"
 
     def test_detect_fallback_codecs_lookup(self) -> None:
-        # "iso-8859-1" is not in SOURCE_ENCODING_MAP or GEDCOM_CHARSETS,
-        # but codecs.lookup("iso-8859-1") succeeds.
+        # "iso-8859-1" is not in SOURCE_ENCODING_MAP or GEDCOM_CHARSETS, but it
+        # canonicalizes to an allowlisted name, so the fallback still resolves.
         info = EncodingInfo(encoding="iso-8859-1")
         assert resolve_source_codec(info, None) == "iso8859-1"
+
+    def test_detect_fallback_refuses_non_allowlisted(self) -> None:
+        # Same fallback path, but utf-7 turns +AAo- into a line break and would
+        # let the file's own header manufacture records downstream.
+        info = EncodingInfo(encoding="utf-7")
+        with pytest.raises(ValueError, match="Cannot determine source encoding"):
+            resolve_source_codec(info, None)
+
+    @pytest.mark.parametrize(
+        "declared", ["utf-7", "unicode_escape", "raw_unicode_escape"]
+    )
+    def test_detect_rejects_line_breaking_codecs(self, declared: str) -> None:
+        info = EncodingInfo(encoding=declared)
+        with pytest.raises(ValueError, match="Cannot determine source encoding"):
+            resolve_source_codec(info, None)
+
+    @pytest.mark.parametrize(
+        "declared", ["utf-7", "unicode_escape", "raw_unicode_escape"]
+    )
+    def test_override_still_allows_line_breaking_codecs(self, declared: str) -> None:
+        # The gate is about a file naming its own decoder. A user who types
+        # --from has made the choice themselves.
+        info = EncodingInfo(encoding=declared)
+        assert resolve_source_codec(info, declared)
+
+    @pytest.mark.parametrize(
+        ("declared", "expected"),
+        [
+            ("UTF8", "utf-8"),
+            ("UTF-16", "utf-16"),
+            ("MACINTOSH", "mac-roman"),
+            ("ISO8859-1", "iso8859-1"),
+            ("CP1252", "cp1252"),
+        ],
+    )
+    def test_detect_accepts_spelling_variants(
+        self, declared: str, expected: str
+    ) -> None:
+        # Real files spell these every which way; canonicalizing before the
+        # allowlist check is what keeps them working.
+        info = EncodingInfo(encoding=declared)
+        assert resolve_source_codec(info, None) == expected
 
     def test_detect_unknown_encoding_raises(self) -> None:
         info = EncodingInfo(encoding="BOGUS-ENCODING")

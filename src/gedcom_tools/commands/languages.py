@@ -29,6 +29,7 @@ from gedcom_tools.progress import Colors, PhaseTracker, glyphs
 from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
+    sanitize_error,
     validate_input_file,
     xref_sort_key,
 )
@@ -452,7 +453,11 @@ class LanguagesCollector:
         # Detect language and bump the counter for the given category
         if not text or not text.strip():
             return
-        assert self.detector is not None, "_detect_and_count called before collect()"
+        # A mypy narrowing guard, not a runtime check. Converting it to a raise
+        # would change behaviour to satisfy a linter.
+        assert (  # noqa: S101
+            self.detector is not None
+        ), "_detect_and_count called before collect()"
 
         if xref and xref in self._detection_cache:
             lang, was_skipped = self._detection_cache[xref]
@@ -514,7 +519,13 @@ class LanguagesCollector:
                 encoding_info = detect_encoding(self.file_path)
             except (CodecError, ParserError, IntegrityError, OSError) as e:
                 if not self.quiet:
-                    print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
+                    # Byte-identical to the stats site; sanitized for the same
+                    # reason -- the exception text is attacker-influenced.
+                    print(
+                        "Warning: Could not detect encoding: "
+                        f"{sanitize_error(str(e))}",
+                        file=sys.stderr,
+                    )
                 encoding_info = EncodingInfo(encoding="Unknown")
 
         with tracker.phase("Loading language model"):

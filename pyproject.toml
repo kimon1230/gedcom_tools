@@ -57,7 +57,17 @@ line-length = 88
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "UP", "S110", "BLE001"]
+# S is flake8-bandit in full; S110 is one of its members and is dropped as
+# redundant now that the whole ruleset is on.
+select = ["E", "W", "F", "I", "B", "UP", "S", "BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101: pytest is built on bare asserts; ~4,900 of them is the test suite, not a
+# finding. S108: the five hits are inert "/tmp/test.ged" string literals used as
+# JSON data (one of them asserts the cache dir is *not* under /tmp) -- nothing
+# touches the filesystem, so they do not contradict the tmp_path convention and
+# five inline noqas would be pure churn.
+"tests/**" = ["S101", "S108"]
 
 [tool.mypy]
 python_version = "3.11"

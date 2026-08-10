@@ -56,6 +56,7 @@ from gedcom_tools.utils import (
     count_sources_recursive,
     detect_encoding,
     extract_xref,
+    sanitize_error,
 )
 
 if TYPE_CHECKING:
@@ -147,7 +148,13 @@ class StatsCollector:
             self.encoding_info = detect_encoding(self.file_path)
         except (CodecError, ParserError, IntegrityError, OSError) as e:
             if not self.quiet:
-                print(f"Warning: Could not detect encoding: {e}", file=sys.stderr)
+                # The exception is a ParserError carrying the verbatim offending
+                # GEDCOM line, or an OSError carrying the input path -- both
+                # attacker-influenced, both printed straight to a terminal.
+                print(
+                    f"Warning: Could not detect encoding: {sanitize_error(str(e))}",
+                    file=sys.stderr,
+                )
             self.encoding_info = EncodingInfo(encoding="Unknown")
 
     def _collect_data(self, spinner: object) -> None:

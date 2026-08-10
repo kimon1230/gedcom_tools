@@ -2018,6 +2018,37 @@ class TestEncodingDetectionFailure:
         assert collector.encoding_info.encoding == "Unknown"
         assert capsys.readouterr().err == ""
 
+    def test_warning_text_is_sanitized(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The truncated-header fixture above cannot test this: its OSError
+        # carries no escape sequence, so the assertion would pass with the
+        # sanitize_error call reverted. The exception has to be injected.
+        # Patch the module-local name -- collector.py did `from ... import`.
+        def _boom(_path: Path) -> EncodingInfo:
+            raise OSError("boom \x1b[2J \x9b bad")
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.stats.collector.detect_encoding", _boom
+        )
+        collector = StatsCollector(
+            file_path=tmp_path / "anything.ged",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+        )
+
+        collector._detect_encoding()
+
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+        assert "[2J" not in err
+        assert "boom" in err and "bad" in err
+
 
 class TestCLIIntegration:
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import errno
 import os
 import sys
@@ -597,6 +598,30 @@ class TestSanitizeError:
     def test_empty_string(self) -> None:
         assert self._sanitize("") == ""
 
+    def test_del_stripped(self) -> None:
+        assert self._sanitize("a\x7fb") == "ab"
+
+    def test_c1_csi_introducer_stripped(self) -> None:
+        # U+009B is the 8-bit form of ESC[. A function whose job is removing
+        # escape introducers that let this one through was the whole defect.
+        assert self._sanitize("boom \x9b[2J bad") == "boom [2J bad"
+
+    def test_c1_upper_boundary_stripped(self) -> None:
+        assert self._sanitize("a\x9fb") == "ab"
+
+    def test_nbsp_preserved(self) -> None:
+        # The upper boundary matters: widening one further eats NBSP, which is
+        # ordinary text, and nothing else would notice.
+        assert self._sanitize("a\xa0b") == "a\xa0b"
+
+    def test_latin_extended_preserved(self) -> None:
+        assert self._sanitize("a\u0100b") == "a\u0100b"
+
+    def test_newline_deliberately_preserved(self) -> None:
+        # Not an oversight -- stripping \x0a would mangle every legitimately
+        # multi-line message to stop a low-value forged-"Error:" spoof.
+        assert self._sanitize("line1\nline2") == "line1\nline2"
+
     def test_combined_threats(self) -> None:
         msg = "\x1b[31m\x00bad\u202epath\u200e"
         result = self._sanitize(msg)
@@ -988,3 +1013,60 @@ class TestResolveSourceCodecRejectsNonTextCodecs:
     def test_error_names_the_offending_value(self) -> None:
         with pytest.raises(ValueError, match=r"Unknown source encoding: base64$"):
             utils.resolve_source_codec(self.INFO, "base64")
+
+
+class TestAutoDeclaredCodecs:
+    """The allowlist a file's own ``1 CHAR`` value is judged against."""
+
+    @pytest.mark.parametrize("name", sorted(utils.AUTO_DECLARED_CODECS))
+    def test_every_member_resolves_to_itself(self, name: str) -> None:
+        # Entries are stored canonical, so the gate can compare them directly
+        # against _lookup_text_codec's output. iso8859-12 is the trap here: it
+        # does not exist, and only an enumerated list keeps it out.
+        assert codecs.lookup(name).name == name
+
+    @pytest.mark.parametrize("name", sorted(utils.AUTO_DECLARED_CODECS))
+    def test_no_member_invents_line_breaks(self, name: str) -> None:
+        # The whole point of the gate: a codec that turns some other byte into
+        # \n or \r lets a NOTE value become structure once filter/convert split
+        # the decoded text. cp037 does exactly that with 0x25, which is why
+        # this is an allowlist and not a rule about single-byte charmaps.
+        #
+        # One-directional on purpose. The converse does not hold -- a lone 0x0a
+        # decodes to '' under all three utf-16 entries.
+        for i in range(256):
+            decoded = bytes([i]).decode(name, errors="ignore")
+            if "\n" in decoded or "\r" in decoded:
+                assert i in (
+                    0x0A,
+                    0x0D,
+                ), f"{name} turns byte {i:#04x} into a line break"
+
+    @pytest.mark.parametrize("name", sorted(utils.AUTO_DECLARED_CODECS))
+    def test_the_sweep_actually_decodes_something(self, name: str) -> None:
+        # errors="ignore" makes it easy to assert nothing about 256 empty
+        # strings. The utf-16 codecs need a second byte before they produce
+        # anything at all; everything else must manage it on one.
+        if any(bytes([i]).decode(name, errors="ignore") for i in range(256)):
+            return
+        assert any(
+            bytes([i, j]).decode(name, errors="ignore")
+            for i in range(256)
+            for j in range(256)
+        ), f"{name} decoded nothing at all -- the sweep above proved nothing"
+
+    def test_cp037_would_fail_the_line_break_sweep(self) -> None:
+        # Pins the counter-example the sweep exists to catch, so a future
+        # addition of an EBCDIC page cannot pass unnoticed.
+        assert bytes([0x25]).decode("cp037") == "\n"
+        assert "cp037" not in utils.AUTO_DECLARED_CODECS
+
+    def test_ansel_is_not_a_member(self) -> None:
+        # SOURCE_ENCODING_MAP answers "ANSEL" long before the gate, and
+        # codecs.lookup("gedcom") only works after ansel.register().
+        assert "gedcom" not in utils.AUTO_DECLARED_CODECS
+        assert utils.SOURCE_ENCODING_MAP["ANSEL"] == "gedcom"
+
+    def test_iso8859_12_is_not_a_codec(self) -> None:
+        with pytest.raises(LookupError):
+            codecs.lookup("iso8859-12")

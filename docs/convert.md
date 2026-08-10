@@ -100,6 +100,12 @@ gedcom-tools convert tree.ged --from iso-8859-7 --to utf-8 -o out.ged
 `--from` also accepts GEDCOM charset names (`ansel`, `unicode`, `utf-8`,
 `ascii`), which are mapped to their Python codec equivalents.
 
+Auto-detection is narrower than `--from`: a CHAR header naming a codec that can
+manufacture line breaks out of ordinary ASCII — UTF-7 and the `unicode_escape`
+family — is refused with `Cannot determine source encoding`, since `convert`
+decodes the whole file before splitting it and the header would otherwise choose
+where the lines fall. Naming the same codec with `--from` still works.
+
 ## CHAR Header Update
 
 The `1 CHAR` line under `0 HEAD` is automatically updated to reflect the target

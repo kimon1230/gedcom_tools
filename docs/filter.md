@@ -19,6 +19,7 @@ gedcom-tools filter <file> -o <output> [options]
 | Option | Description |
 |--------|-------------|
 | `-o, --output FILE` | Output file path (required) |
+| `--from CODEC` | Override source encoding detection (any Python codec name) |
 | `--force` | Overwrite existing output file |
 | `--dry-run` | Preview changes without writing output |
 | `-v, --verbose` | Show progress phases with timing |
@@ -76,16 +77,48 @@ gedcom-tools filter tree.ged -o clean.ged --strip-custom-tags --dry-run
 
 # Overwrite existing output file
 gedcom-tools filter tree.ged -o clean.ged --strip-notes --force
+
+# Override the source encoding when the CHAR header is wrong or unreadable
+gedcom-tools filter weird.ged -o clean.ged --strip-notes --from latin-1
 ```
+
+## Source Encoding
+
+The source encoding is read from the GEDCOM `1 CHAR` header, and the output is
+written back in the same codec. `--from CODEC` overrides that, skipping header
+detection entirely — which is what makes a file with a mangled or missing CHAR
+value filterable at all. It accepts any Python codec name (`latin-1`, `cp1252`,
+`iso-8859-7`) as well as the GEDCOM charset names `ansel`, `unicode`, `utf-8`
+and `ascii`.
+
+Auto-detection is deliberately narrower than `--from`. `filter` decodes the
+whole file and splits it into lines afterwards, so the codec named in the header
+decides where the line boundaries fall — and a codec such as UTF-7 spells a line
+break in plain ASCII (`+AAo-`), which turns a NOTE value into level-0 records
+that were never in the file. Only encodings that cannot do this are honoured
+from the header; anything else is refused with:
+
+```
+Error: Cannot determine source encoding from 'UTF-7'. Use --from to specify.
+```
+
+Passing `--from utf-7` processes the file anyway. The restriction is about a
+file choosing its own decoder, not about the codec being forbidden.
+
+Note that `validate` and `stats` read the same file through ged4py, which splits
+on bytes before decoding, so they are unaffected and will still report on it.
 
 ## How It Works
 
-The filter pipeline has four phases:
+Encoding is resolved first, before any phase begins — from the `1 CHAR` header,
+or straight from `--from` when it is given — so a file whose encoding cannot be
+determined is refused before the read starts. The pipeline itself has four
+phases:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Phase 1: Reading Input                                      │
-│  - Read raw bytes, strip BOM, detect encoding                │
+│  - Read raw bytes, strip BOM                                 │
 │  - Decode using the resolved source codec                    │
 └──────────────────────────────────────────────────────────────┘
                             │

@@ -727,7 +727,8 @@ class TestLazyRapidfuzzImport:
         import subprocess
         import sys
 
-        result = subprocess.run(
+        # Fixed argv, no shell: sys.executable -c on a literal body.
+        result = subprocess.run(  # noqa: S603
             [sys.executable, "-c", body],
             capture_output=True,
             text=True,

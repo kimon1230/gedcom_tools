@@ -2165,6 +2165,33 @@ class TestEncodingDetectionFailure:
         assert "Could not detect encoding" not in capsys.readouterr().err
 
     @pytest.mark.usefixtures("_fast_lingua")
+    def test_warning_text_is_sanitized(self, tmp_path, monkeypatch, capsys):
+        # Byte-identical site to stats/collector.py, and it was missed once
+        # already by a fix that assumed there was only one. Patch the
+        # module-local name -- languages.py did `from ... import`.
+        from gedcom_tools.commands.languages import run
+
+        monkeypatch.setattr(
+            "gedcom_tools.commands.languages.detect_encoding",
+            self._raiser(OSError("boom \x1b[2J \x9b bad")),
+        )
+        f = _ged(tmp_path, "corrupt.ged", "0 @I1@ INDI\n1 NAME John /Doe/\n1 SEX M\n")
+        args = Namespace(
+            file=f,
+            format="text",
+            quiet=False,
+            verbose=False,
+            no_color=True,
+            min_length=10,
+        )
+        assert run(args) == EXIT_SUCCESS
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "\x9b" not in err
+        assert "[2J" not in err
+        assert "boom" in err and "bad" in err
+
+    @pytest.mark.usefixtures("_fast_lingua")
     def test_unexpected_error_is_not_swallowed(self, tmp_path, monkeypatch, capsys):
         from gedcom_tools.commands.languages import run
 
