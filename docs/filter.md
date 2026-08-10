@@ -383,6 +383,13 @@ Appends `(dry run -- no file written)` to the output. No file is created.
 - **`--strip-custom-tags` is all-or-nothing** — no way to exclude specific
   custom tags from removal. Use `--strip-tag _TAG1 --strip-tag _TAG2` for
   selective removal.
+- **Record boundaries follow ged4py's line grammar** — so that `filter` and
+  `validate` cannot disagree about where a record starts. Two line shapes some
+  writers emit are therefore not record boundaries: an xref whose first
+  character is not alphanumeric (`0 @.X@ INDI`) and a line using tabs as its
+  internal delimiters. Both attach to the preceding record as child lines, which
+  means `--subtree` on that preceding xref carries them along, and
+  `--subtree @.X@` finds nothing.
 
 ## Related Commands
 

@@ -131,6 +131,12 @@ gedcom-tools export family.ged -o individuals.csv --force
   (not "None" or 0).
 - **Quoting**: Standard CSV quoting via Python's `csv.writer` — commas and
   double quotes in values are handled automatically.
+- **Formula neutralisation**: a value whose first character is `=`, `+`, `-`,
+  `@`, TAB or CR is written with a leading apostrophe, so a spreadsheet reads it
+  as text. Without this, a name or occupation from an untrusted tree opens as a
+  live formula — Excel's DDE syntax reaches as far as running a command. The
+  apostrophe is literal CSV data, so a value that is legitimately just `-` or
+  `@Home` reads back as `'-` and `'@Home`. JSON output is not affected.
 
 ## JSON Format
 

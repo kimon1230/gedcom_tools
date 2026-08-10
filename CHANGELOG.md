@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.2.1]
+## [1.3.0]
+
+A minor rather than a patch release: two of the security fixes below change what the tool produces for input it already accepted. `export --redact-living` now reads an unknown birth date as living, which on the 3,010-person `royal92.ged` reference file takes redaction from 357 individuals to 1,227, and `filter` no longer treats a non-alphanumeric xref or a tab-delimited line as a record boundary. Both are described in full below.
 
 ### Security
 - `export` wrote GEDCOM values into CSV cells verbatim, so a name, place or occupation beginning `=`, `+`, `-`, `@`, TAB or CR became a live spreadsheet formula. Opening an exported file from an untrusted tree in Excel could execute a DDE payload as the user — and the export writes a BOM, so Excel opens it as a sheet without prompting. Such values are now prefixed with a single quote. Note this is literal CSV data: a value that is legitimately just `-` or `@` now reads back with the prefix
@@ -31,6 +33,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Validation reported `[E001] Unresolved cross-reference` for GEDCOM's reserved escapes. `@#DGREGORIAN@` (calendar escape) and `@@` (a literal `@`) are not pointers, but reference collection accepted any `@...@` value, so an ordinary `2 TYPE @#DGREGORIAN@` failed a file that was valid
 - `export --format text` died with `invalid choice: 'text'`, naming an option `--help` does not show. The hidden alias now accepts the same vocabulary as the global flag and folds it to CSV, as it already did for every other unrecognised value
 - `languages` built the GEDCOM index twice, once for the note pre-pass and once for the individual/family pass. They now share a reader — about a second off a 5,000-person file
+- `stats` charged a shared note to its note-text buffer once for every record that pointed at it, and ran language detection on it that many times over. A tree where thousands of individuals cite one research note paid thousands of detections for one piece of text, and could blow the buffer budget on that note alone — which then forced the fallback second pass over the file. The results were never wrong, since that fallback re-reads and detects everything; the cost was. Pointers are now skipped where notes are buffered, and every top-level note is detected exactly once in a post-pass, referenced or not. On a fan-out test file this takes 3,000 detection calls to 1, and `stats --format json` is byte-identical on the reference files
 - `convert` could silently corrupt the file it wrote. On a file whose line endings were mixed, inserting a missing `1 CHAR` header sliced the first character off the following line; and a valueless `1 CHAR` line was not recognised on CRLF or CR input, so a second one was appended next to it. The header regexes are now line-ending agnostic and reuse the terminator the HEAD record actually carries
 - `convert --from` could not rescue the broken-header files it exists for. Encoding detection ran before the override was consulted and raised an error the command did not catch, so `--from ascii` on a file declaring an unknown charset still failed. Detection is now skipped entirely when `--from` is given, and the failure without it names `--from` as the remedy
 - Piping any command into a consumer that stops reading — `| head`, for instance — exited **120** instead of 0. `BrokenPipeError` reached the generic error handler, and the interpreter then failed to flush stdout at shutdown

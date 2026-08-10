@@ -94,11 +94,14 @@ gedcom_tools/
 ├── tests/
 │   ├── conftest.py              # Pytest fixtures
 │   ├── fixtures/                # Test GEDCOM files (555sample.ged, etc.)
+│   ├── test_ascii_decorations.py # --ascii reaches every decoration, per command
 │   ├── test_cli.py              # CLI integration tests
+│   ├── test_constants.py        # Shared tag-set definitions
 │   ├── test_dates.py            # Date parsing utility tests
 │   ├── test_graph.py            # Graph algorithm tests
 │   ├── test_isolated.py         # Isolated command tests
 │   ├── test_languages.py        # Languages command and language_detect tests
+│   ├── test_no_stray_glyphs.py  # No non-ASCII decoration escapes --ascii mode
 │   ├── test_progress.py         # Progress UI tests
 │   ├── test_stats.py            # Stats command tests
 │   ├── test_stats_schema.py     # JSON schema validation tests
@@ -109,6 +112,7 @@ gedcom_tools/
 │   ├── test_convert.py         # Convert command tests
 │   ├── test_filter_*.py       # Filter command tests (parser, writer, transforms, integration)
 │   ├── test_relationship.py    # Relationship command tests
+│   ├── test_stream_hardening.py # Stream reconfiguration at CLI entry
 │   ├── test_utils.py            # Shared utility tests
 │   └── test_validation/         # Validation engine tests
 ├── docs/
@@ -152,6 +156,7 @@ gedcom_tools/
 - `check_output_safety()` — validate output path (overwrite, same-file, directory existence)
 - `write_output_securely()` — the only sanctioned way to write an output file. Creates it `O_CREAT|O_EXCL|O_NOFOLLOW` at `0600`, so exported PII is never briefly world-readable and a symlink at the target is refused
 - `report_error()` / `sanitize_error()` — the shared error epilogue every command's generic handler calls, so all eleven print the same two-line shape with escape sequences stripped
+- `AUTO_DECLARED_CODECS` — the allowlist of codecs a file's own `1 CHAR` header may select. `filter` and `convert` decode the whole file before splitting it into lines, so the declared codec decides where the line boundaries fall; a codec that can spell a line terminator out of ordinary ASCII (UTF-7 and the `unicode_escape` family) can therefore manufacture records that were never in the input. Anything off the list is refused with `Cannot determine source encoding`. **Widen this only for codecs that cannot produce `\n` or `\r` from bytes that do not contain them.** `--from` bypasses it, which is the intended escape hatch: the restriction is about a *file* choosing its own decoder, not about the codec being forbidden
 
 **`dates.py`** — Date parsing and classification:
 - `extract_year_from_date()` — year extraction from GEDCOM date strings
@@ -180,6 +185,14 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 - **export** — Data extraction to CSV or JSON: collector builds ExportIndividual/ExportFamily from GEDCOM, formatters produce CSV (with optional BOM) or JSON (with meta section, alt_names, notes). Living estimation + privacy redaction via `--redact-living`
 - **convert** — Raw byte-level encoding transcoder: reads file as bytes, strips BOM, decodes with source codec, NFC-normalizes ANSEL sources, updates CHAR header, re-encodes in target codec. Supports auto-detection and `--from` override for non-standard codecs
 - **filter** — Line-level GEDCOM transformer: parses raw lines into records, applies strip transforms (record-level and line-level) and/or subtree extraction (BFS via ParentChildGraph), cleans dangling pointers, cascades empty families, serializes back preserving encoding/BOM/line endings
+
+**`filter/parser.py` invariant — `_LINE_RE` is derived from `ged4py.parser._RE_GEDCOM_LINE`, never hand-written.** `filter` is the one command that decides for itself where a record starts, so if its grammar and ged4py's disagree, a line `validate` reads as a whole record is one `filter` treats as text — and copies to the output untouched while counting it among the records removed. Deriving the pattern is what stops the two drifting. Three rules follow from it, each of which has to hold for the derivation to mean anything:
+
+- **Inherit the flags** — the compile is `_RE_GEDCOM_LINE.flags | re.A`, not a restated flag set. `re.A` is the one addition and it is load-bearing: upstream matches *bytes*, where `\d` is ASCII-only for free, and decoding the pattern to `str` silently loses that. Without it a level written in Devanagari numerals is a record boundary here and not in ged4py.
+- **Read groups by name**, not by position. Positional indices are a silent breakage the day the upstream pattern gains a group.
+- **Match against the same preprocessed line** ged4py matches against. A pattern derived from the right source but fed a differently-normalized string is no better than a hand-written one.
+
+The parity gate in `tests/test_filter_parser.py` calls production `parse_line()` and compares against ged4py across a large generated sample. It must keep calling the production function — reimplementing the comparison against `_LINE_RE` directly turns the gate into a test of itself.
 
 ### Validation Engine (4-Phase Design)
 
@@ -297,9 +310,14 @@ that genuinely need the real model carry `@pytest.mark.network`:
 pytest -m "not network"
 ```
 
-Verified against an empty `XDG_CACHE_HOME`: 2607 passed, 35 deselected, **zero
+Verified against an empty `XDG_CACHE_HOME`: 2797 passed, 35 deselected, **zero
 bytes** fetched. It costs about 0.5 percentage points of coverage, all of it in
 `src/gedcom_tools/language_detect.py`, so the run still clears the 95 % gate.
+
+Point `XDG_CACHE_HOME` somewhere outside `/tmp` when reproducing this.
+`TestModelCacheLocation` asserts the resolved cache directory is not in a
+world-writable temp dir, so a `mktemp -d` under `/tmp` fails that one test for
+reasons that have nothing to do with the code under test.
 
 Everything else is kept offline by the `_fast_lingua` stub in
 `tests/conftest.py`, which patches `GedcomLanguageDetector` at both import sites
@@ -429,6 +447,9 @@ pip-audit
 - `rapidfuzz` - Jaro-Winkler string similarity (used by compare command). Also imported lazily, for the same reason
 - `DoubleMetaphone` - Double Metaphone phonetic encoding for European name matching (used by search, compare, and duplicates commands via `--phonetic metaphone`)
 
+### Optional
+- `kimon-gedgraph` - GraphViz chart generation, declared as the `graph` extra (`pip install kimon-gedcom-tools[graph]`). **Reserved, not yet consumed by any import** — the REPL command's `graph` subcommand is what will use it. The extra ships ahead of that because the README and the 1.1.1 release notes already document the install. Import name is `gedgraph`, not the distribution name
+
 ### Development
 - `pytest` - Testing framework
 - `pytest-cov` - Coverage reporting
@@ -445,6 +466,14 @@ This project follows [Semantic Versioning](https://semver.org/).
 See [CHANGELOG.md](CHANGELOG.md) for release history and notable changes.
 
 When making changes:
-1. Update version in `pyproject.toml` and `src/gedcom_tools/__init__.py`
-2. Add entry to CHANGELOG.md under "Unreleased" section
-3. On release, move "Unreleased" items to new version section with date
+1. Update the version in `pyproject.toml` and `src/gedcom_tools/__init__.py` — they
+   must match, and nothing else in the repo hardcodes it. Everything that reports a
+   version imports `__version__`
+2. Add the entry straight to a `## [X.Y.Z]` section in CHANGELOG.md, creating it if
+   the version is new. **There is no `Unreleased` heading** — work in progress
+   accumulates under the version it will ship as, and the number is corrected if the
+   scope changes before release
+3. Version headings carry **no dates**. `## [1.2.0]`, not `## [1.2.0] - 2026-07-14`
+4. A change that alters output for input the tool already accepted is a minor, not a
+   patch, even when it arrives as the fix for a security defect — the user upgrading
+   sees different results either way

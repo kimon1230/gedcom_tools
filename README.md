@@ -1104,6 +1104,7 @@ in a specific format. See [Export Command](docs/export.md) for full details.
 **CSV output:**
 - UTF-8 BOM included only when writing to a file (`-o`), for Excel compatibility. Use `--no-bom` to suppress.
 - Multi-valued fields (family xrefs, children) are semicolon-delimited within cells.
+- A value starting `=`, `+`, `-`, `@`, TAB or CR gets a leading apostrophe so spreadsheets read it as text rather than a live formula. The apostrophe is literal data: a value that is legitimately `-` reads back as `'-`. JSON is unaffected.
 - See [Export Command](docs/export.md) for full column reference.
 
 **Living estimation:**
@@ -1325,7 +1326,7 @@ Filtered tree.ged (780 → 730 records) → clean.ged
 - Strip operations remove whole records and/or inline sub-lines, with automatic child-line cascading
 - Subtree extraction uses BFS traversal on a directed parent-child graph, then transitively collects referenced SOUR/NOTE/OBJE/REPO records
 - After filtering, dangling pointer references are cleaned and empty families are cascade-removed
-- Encoding, BOM, and line endings are preserved from the input
+- Encoding, BOM, and line endings are preserved from the input. Source encoding is auto-detected from the CHAR header; `--from CODEC` overrides that with any Python codec name, for a file whose header is missing, wrong, or names a codec auto-detection refuses
 - See [Filter Command](docs/filter.md) for full algorithm details
 
 ## Documentation

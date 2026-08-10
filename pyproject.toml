@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimon-gedcom-tools"
-version = "1.2.1"
+version = "1.3.0"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
