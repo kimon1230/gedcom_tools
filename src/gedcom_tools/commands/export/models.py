@@ -15,9 +15,6 @@ class ExportIndividual:
     sex: str = ""
     birth_date: str = ""
     birth_year: int | None = None
-    # Upper bound of a range/period birth date ("BET 1900 AND 1995" -> 1995).
-    # Not exported; only liveness estimation reads it.
-    birth_year_latest: int | None = None
     birth_place: str = ""
     death_date: str = ""
     death_year: int | None = None
@@ -32,13 +29,13 @@ class ExportIndividual:
     # JSON-only fields (richer than CSV)
     alt_names: list[tuple[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-
-    @property
-    def liveness_birth_year(self) -> int | None:
-        """Birth year to feed to estimate_living: latest bound when there is one."""
-        if self.birth_year_latest is not None:
-            return self.birth_year_latest
-        return self.birth_year
+    # Years for estimate_living, kept separate from the reported ones above.
+    # A year scraped out of free text is good enough to report but not to
+    # decide whether to publish a living person's details, so these are set
+    # from a stricter source and never fall back to the reported fields.
+    liveness_birth_year: int | None = None
+    liveness_death_year: int | None = None
+    liveness_burial_year: int | None = None
 
 
 @dataclass
@@ -76,7 +73,7 @@ _NOT_LIVING_TAGS = frozenset({"_NLIV"})
 def estimate_living(
     birth_year: int | None,
     death_year: int | None,
-    burial_date: str,
+    burial_year: int | None,
     max_age: int = 110,
     current_year: int | None = None,
     living_marker: str = "",
@@ -95,12 +92,14 @@ def estimate_living(
     3. Birth year older than max_age → not living, whether or not the record
        has a death date. max_age is the ceiling on a plausible lifespan, and it
        is what keeps rule 5 from resurrecting every undated ancestor.
-    4. Death year or burial date → not living.
+    4. Death year or burial year → not living. Both are read the same strict
+       way as the birth year: "2 DATE (pre-need plot)" is text, not evidence
+       that someone has died.
     5. Everything else, including an absent or unparseable birth date → living.
     """
     current_year = current_year or datetime.date.today().year
 
-    has_death_evidence = death_year is not None or bool(burial_date)
+    has_death_evidence = death_year is not None or burial_year is not None
 
     if living_marker in _LIVING_TAGS:
         return True

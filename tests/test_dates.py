@@ -13,7 +13,10 @@ from gedcom_tools.dates import (
     extract_month,
     extract_year_from_date,
     extract_year_latest_from_date,
+    extract_year_latest_trusted,
+    extract_year_trusted,
     get_century,
+    is_clean_date_phrase,
     is_phrase_date,
 )
 from gedcom_tools.utils import count_sources_recursive
@@ -124,21 +127,14 @@ class TestExtractYearFromDate:
 
         assert extract_year_from_date(mock_date) == 1920
 
-    def test_phrase_type_returns_none(self):
-        """Test that PHRASE type dates return None."""
-        try:
-            from ged4py.date import DateValueTypes
+    def test_phrase_without_a_year_is_none(self):
+        assert extract_year_from_date(DateValue.parse("(during the war)")) is None
 
-            mock_date = MagicMock()
-            mock_date.kind = DateValueTypes.PHRASE
-            # PHRASE has NO .date, .date1, or .year
-            del mock_date.date
-            del mock_date.date1
-            del mock_date.year
+    def test_phrase_year_is_recovered(self):
+        assert extract_year_from_date(DateValue.parse("30 November 1989")) == 1989
 
-            assert extract_year_from_date(mock_date) is None
-        except ImportError:
-            pytest.skip("ged4py not available")
+    def test_phrase_slash_date_year_is_recovered(self):
+        assert extract_year_from_date(DateValue.parse("12/2/1882")) == 1882
 
 
 class _Bound:
@@ -235,19 +231,15 @@ class TestExtractMonth:
 
         assert extract_month(mock_date) == 3
 
-    def test_phrase_type_returns_none(self):
-        """Test that PHRASE type dates return None."""
-        try:
-            from ged4py.date import DateValueTypes
+    def test_phrase_without_a_month_is_none(self):
+        assert extract_month(DateValue.parse("(during the war)")) is None
 
-            mock_date = MagicMock()
-            mock_date.kind = DateValueTypes.PHRASE
-            del mock_date.date
-            del mock_date.date1
+    def test_phrase_full_month_name_is_recovered(self):
+        assert extract_month(DateValue.parse("30 November 1989")) == 11
 
-            assert extract_month(mock_date) is None
-        except ImportError:
-            pytest.skip("ged4py not available")
+    def test_month_survives_a_year_less_phrase(self):
+        # royal92 carries "2 DATE 10 JAN" — no year, but the month is real
+        assert extract_month(DateValue.parse("10 JAN")) == 1
 
 
 class TestClassifyDatePrecision:
@@ -326,20 +318,17 @@ class TestClassifyDatePrecision:
         except ImportError:
             pytest.skip("ged4py not available")
 
-    def test_mock_phrase_is_missing(self):
-        """Test that PHRASE type is classified as missing."""
-        try:
-            from ged4py.date import DateValueTypes
+    def test_phrase_without_a_year_is_missing(self):
+        assert classify_date_precision(DateValue.parse("(during the war)")) == (
+            "missing",
+            False,
+        )
 
-            mock_date = MagicMock()
-            mock_date.kind = DateValueTypes.PHRASE
-            del mock_date.date
-            del mock_date.date1
-
-            result = classify_date_precision(mock_date)
-            assert result == ("missing", False)
-        except ImportError:
-            pytest.skip("ged4py not available")
+    def test_phrase_full_date_is_full(self):
+        assert classify_date_precision(DateValue.parse("30 November 1989")) == (
+            "full",
+            True,
+        )
 
 
 class TestCountSourcesRecursive:
@@ -577,3 +566,247 @@ class TestRealGedcomDates:
                                 assert 1800 <= year <= 2000
                             return
         pytest.skip("No birth dates in fixture")
+
+
+# ---------------------------------------------------------------------------
+# Phrase dates: ged4py parses only MAY/JUNE/JULY as full month names, so most
+# real-world "30 November 1989" dates arrive as free text.
+# ---------------------------------------------------------------------------
+
+FULL_MONTH_NAMES = [
+    ("January", 1),
+    ("February", 2),
+    ("March", 3),
+    ("April", 4),
+    ("May", 5),
+    ("June", 6),
+    ("July", 7),
+    ("August", 8),
+    ("September", 9),
+    ("October", 10),
+    ("November", 11),
+    ("December", 12),
+]
+
+
+@pytest.mark.parametrize("name,number", FULL_MONTH_NAMES)
+def test_full_month_names_resolve(name: str, number: int) -> None:
+    date_val = DateValue.parse(f"3 {name} 1900")
+    assert extract_year_from_date(date_val) == 1900
+    assert extract_month(date_val) == number
+    assert classify_date_precision(date_val) == ("full", True)
+
+
+@pytest.mark.parametrize("text", ["3 JUNE 1900", "3 JULY 1900", "4 July 1776"])
+def test_month_names_ged4py_parses_itself(text: str) -> None:
+    # These come back as SIMPLE with .month set to "JUNE"/"JULY" verbatim,
+    # which the 3-letter MONTH_TO_NUM keys used to miss entirely.
+    assert extract_month(DateValue.parse(text)) is not None
+
+
+PHRASE_CASES = [
+    # text, year, latest, month, precision
+    ("30 November 1989", 1989, 1989, 11, "full"),
+    ("12/2/1882", 1882, 1882, None, "partial"),
+    ("10 JAN", None, None, 1, "missing"),
+    ("Christmas 1901", 1901, 1901, None, "partial"),
+    ("sometime in the 90s", None, None, None, "missing"),
+    ("unknown", None, None, None, "missing"),
+    ("Deceased 1900", 1900, 1900, None, "partial"),
+    ("Maybe 1905", 1905, 1905, None, "partial"),
+    ("Tombstone erected 1901", 1901, 1901, None, "partial"),
+    ("born 1990, per 1890 bible", 1990, 1990, None, "partial"),
+]
+
+
+@pytest.mark.parametrize("text,year,latest,month,precision", PHRASE_CASES)
+def test_phrase_extraction(
+    text: str,
+    year: int | None,
+    latest: int | None,
+    month: int | None,
+    precision: str,
+) -> None:
+    date_val = DateValue.parse(text)
+    assert extract_year_from_date(date_val) == year
+    assert extract_year_latest_from_date(date_val) == latest
+    assert extract_month(date_val) == month
+    assert classify_date_precision(date_val)[0] == precision
+
+
+@pytest.mark.parametrize("text,year,latest,month,precision", PHRASE_CASES)
+def test_year_and_precision_agree(
+    text: str,
+    year: int | None,
+    latest: int | None,
+    month: int | None,
+    precision: str,
+) -> None:
+    # A populated year and a "missing" precision would let stats put someone in
+    # the timeline while its own precision breakdown says the date is absent.
+    date_val = DateValue.parse(text)
+    assert (extract_year_from_date(date_val) is None) == (
+        classify_date_precision(date_val)[0] == "missing"
+    )
+
+
+def test_latest_year_takes_the_largest_not_the_last() -> None:
+    # Word order in free text is not chronological
+    assert extract_year_latest_from_date(DateValue.parse("born 1990, per 1890")) == 1990
+
+
+def test_tombstone_phrase_is_not_approximate() -> None:
+    # "Tombstone..." starts with TO, which a startswith() prefix scan would
+    # have read as the TO range marker
+    assert classify_date_precision(DateValue.parse("Tombstone erected 1901"))[0] == (
+        "partial"
+    )
+
+
+def test_c_prefix_is_still_approximate() -> None:
+    assert classify_date_precision(DateValue.parse("C. 1900"))[0] == "approximate"
+
+
+def test_bare_date_line_is_handled(tmp_path: Path) -> None:
+    # "2 DATE" with no value parses to a phrase whose .phrase is None, and it
+    # still passes the callers' `value is None` guard
+    ged = tmp_path / "bare.ged"
+    ged.write_text(
+        "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n1 CHAR UTF-8\n"
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE\n0 TRLR\n",
+        encoding="utf-8",
+    )
+    with GedcomReader(str(ged)) as reader:
+        record = next(reader.records0("INDI"))
+        value = record.sub_tag("BIRT/DATE").value
+
+    assert extract_year_from_date(value) is None
+    assert extract_year_latest_from_date(value) is None
+    assert extract_month(value) is None
+    assert classify_date_precision(value) == ("missing", False)
+
+
+CLEAN_PHRASES = [
+    "30 November 1989",
+    "12/2/1882",
+    "1801-1875",
+    "4 October 1950",
+    "1900",
+    "12-2-1882",
+    "30 November 1989.",
+]
+DIRTY_PHRASES = [
+    "Census 1900 record",
+    "Reg. 1823 vol II",
+    "1901, 1902, 1903, 1904",
+    "born 1990, per 1890 bible",
+    "sometime in the 90s",
+    "10 JAN",
+    "00/00/0000",
+    "(MAY) 1900",
+    "",
+]
+
+
+@pytest.mark.parametrize("text", CLEAN_PHRASES)
+def test_clean_date_phrase_accepted(text: str) -> None:
+    assert is_clean_date_phrase(text) is True
+
+
+@pytest.mark.parametrize("text", DIRTY_PHRASES)
+def test_free_text_phrase_rejected(text: str) -> None:
+    assert is_clean_date_phrase(text) is False
+
+
+def test_year_bound_is_pinned_to_the_injected_clock() -> None:
+    # One year of slack, so next year is in and the year after is out
+    assert is_clean_date_phrase("3 JAN 2027", current_year=2026) is True
+    assert is_clean_date_phrase("3 JAN 2028", current_year=2026) is False
+
+
+def test_year_below_the_plausible_floor_is_rejected() -> None:
+    assert is_clean_date_phrase("0999") is False
+    assert is_clean_date_phrase("1000") is True
+
+
+def test_trusted_year_drops_a_free_text_year() -> None:
+    dirty = DateValue.parse("Reg. 1823 vol II")
+    assert extract_year_from_date(dirty) == 1823
+    assert extract_year_trusted(dirty) is None
+
+
+def test_trusted_year_keeps_a_clean_phrase_year() -> None:
+    clean = DateValue.parse("30 November 1989")
+    assert extract_year_trusted(clean) == 1989
+
+
+def test_trusted_year_passes_structured_dates_through() -> None:
+    assert extract_year_trusted(DateValue.parse("15 JAN 1850")) == 1850
+
+
+# ged4py does not validate month tokens, so junk parses as a SIMPLE date
+# rather than a phrase and never reaches the free-text gate.
+UNVALIDATED_MONTH_DATES = ["Reg 1823", "Vol 1823", "12 Vol 1823"]
+
+
+@pytest.mark.parametrize("text", UNVALIDATED_MONTH_DATES)
+def test_junk_month_is_not_trusted(text: str) -> None:
+    date_val = DateValue.parse(text)
+    assert is_phrase_date(date_val) is False  # it is SIMPLE, not a phrase
+    assert extract_year_from_date(date_val) == 1823  # still reported
+    assert extract_year_trusted(date_val) is None  # but not acted on
+    assert extract_year_latest_trusted(date_val) is None
+
+
+@pytest.mark.parametrize("text", ["3 JUNE 1900", "15 JAN 1850", "4 July 1776"])
+def test_real_months_stay_trusted(text: str) -> None:
+    assert extract_year_trusted(DateValue.parse(text)) is not None
+
+
+def test_range_upper_bound_is_trusted() -> None:
+    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND 1995")) == 1995
+
+
+def test_digit_soup_is_rejected() -> None:
+    # An archive citation tokenizes to pure digits; cap the small numbers
+    assert is_clean_date_phrase("1 1 1 1 1850") is False
+    assert is_clean_date_phrase("99 88 77 1850") is False
+
+
+# ged4py validates neither month tokens nor years, so a "structured" date is
+# not proof of a date. These all reach estimate_living if left untrusted.
+IMPLAUSIBLE_STRUCTURED = [
+    "3/1990",  # read as the dual year 3, not March 1990
+    "1/1985",
+    "1 JAN 0002",
+    "25 DEC 9999",
+    "0007",
+]
+
+
+@pytest.mark.parametrize("text", IMPLAUSIBLE_STRUCTURED)
+def test_implausible_structured_year_is_not_trusted(text: str) -> None:
+    assert extract_year_trusted(DateValue.parse(text)) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("1 JAN 1900", 1900),
+        ("1750/51", 1750),  # dual date, the older year is real
+        ("@#DHEBREW@ 1 TSH 5786", 5786),  # Hebrew years are out of range by design
+    ],
+)
+def test_plausible_structured_year_survives(text: str, expected: int) -> None:
+    assert extract_year_trusted(DateValue.parse(text)) == expected
+
+
+def test_reversed_range_uses_the_larger_bound() -> None:
+    # A range written backwards must not age the person out
+    assert extract_year_latest_trusted(DateValue.parse("BET 2010 AND 1823")) == 2010
+    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND 1995")) == 1995
+
+
+def test_junk_month_on_the_upper_bound_is_caught() -> None:
+    # date2 is the bound the liveness reader consumes, so it needs the same check
+    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND Reg 1823")) is None

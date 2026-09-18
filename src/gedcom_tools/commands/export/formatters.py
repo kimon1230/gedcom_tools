@@ -176,8 +176,8 @@ def format_csv(
             for indi in result.individuals
             if estimate_living(
                 indi.liveness_birth_year,
-                indi.death_year,
-                indi.burial_date,
+                indi.liveness_death_year,
+                indi.liveness_burial_year,
                 max_age=max_age,
                 living_marker=indi.living_marker,
             )
@@ -295,8 +295,8 @@ def format_json(
             for indi in result.individuals
             if estimate_living(
                 indi.liveness_birth_year,
-                indi.death_year,
-                indi.burial_date,
+                indi.liveness_death_year,
+                indi.liveness_burial_year,
                 max_age=max_age,
                 living_marker=indi.living_marker,
             )

@@ -12,7 +12,7 @@ from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
     classify_date_precision,
     extract_month,
-    extract_year_from_date,
+    extract_year_trusted,
 )
 from gedcom_tools.progress import PhaseTracker
 from gedcom_tools.utils import EncodingInfo, detect_encoding, extract_xref
@@ -436,7 +436,11 @@ class ValidationEngine:
         birth_year: int | None = None
         birth_month: int | None = None
         if birt_date_rec and birt_date_rec.value:
-            birth_year = extract_year_from_date(birt_date_rec.value)
+            # Age and chronology checks act on the year, so a year scraped
+            # from free text must not reach them: "Reg. 1823 vol II" is an
+            # archive reference, and reading it as a birth year invents a
+            # 127-year lifespan the file never claimed.
+            birth_year = extract_year_trusted(birt_date_rec.value)
             precision, _ = classify_date_precision(birt_date_rec.value)
             if precision in ("full", "partial"):
                 birth_month = extract_month(birt_date_rec.value)
@@ -697,7 +701,7 @@ class ValidationEngine:
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
-        return extract_year_from_date(date_rec.value)
+        return extract_year_trusted(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
         # --strict mode: enforce version-specific requirements
