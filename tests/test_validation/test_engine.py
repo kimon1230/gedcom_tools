@@ -1207,3 +1207,93 @@ class TestPhraseDatesDoNotFabricateWarnings:
             ],
         )
         assert "W023" in codes
+
+
+class TestNonStandardDateWarning:
+    """W035: ged4py parses only three month names in full, so most real-world
+    spelled-out dates are free text and their years are recovered heuristically.
+    The user needs to know which dates were guessed at."""
+
+    def _issues(self, tmp_path, body):
+        ged = _write_ged(tmp_path / "w035.ged", body)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+        return [i for i in result.warnings if i.code.value == "W035"]
+
+    def _birth(self, date_value):
+        return ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", f"2 DATE {date_value}"]
+
+    def test_spelled_out_month_suggests_the_abbreviation(self, tmp_path):
+        issues = self._issues(tmp_path, self._birth("30 November 1989"))
+        assert len(issues) == 1
+        assert '"NOV"' in issues[0].message
+
+    def test_ambiguous_slash_date_gets_the_generic_rule(self, tmp_path):
+        # 12 Feb or 2 Dec? No locale signal, so no rewrite is offered
+        issues = self._issues(tmp_path, self._birth("12/2/1882"))
+        assert len(issues) == 1
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_already_abbreviated_month_gets_the_generic_rule(self, tmp_path):
+        # "10 JAN" is missing a year, not mis-spelling a month
+        issues = self._issues(tmp_path, self._birth("10 JAN"))
+        assert len(issues) == 1
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_unconvertible_phrase_still_warns(self, tmp_path):
+        issues = self._issues(tmp_path, self._birth("Christmas 1901"))
+        assert len(issues) == 1
+
+    def test_parenthesised_phrase_is_conformant(self, tmp_path):
+        # GEDCOM 5.5.1 permits (DATE_PHRASE); ged4py strips the parens, so only
+        # the raw line can tell this apart from a bare phrase
+        assert self._issues(tmp_path, self._birth("(during the war)")) == []
+
+    def test_empty_date_line_does_not_warn(self, tmp_path):
+        assert (
+            self._issues(tmp_path, ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE"])
+            == []
+        )
+
+    def test_conformant_date_does_not_warn(self, tmp_path):
+        assert self._issues(tmp_path, self._birth("30 NOV 1989")) == []
+
+    def test_death_and_marriage_dates_are_checked_too(self, tmp_path):
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 DEAT",
+            "2 DATE 4 October 1950",
+            "1 FAMS @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @I1@",
+            "1 MARR",
+            "2 DATE 3 August 1910",
+        ]
+        assert len(self._issues(tmp_path, body)) == 2
+
+    def test_volume_is_capped_with_a_notice(self, tmp_path):
+        body = []
+        for i in range(1, 26):
+            body += [
+                f"0 @I{i}@ INDI",
+                f"1 NAME P{i} /X/",
+                "1 BIRT",
+                f"2 DATE {i} November 1989",
+            ]
+        ged = _write_ged(tmp_path / "vol.ged", body)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+        issues = [i for i in result.warnings if i.code.value == "W035"]
+
+        # 10 shown plus one stand-in summary, and the dropped count recorded so
+        # total_warnings still reports what the file actually contains
+        assert len(issues) == MAX_ISSUES_PER_CODE + 1
+        assert sum("suppressed" in i.message for i in issues) == 1
+        assert result.suppressed_counts["W035"] == 15
+
+    def test_royal92_reports_exactly_its_two_phrase_dates(self, tmp_path):
+        royal92 = Path(__file__).parent.parent / "fixtures" / "royal92.ged"
+        engine = ValidationEngine(royal92, mode="full", quiet=True)
+        issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
+        assert sorted(i.line for i in issues) == [6436, 27126]

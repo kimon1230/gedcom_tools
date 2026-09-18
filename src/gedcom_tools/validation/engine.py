@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from array import array
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal
@@ -10,12 +11,20 @@ from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
+    MONTH_PATTERN,
     classify_date_precision,
     extract_month,
     extract_year_trusted,
+    is_phrase_date,
+    phrase_text,
 )
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.utils import EncodingInfo, detect_encoding, extract_xref
+from gedcom_tools.utils import (
+    EncodingInfo,
+    detect_encoding,
+    extract_xref,
+    sanitize_error,
+)
 from gedcom_tools.validation.issues import (
     ErrorCode,
     FamilyInfo,
@@ -60,6 +69,13 @@ MAX_NESTING_DEPTH = 99
 # be 500 MB of them.
 MAX_ISSUES_PER_CODE = 10
 
+# "2 DATE (during the war)" - GEDCOM 5.5.1 permits a parenthesised DATE_PHRASE,
+# and it is conformant, so W035 must not fire on it.
+_PAREN_DATE_RE = re.compile(rb"^\s*\d+\s+DATE\s+\(.*\)\s*$")
+
+# Enough of the offending value to recognise it without pasting a whole note
+_MAX_ECHOED_DATE = 60
+
 
 class ValidationEngine:
     """Orchestrates the validation process.
@@ -101,6 +117,12 @@ class ValidationEngine:
         # Keyed by the string, not the ErrorCode member: this reaches
         # json.dumps, which rejects enum keys.
         self._suppressed_counts: dict[str, int] = {}
+        # Line numbers whose DATE value is a spec-legal parenthesised phrase.
+        # ged4py strips the parens before exposing .phrase, so the parsed object
+        # cannot tell "(during the war)" from "30 November 1989" - only the raw
+        # bytes can, and _build_line_map is the one place that has them.
+        self._paren_date_lines: set[int] = set()
+        self._nonstandard_date_count = 0
 
     def validate(self) -> ValidationResult:
         """Run all validation phases and return results.
@@ -176,6 +198,7 @@ class ValidationEngine:
         # "Q" (unsigned long long) keeps the map at 8 bytes per line instead of
         # a full Python int object per line.
         self._line_offsets = array("Q", [0])
+        self._paren_date_lines = set()
         seen: dict[ErrorCode, int] = {}
         with open(self.file_path, "rb") as f:
             offset = 0
@@ -211,6 +234,9 @@ class ValidationEngine:
                             f"({len(line_content)} bytes)",
                             line_num,
                         )
+
+                if _PAREN_DATE_RE.match(line_content):
+                    self._paren_date_lines.add(line_num)
 
                 offset += len(line)
                 self._line_offsets.append(offset)
@@ -436,6 +462,7 @@ class ValidationEngine:
         birth_year: int | None = None
         birth_month: int | None = None
         if birt_date_rec and birt_date_rec.value:
+            self._check_nonstandard_date(birt_date_rec)
             # Age and chronology checks act on the year, so a year scraped
             # from free text must not reach them: "Reg. 1823 vol II" is an
             # archive reference, and reading it as a birth year invents a
@@ -696,11 +723,65 @@ class ValidationEngine:
             return None
         return extract_xref(value)
 
+    def _check_nonstandard_date(self, date_rec: Record) -> None:
+        """Warn when a DATE value is not in GEDCOM form.
+
+        ged4py parses only three of the twelve month names in full, so
+        "30 November 1989" is free text to it and its year is recovered
+        heuristically. The user needs to know which dates were guessed at.
+        """
+        value = date_rec.value
+        if value is None or not is_phrase_date(value):
+            return
+
+        text = phrase_text(value)
+        if not text:
+            return
+
+        offset = date_rec.offset if date_rec.offset else 0
+        line = self._offset_to_line(offset)
+        if line in self._paren_date_lines:
+            return
+
+        shown = sanitize_error(text)
+        if len(shown) > _MAX_ECHOED_DATE:
+            shown = shown[:_MAX_ECHOED_DATE] + "..."
+
+        count = self._nonstandard_date_count
+        self._nonstandard_date_count += 1
+        if count < MAX_ISSUES_PER_CODE:
+            # Only suggest the abbreviation when the month is actually
+            # spelled out - "10 JAN" is already abbreviated and its real
+            # problem is the missing year, not the month form.
+            month = MONTH_PATTERN.search(text)
+            spelled_out = month is not None and len(month.group(1)) > 3
+            hint = (
+                f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
+                if spelled_out and month is not None
+                else " - use the DD MMM YYYY form"
+            )
+            self._add_issue(
+                ErrorCode.W035_NONSTANDARD_DATE,
+                f'Date not in GEDCOM format: "{shown}"{hint}',
+                line=line,
+            )
+        elif count == MAX_ISSUES_PER_CODE:
+            self._add_issue(
+                ErrorCode.W035_NONSTANDARD_DATE,
+                "More non-standard dates were suppressed "
+                f"(first {MAX_ISSUES_PER_CODE} shown)",
+                line=line,
+            )
+        self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = max(
+            0, self._nonstandard_date_count - MAX_ISSUES_PER_CODE
+        )
+
     def _extract_year(self, record: Record, path: str) -> int | None:
         """Extract year from a date at the given path."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
+        self._check_nonstandard_date(date_rec)
         return extract_year_trusted(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:

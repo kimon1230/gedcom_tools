@@ -74,6 +74,7 @@ class ErrorCode(Enum):
     W032_LINE_TOO_LONG_STRICT = "W032"
     W033_OBJE_MISSING_FILE = "W033"
     W034_FILE_MISSING_FORM = "W034"
+    W035_NONSTANDARD_DATE = "W035"
 
     @property
     def severity(self) -> Severity:
@@ -128,6 +129,7 @@ class ErrorCode(Enum):
             "W032": "Line exceeds 255 byte limit (strict)",
             "W033": "OBJE record has no FILE subtag",
             "W034": "FILE subtag has no FORM",
+            "W035": "Date not in GEDCOM format",
         }
         return descriptions.get(self.value, "Unknown issue")
 
