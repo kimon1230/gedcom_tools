@@ -28,7 +28,7 @@ gedcom_tools/
 │       ├── __init__.py          # Package init, version
 │       ├── cli.py               # Main entry point, argument parsing
 │       ├── constants.py         # Shared constants (exit codes, thresholds)
-│       ├── dates.py             # Shared date parsing utilities
+│       ├── dates.py             # Shared date parsing + the liveness trust gate
 │       ├── graph.py             # Graph algorithms (UnionFind, components, ParentChildGraph, BFS traversal)
 │       ├── language_detect.py   # fastText language detection wrapper (lazy model load, cache dir)
 │       ├── progress.py          # Terminal UI (Colors, PhaseTracker, GlyphSet/--ascii)
@@ -193,6 +193,14 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 - **Match against the same preprocessed line** ged4py matches against. A pattern derived from the right source but fed a differently-normalized string is no better than a hand-written one.
 
 The parity gate in `tests/test_filter_parser.py` calls production `parse_line()` and compares against ged4py across a large generated sample. It must keep calling the production function — reimplementing the comparison against `_LINE_RE` directly turns the gate into a test of itself.
+
+**`dates.py` invariant — two readings of a year, and only one may drive a decision.** `extract_year_from_date` reports whatever year the text contains; that is what `export`, `stats` and `search` show, and recovering it from free text is the whole point of the phrase handling. `extract_year_trusted` / `extract_year_latest_trusted` are the stricter reading, and they are what `--redact-living` and the age/chronology checks consume. Mixing them up publishes a living person's record, so:
+
+- **A structured date kind is not proof of a date.** ged4py validates neither month tokens nor years: `2 DATE Reg 1823` parses as a SIMPLE date whose month is `"REG"`, and `2 DATE 3/1990` is read as the dual year **3**. `_is_trustworthy` therefore checks the month resolves and the year is plausible, on `date`, `date1` **and** `date2` — `date2` because it is the bound `extract_year_latest_*` actually returns.
+- **The year bound is calendar-scoped.** `MIN_PLAUSIBLE_YEAR..now+1` applies to Gregorian and Julian only; Hebrew years run ~5786 and French Republican ~230, and bounding those would reject every legitimate non-Gregorian date.
+- **Untrusted fails to `None`, never to a guess.** `None` flows to `estimate_living` rule 5 — unknown means living, so the record is redacted. Any change that makes an untrusted year fall back to the reported one reopens the leak; that fallback is what the deleted `liveness_birth_year` property used to do.
+
+The guards are proven by reverting them: neutering `_is_clean_date_phrase` must fail exactly the leak-guard tests in `tests/test_export_collector.py::TestRedactLivingPhraseDates`, and removing the separate liveness fallback loop must fail the over-redaction guard and nothing else.
 
 ### Validation Engine (4-Phase Design)
 

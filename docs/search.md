@@ -70,6 +70,14 @@ Birth dates use a fallback chain: BIRT → CHR (christening) → BAPM (baptism).
 Death dates fall back from DEAT → BURI (burial). Searching `born:1850` will
 match an individual whose only recorded date is a christening in 1850.
 
+Dates the parser cannot read as dates — `30 November 1989`, `12/2/1882` — still
+yield a year, recovered from the text, so `born:1989` matches them. Search
+filters what the file reports, and that recovered year is what `export` reports
+for the same record. It follows that a free-text note containing a four-digit
+run matches on that number: `born:1900` will match a record whose birth date
+reads `Census 1900 record`. Run `validate` to see which dates were recovered
+this way — they are reported as `W035`.
+
 ### Operators
 
 | Operator | Name | Description |
