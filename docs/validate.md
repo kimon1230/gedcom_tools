@@ -184,8 +184,9 @@ A concrete rewrite is offered only when the month is spelled out. `12/2/1882`
 is ambiguous — 12 February or 2 December, with no locale signal to decide — and
 `Christmas 1901` cannot be converted at all, so both get the generic rule.
 
-Checked on `BIRT`, `DEAT` and `MARR` dates, which carry 99% of the DATE lines in
-a typical file. A parenthesised phrase (`2 DATE (during the war)`) is valid
+Checked on every date whose year `export` and `search` recover — `BIRT`, `CHR`,
+`BAPM`, `DEAT`, `BURI` and `MARR` — so the warning set matches the set of dates
+that can produce a guessed year. A parenthesised phrase (`2 DATE (during the war)`) is valid
 GEDCOM 5.5.1 and does **not** warn. Like the per-line warnings above, W035
 reports the first 10 occurrences and then one summary line.
 

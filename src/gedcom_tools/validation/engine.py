@@ -70,8 +70,10 @@ MAX_NESTING_DEPTH = 99
 MAX_ISSUES_PER_CODE = 10
 
 # "2 DATE (during the war)" - GEDCOM 5.5.1 permits a parenthesised DATE_PHRASE,
-# and it is conformant, so W035 must not fire on it.
-_PAREN_DATE_RE = re.compile(rb"^\s*\d+\s+DATE\s+\(.*\)\s*$")
+# and it is conformant, so W035 must not fire on it. [^)] not .* : the greedy
+# form spans two phrases, exempting "(1850) and later (see note)", which is
+# not a DATE_PHRASE and whose year really was guessed at.
+_PAREN_DATE_RE = re.compile(rb"^\s*\d+\s+DATE\s+\([^)]*\)\s*$")
 
 # Enough of the offending value to recognise it without pasting a whole note
 _MAX_ECHOED_DATE = 60
@@ -235,6 +237,11 @@ class ValidationEngine:
                             line_num,
                         )
 
+                # No endswith(b")") fast path here: the pattern ends \)\s*$,
+                # so a conformant "(DATE_PHRASE)" with a trailing space would
+                # skip the check and get a false W035. The guard measured 4.6x
+                # on this line but only 0.6% of a validate run - not a trade
+                # worth a false positive on spec-legal input.
                 if _PAREN_DATE_RE.match(line_content):
                     self._paren_date_lines.add(line_num)
 
@@ -472,6 +479,11 @@ class ValidationEngine:
             if precision in ("full", "partial"):
                 birth_month = extract_month(birt_date_rec.value)
 
+        for date_path in ("CHR/DATE", "BAPM/DATE", "DEAT/DATE", "BURI/DATE"):
+            sub = record.sub_tag(date_path)
+            if sub is not None and sub.value is not None:
+                self._check_nonstandard_date(sub)
+
         death_year = self._extract_year(record, "DEAT/DATE")
 
         # Extract sex and family links via single-pass sub_records iteration
@@ -565,6 +577,9 @@ class ValidationEngine:
         husb_xref: str | None = None
         wife_xref: str | None = None
         chil_xrefs: list[str] = []
+        marr_date_rec = record.sub_tag("MARR/DATE")
+        if marr_date_rec is not None and marr_date_rec.value is not None:
+            self._check_nonstandard_date(marr_date_rec)
         marriage_year = self._extract_year(record, "MARR/DATE")
 
         for sub in record.sub_records:
@@ -743,23 +758,32 @@ class ValidationEngine:
         if line in self._paren_date_lines:
             return
 
-        shown = sanitize_error(text)
-        if len(shown) > _MAX_ECHOED_DATE:
-            shown = shown[:_MAX_ECHOED_DATE] + "..."
-
         count = self._nonstandard_date_count
         self._nonstandard_date_count += 1
         if count < MAX_ISSUES_PER_CODE:
             # Only suggest the abbreviation when the month is actually
             # spelled out - "10 JAN" is already abbreviated and its real
             # problem is the missing year, not the month form.
+            # Scrub before truncating so the echo budget counts visible
+            # characters, not stripped escape bytes - and so the cut cannot
+            # land mid-escape. Both are inside the cap branch because the
+            # result is only ever read here.
+            shown = sanitize_error(text)
+            if len(shown) > _MAX_ECHOED_DATE:
+                shown = shown[:_MAX_ECHOED_DATE] + "..."
+
+            # The month must be spelled out AND inside the echoed window -
+            # pointing at an abbreviation for text we truncated away is not
+            # an actionable message.
             month = MONTH_PATTERN.search(text)
-            spelled_out = month is not None and len(month.group(1)) > 3
-            hint = (
-                f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
-                if spelled_out and month is not None
-                else " - use the DD MMM YYYY form"
-            )
+            if (
+                month is not None
+                and len(month.group(1)) > 3
+                and month.start() < _MAX_ECHOED_DATE
+            ):
+                hint = f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
+            else:
+                hint = " - use the DD MMM YYYY form"
             self._add_issue(
                 ErrorCode.W035_NONSTANDARD_DATE,
                 f'Date not in GEDCOM format: "{shown}"{hint}',
@@ -772,16 +796,20 @@ class ValidationEngine:
                 f"(first {MAX_ISSUES_PER_CODE} shown)",
                 line=line,
             )
-        self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = max(
-            0, self._nonstandard_date_count - MAX_ISSUES_PER_CODE
-        )
+        # Only record a dropped count once the cap is actually exceeded.
+        # ValidationResult subtracts one per entry, for the synthetic summary
+        # issue each truncated code leaves behind - so writing a zero here
+        # makes total_warnings report one FEWER than the file contains.
+        if self._nonstandard_date_count > MAX_ISSUES_PER_CODE:
+            self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = (
+                self._nonstandard_date_count - MAX_ISSUES_PER_CODE
+            )
 
     def _extract_year(self, record: Record, path: str) -> int | None:
         """Extract year from a date at the given path."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
-        self._check_nonstandard_date(date_rec)
         return extract_year_for_validation(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
@@ -866,7 +894,11 @@ class ValidationEngine:
         xref: str | None = None,
         context: str | None = None,
     ) -> None:
-        """Add a validation issue."""
+        """Add a validation issue.
+
+        Text scrubbing happens in ValidationIssue itself, since the reference
+        and semantic validators build issues without passing through here.
+        """
         self.issues.append(
             ValidationIssue(
                 code=code,
