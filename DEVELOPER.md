@@ -4,7 +4,7 @@
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/kimon1230/gedcom-tools.git
+   git clone https://github.com/kimon1230/gedcom_tools.git
    cd gedcom-tools
    ```
 
@@ -200,7 +200,10 @@ The parity gate in `tests/test_filter_parser.py` calls production `parse_line()`
 - **The year bound is calendar-scoped.** `MIN_PLAUSIBLE_YEAR..now+1` applies to Gregorian and Julian only; Hebrew years run ~5786 and French Republican ~230, and bounding those would reject every legitimate non-Gregorian date.
 - **Untrusted fails to `None`, never to a guess.** `None` flows to `estimate_living` rule 5 — unknown means living, so the record is redacted. Any change that makes an untrusted year fall back to the reported one reopens the leak; that fallback is what the deleted `liveness_birth_year` property used to do.
 
-The guards are proven by reverting them: neutering `_is_clean_date_phrase` must fail exactly the leak-guard tests in `tests/test_export_collector.py::TestRedactLivingPhraseDates`, and removing the separate liveness fallback loop must fail the over-redaction guard and nothing else.
+The guards are proven by reverting them, and the failure sets below are measured, not estimated — a recipe a maintainer cannot reproduce is worse than none on a redaction guard. Mutate a **copy** of `src/` and run under `PYTHONPATH=<copy>/src`: the venv's editable install otherwise shadows the copy and every mutation appears to survive.
+
+- Neutering `is_clean_date_phrase` (public, `dates.py`) fails **20** tests — 12 in `test_dates.py`, 7 in `test_export_collector.py`, 1 in `test_validation/test_engine.py`.
+- Replacing the separate liveness fallback loop in `export/collector.py` with a single `BIRT/DATE` read fails **3**: `TestCollectorDates::test_christening_fallback_carries_latest_bound`, `::test_baptism_fallback_carries_latest_bound`, and `TestRedactLivingPhraseDates::test_clean_christening_behind_dirty_birth_still_publishes`.
 
 ### Validation Engine (4-Phase Design)
 

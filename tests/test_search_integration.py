@@ -812,3 +812,30 @@ class TestExitCodes:
         monkeypatch.setattr(search, "collect_individuals", burst)
         with pytest.raises(BrokenPipeError):
             run(_args(ged, "Smith"))
+
+
+class TestNonStandardDateSearch:
+    """search consumes classify_date_precision behind a user-visible filter,
+    which the export/stats repro tests never exercise."""
+
+    NONSTANDARD = (
+        "0 @I1@ INDI\n1 NAME John /Smith/\n1 SEX M\n"
+        "1 BIRT\n2 DATE 30 November 1989\n"
+        "0 @I2@ INDI\n1 NAME Jane /Doe/\n1 SEX F\n"
+        "1 BIRT\n2 DATE 12/2/1882\n"
+    )
+
+    def _xrefs(self, tmp_path: Path, query: str, capsys) -> set[str]:
+        ged = _write_ged(tmp_path, self.NONSTANDARD)
+        assert run(_args(ged, query, format="json")) == EXIT_SUCCESS
+        data = json.loads(capsys.readouterr().out)
+        return {m["xref"] for m in data["matches"]}
+
+    def test_spelled_out_month_date_is_searchable(self, tmp_path, capsys):
+        assert self._xrefs(tmp_path, "born:1989", capsys) == {"@I1@"}
+
+    def test_slash_date_is_searchable(self, tmp_path, capsys):
+        assert self._xrefs(tmp_path, "born:1882", capsys) == {"@I2@"}
+
+    def test_range_query_spans_both(self, tmp_path, capsys):
+        assert self._xrefs(tmp_path, "born:1880-1990", capsys) == {"@I1@", "@I2@"}

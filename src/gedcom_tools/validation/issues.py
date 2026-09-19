@@ -5,6 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from gedcom_tools.utils import sanitize_error
+
+
+def _scrub(text: str) -> str:
+    """Strip control sequences AND flatten line breaks.
+
+    sanitize_error deliberately keeps "\n" so a wrapped exception still reads
+    as paragraphs. An issue message is a single report line, and ged4py joins
+    CONT sub-lines with "\n", so a file carrying `1 SEX Q` / `2 CONT ✓ Valid`
+    would otherwise print its own forged verdict at column 0 of the report.
+    """
+    return sanitize_error(text).replace("\r", " ").replace("\n", " ")
+
 
 class Severity(Enum):
     """Severity level of a validation issue."""
@@ -134,7 +147,7 @@ class ErrorCode(Enum):
         return descriptions.get(self.value, "Unknown issue")
 
 
-@dataclass
+@dataclass(frozen=True)
 class ValidationIssue:
     """A single validation issue found in a GEDCOM file."""
 
@@ -143,6 +156,21 @@ class ValidationIssue:
     line: int | None = None
     xref: str | None = None
     context: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every field here can carry text straight from the file: messages
+        # embed ged4py exceptions that quote the offending line, and an xref
+        # is only bounded by ged4py's @[A-Za-z0-9][^@]*@, which admits escape
+        # sequences and bidi overrides. Scrubbing here rather than at the
+        # producers covers all three - the engine, ReferenceValidator and
+        # SemanticValidator - which build issues independently.
+        # frozen, so assign through object.__setattr__ - the scrub is an
+        # invariant of the type, not a filter a later producer can skip.
+        object.__setattr__(self, "message", _scrub(self.message))
+        if self.xref is not None:
+            object.__setattr__(self, "xref", _scrub(self.xref))
+        if self.context is not None:
+            object.__setattr__(self, "context", _scrub(self.context))
 
     @property
     def severity(self) -> Severity:

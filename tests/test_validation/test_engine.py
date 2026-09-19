@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+from gedcom_tools.progress import Colors
 from gedcom_tools.validation import validate_file
 from gedcom_tools.validation.engine import (
     MAX_ISSUES_PER_CODE,
@@ -1240,6 +1241,24 @@ class TestNonStandardDateWarning:
         assert len(issues) == 1
         assert "DD MMM YYYY" in issues[0].message
 
+    def test_two_phrases_in_one_value_are_not_exempt(self, tmp_path):
+        # Greedy (.*) would read this as one parenthesised DATE_PHRASE
+        issues = self._issues(tmp_path, self._birth("(1850) and later (see note)"))
+        assert len(issues) == 1
+
+    def test_christening_and_burial_dates_are_checked(self, tmp_path):
+        # search and export recover years from these too, so W035 must cover
+        # them or docs/search.md promises a warning that never appears
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 CHR",
+            "2 DATE 30 November 1989",
+            "1 BURI",
+            "2 DATE 4 October 1950",
+        ]
+        assert len(self._issues(tmp_path, body)) == 2
+
     def test_unconvertible_phrase_still_warns(self, tmp_path):
         issues = self._issues(tmp_path, self._birth("Christmas 1901"))
         assert len(issues) == 1
@@ -1248,6 +1267,12 @@ class TestNonStandardDateWarning:
         # GEDCOM 5.5.1 permits (DATE_PHRASE); ged4py strips the parens, so only
         # the raw line can tell this apart from a bare phrase
         assert self._issues(tmp_path, self._birth("(during the war)")) == []
+
+    def test_parenthesised_phrase_with_trailing_space_is_still_exempt(self, tmp_path):
+        # The pattern ends \)\s*$ - any fast path that tests the last byte
+        # for ")" skips this line and emits a false warning on valid GEDCOM.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE (during the war) "]
+        assert self._issues(tmp_path, body) == []
 
     def test_empty_date_line_does_not_warn(self, tmp_path):
         assert (
@@ -1292,8 +1317,155 @@ class TestNonStandardDateWarning:
         assert sum("suppressed" in i.message for i in issues) == 1
         assert result.suppressed_counts["W035"] == 15
 
-    def test_royal92_reports_exactly_its_two_phrase_dates(self, tmp_path):
-        royal92 = Path(__file__).parent.parent / "fixtures" / "royal92.ged"
+    def test_under_the_cap_records_no_dropped_count(self, tmp_path):
+        # ValidationResult subtracts one per suppressed-code entry for the
+        # summary issue it assumes was emitted. A zero entry therefore makes
+        # total_warnings report one fewer warning than the file contains.
+        ged = _write_ged(tmp_path / "under.ged", self._birth("30 November 1989"))
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+
+        assert "W035" not in result.suppressed_counts
+        summary = json.loads(result.format_json())["summary"]
+        assert summary["total_warnings"] == summary["warnings"]
+
+    def test_exactly_at_the_cap_records_no_dropped_count(self, tmp_path):
+        # The boundary the guard exists for. At exactly MAX_ISSUES_PER_CODE
+        # nothing was dropped, so writing a zero here would make
+        # total_warnings subtract a summary issue that was never emitted.
+        body = []
+        for i in range(1, MAX_ISSUES_PER_CODE + 1):
+            body += [
+                f"0 @I{i}@ INDI",
+                f"1 NAME P{i} /X/",
+                "1 BIRT",
+                f"2 DATE {i} November 1989",
+            ]
+        ged = _write_ged(tmp_path / "cap.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+
+        summary = json.loads(result.format_json())["summary"]
+        assert "W035" not in result.suppressed_counts
+        assert "suppressed" not in summary
+        assert summary["total_warnings"] == summary["warnings"]
+
+    def test_long_value_is_truncated_and_drops_the_month_hint(self, tmp_path):
+        # The month sits past the echo window, so naming its abbreviation
+        # would point at text the user cannot see in the message.
+        value = (
+            "recorded in the parish register of the county office "
+            "in the year of November 1989"
+        )
+        issues = self._issues(tmp_path, self._birth(value))
+
+        assert len(issues) == 1
+        assert "..." in issues[0].message
+        assert "NOV" not in issues[0].message
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_echo_budget_counts_visible_characters(self, tmp_path):
+        # Scrubbing must precede truncation: otherwise the 60-character
+        # window is spent on escape bytes the user never sees, and the cut
+        # can land mid-sequence.
+        padded = ("\x1b[31m" * 12) + "30 November 1989"
+        issues = self._issues(tmp_path, self._birth(padded))
+
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+        assert "..." not in issues[0].message
+
+    def test_each_fallback_tag_is_checked_individually(self, tmp_path):
+        # Dropping any one path from the tuple must fail this
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 CHR",
+            "2 DATE 1 November 1989",
+            "1 BAPM",
+            "2 DATE 2 November 1989",
+            "1 DEAT",
+            "2 DATE 3 November 1989",
+            "1 BURI",
+            "2 DATE 4 November 1989",
+        ]
+        assert len(self._issues(tmp_path, body)) == 4
+
+    def test_royal92_reports_exactly_its_two_phrase_dates(self):
+        royal92 = FIXTURES / "royal92.ged"
         engine = ValidationEngine(royal92, mode="full", quiet=True)
         issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
         assert sorted(i.line for i in issues) == [6436, 27126]
+
+
+class TestIssueTextIsScrubbed:
+    """Messages, xrefs and context all carry text straight from the file.
+
+    A crafted GEDCOM can otherwise rewrite the verdict on screen with a
+    carriage return, or reorder a displayed name with a bidi override.
+    """
+
+    def test_escape_in_xref_does_not_reach_output(self, tmp_path):
+        # Reaches ValidationIssue via ReferenceValidator, not via _add_issue
+        ged = _write_ged(
+            tmp_path / "xref.ged",
+            [
+                "0 @I\x1b[31mX\x1b[0m1@ INDI",
+                "1 NAME A /B/",
+                "1 FAMC @NOPE@",
+            ],
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\x1b" not in rendered
+        assert "\x1b" not in json.dumps(json.loads(result.format_json()))
+
+    def test_bidi_override_in_a_parse_error_is_stripped(self, tmp_path):
+        ged = tmp_path / "bidi.ged"
+        ged.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME A /B/\nXX \u202ednuof rorre on\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\u202e" not in rendered
+
+    def test_a_file_cannot_forge_its_own_verdict(self, tmp_path):
+        # ged4py joins CONT sub-lines with "\n" and sanitize_error keeps "\n"
+        # on purpose, so without flattening, a crafted value prints its own
+        # line at column 0 of the report.
+        ged = _write_ged(
+            tmp_path / "spoof.ged",
+            ["0 @I1@ INDI", "1 NAME A /B/", "1 SEX Q", "2 CONT \u2713 Valid"],
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        # Exactly one line may start with the verdict marker: the tool's own
+        # closing line. A second one is the file talking.
+        verdicts = [ln for ln in rendered.splitlines() if ln.startswith("\u2713 Valid")]
+        assert len(verdicts) == 1
+        assert "(with" in verdicts[0]
+        assert all("\n" not in i.message for i in result.warnings)
+
+    def test_declared_charset_cannot_carry_control_bytes(self, tmp_path):
+        # EncodingInfo is not a ValidationIssue, so it never sees that scrub
+        ged = tmp_path / "chr.ged"
+        ged.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\x08\x08\x1b\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\x08" not in rendered
+        assert "\x1b" not in rendered
+
+    def test_ordinary_messages_survive_unchanged(self, tmp_path):
+        ged = _write_ged(tmp_path / "plain.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        assert any("family connections" in i.message for i in result.warnings)
