@@ -147,10 +147,67 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
     ]
 
 
-# Only these calendars use years in the range MIN_PLAUSIBLE_YEAR..now. Hebrew
-# years run ~5786 and French Republican ~230, so bounding those would reject
-# every legitimate non-Gregorian date.
+# These two already state a year on the Gregorian scale, so MIN_PLAUSIBLE_YEAR
+# bounds them directly. GEDCOM 5.5.1 also defines HEBREW and FRENCH R, whose
+# years count from another epoch - 5786 and 230 are dates in 2026 and 2021 - so
+# those are converted first. Both halves get the same bound afterwards.
 _BOUNDED_CALENDARS = ("GregorianDate", "JulianDate")
+
+# Julian Day 1721425.5 is 0001-01-01 proleptic Gregorian, which is ordinal 1.
+_JD_AT_ORDINAL_ZERO = 1721424.5
+
+
+def _gregorian_year(cal_date: object) -> int | None:
+    """Year on the Gregorian scale, whatever calendar the date is written in.
+
+    estimate_living and the age checks subtract the year from the current one,
+    so a Hebrew or French Republican year means nothing to them until it is
+    converted. ged4py computes a Julian Day for every calendar class it
+    supports, so the conversion is arithmetic on a number it already has - no
+    second date library and no conversion table to keep correct.
+
+    None means the year could not be put on that scale, which callers treat the
+    same way as no year at all.
+    """
+    if type(cal_date).__name__ in _BOUNDED_CALENDARS:
+        year = getattr(cal_date, "year", None)
+        return None if year is None else int(year)
+
+    key = getattr(cal_date, "key", None)
+    if key is None:
+        return None
+    try:
+        ordinal = int(key()[0] - _JD_AT_ORDINAL_ZERO)
+    except (TypeError, ValueError, IndexError):
+        return None
+    # date.fromordinal covers years 1..9999; anything outside is out of the
+    # plausible range anyway, so it fails as "no usable year".
+    if not 1 <= ordinal <= datetime.date.max.toordinal():
+        return None
+    return datetime.date.fromordinal(ordinal).year
+
+
+def _converted_year(date_val: object, *, latest: bool) -> int | None:
+    """Gregorian-scale year, but only for calendars that need converting.
+
+    Returns None for Gregorian and Julian dates so those keep reporting the
+    year exactly as the existing extractors read it.
+    """
+    years = [
+        year
+        for year in (
+            _gregorian_year(cal_date)
+            for cal_date in (
+                getattr(date_val, attr, None) for attr in ("date", "date1", "date2")
+            )
+            if cal_date is not None
+            and type(cal_date).__name__ not in _BOUNDED_CALENDARS
+        )
+        if year is not None
+    ]
+    if not years:
+        return None
+    return max(years) if latest else min(years)
 
 
 def _is_trustworthy(
@@ -194,10 +251,19 @@ def _is_trustworthy(
         if _cal_date_is_misparsed(cal_date):
             return False
 
-        year = getattr(cal_date, "year", None)
-        if year is not None and type(cal_date).__name__ in _BOUNDED_CALENDARS:
-            if not year_floor <= int(year) <= max_year:
-                return False
+        # Converted first, so the bound means the same thing on every calendar.
+        # Skipping it for Hebrew and French Republican let "@#DFRENCH R@ 1 VEND
+        # 230" - a date in 2021 - reach estimate_living as the number 230 and
+        # read as an age of ~1796, publishing a living person.
+        year = _gregorian_year(cal_date)
+        if year is None:
+            # A Gregorian date with no year is as unreadable as a Hebrew one
+            # that would not convert; neither is safe to decide on.
+            return False
+        # year_floor, not MIN_PLAUSIBLE_YEAR: validation drops the 1000 floor
+        # so a spec-conformant "1 JAN 0950" still reaches the chronology checks.
+        if not year_floor <= year <= max_year:
+            return False
     return True
 
 
@@ -267,7 +333,8 @@ def extract_year_for_validation(
     """
     if not _is_trustworthy(date_val, current_year, allow_phrase=True, year_floor=1):
         return None
-    return extract_year_from_date(date_val)
+    converted = _converted_year(date_val, latest=False)
+    return extract_year_from_date(date_val) if converted is None else converted
 
 
 def extract_year_latest_for_liveness(
@@ -283,7 +350,8 @@ def extract_year_latest_for_liveness(
         date_val, current_year, allow_phrase=False, year_floor=MIN_PLAUSIBLE_YEAR
     ):
         return None
-    return extract_year_latest_from_date(date_val)
+    converted = _converted_year(date_val, latest=True)
+    return extract_year_latest_from_date(date_val) if converted is None else converted
 
 
 def get_century(year: int) -> str:

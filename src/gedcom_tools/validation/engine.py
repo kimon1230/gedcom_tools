@@ -785,9 +785,7 @@ class ValidationEngine:
             return None
         return extract_xref(value)
 
-    def _check_all_event_dates(
-        self, record: Record, tags: tuple[str, ...]
-    ) -> None:
+    def _check_all_event_dates(self, record: Record, tags: tuple[str, ...]) -> None:
         """Run W035 over every DATE under every matching event.
 
         One walk of sub_records rather than a sub_tag per path: sub_tag stops

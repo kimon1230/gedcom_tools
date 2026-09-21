@@ -101,6 +101,10 @@ def estimate_living(
 
     has_death_evidence = death_year is not None or burial_year is not None
 
+    # Case-folded here as well as at the producer, so the tag sets hold for any
+    # caller rather than only for _detect_living_marker's output.
+    living_marker = living_marker.upper()
+
     if living_marker in _LIVING_TAGS:
         return True
     if living_marker in _NOT_LIVING_TAGS and has_death_evidence:

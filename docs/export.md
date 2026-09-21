@@ -309,6 +309,16 @@ runs are filtered to plausible years and the first survivor wins, so
 `ref 6789 b. 1850` reports 1850 while `vol 6789 p. 4` reports nothing rather
 than 6789.
 
+**Non-Gregorian calendars are converted before they decide anything.** GEDCOM
+5.5.1 also allows Hebrew and French Republican dates, whose years count from a
+different epoch — `5786` is a date in 2026 and `230` one in 2021. Taken at face
+value `230` reads as an age of roughly 1796, so liveness converts these to the
+Gregorian scale first. `birth_year` and `death_year` still report the year as
+the file writes it; only the decision uses the converted one. A year that falls
+outside the convertible range is treated as no year at all, which means
+redacted. Gregorian and Julian dates already share that scale and are
+unaffected.
+
 ### What Gets Redacted
 
 **Individuals (CSV and JSON):**

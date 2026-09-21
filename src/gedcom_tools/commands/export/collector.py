@@ -88,12 +88,17 @@ def _detect_living_marker(record: Record) -> str:
     # verdict depend on line order, so a record carrying _LVG and _NLIV would
     # publish or redact according to which the exporter happened to write
     # first. A claim that someone IS living always wins - it fails safe.
+    # Case-folded before the lookup: the tag sets are upper-case, but ged4py
+    # hands back whatever the file wrote, so a hand-edited or non-conforming
+    # "_lvg" matched nothing and the strongest do-not-publish signal in the
+    # format was silently discarded.
     not_living = ""
     for sub in record.sub_records:
-        if sub.tag in _LIVING_TAGS:
-            return sub.tag
-        if sub.tag in _NOT_LIVING_TAGS and not not_living:
-            not_living = sub.tag
+        tag = str(sub.tag).upper()
+        if tag in _LIVING_TAGS:
+            return tag
+        if tag in _NOT_LIVING_TAGS and not not_living:
+            not_living = tag
     return not_living
 
 
@@ -146,11 +151,21 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
     # Liveness needs its own walk of the same three tags. Reusing the loop above
     # would stop at a free-text year it must not act on, and never reach a clean
     # CHR/BAPM date behind it.
-    liveness_birth_year = None
-    for liveness_path in ("BIRT/DATE", "CHR/DATE", "BAPM/DATE"):
-        liveness_birth_year = _liveness_year(record, liveness_path)
-        if liveness_birth_year is not None:
-            break
+    # The LATEST of the three, not the first that parses. Stopping at BIRT let a
+    # transcribed-wrong or forged ancient birth year override a later CHR/BAPM
+    # date on the same record and publish someone the christening says is alive.
+    # A later year can only redact more, so max() is the fail-safe direction.
+    liveness_birth_year = max(
+        (
+            year
+            for year in (
+                _liveness_year(record, path)
+                for path in ("BIRT/DATE", "CHR/DATE", "BAPM/DATE")
+            )
+            if year is not None
+        ),
+        default=None,
+    )
 
     # Death: date string + year + place
     death_date = _extract_date_str(record, "DEAT/DATE")

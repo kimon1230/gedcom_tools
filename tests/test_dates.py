@@ -827,10 +827,48 @@ def test_pre_floor_year_is_validated_but_not_acted_on(text: str, expected: int) 
     [
         ("1 JAN 1900", 1900),
         ("1750/51", 1750),  # dual date, the older year is real
-        ("@#DHEBREW@ 1 TSH 5786", 5786),  # Hebrew years are out of range by design
     ],
 )
 def test_plausible_structured_year_survives(text: str, expected: int) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+
+
+# Was asserted to survive as the literal 5786. It must not: estimate_living
+# subtracts the year from the current one, so a Hebrew or French Republican
+# year has to reach it on the Gregorian scale or it means nothing.
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("@#DHEBREW@ 1 TSH 5786", 2026),
+        ("@#DHEBREW@ 1 TSH 5700", 1940),
+        ("@#DHEBREW@ 1 TSH 5600", 1840),
+        ("@#DFRENCH R@ 1 VEND 230", 2021),  # the French Republic ended in year XIV
+        ("@#DFRENCH R@ 1 VEND 8", 1799),
+    ],
+)
+def test_non_gregorian_year_is_converted_for_decisions(
+    text: str, expected: int
+) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+    assert extract_year_latest_for_liveness(DateValue.parse(text)) == expected
+
+
+def test_non_gregorian_year_is_still_reported_as_written() -> None:
+    # Only the decision path converts; export and stats show the file's value
+    assert extract_year_from_date(DateValue.parse("@#DHEBREW@ 1 TSH 5786")) == 5786
+
+
+def test_year_outside_the_convertible_range_is_not_trusted() -> None:
+    # Hebrew year 100 predates the proleptic Gregorian epoch
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 TSH 100")) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("1 JAN 1900", 1900), ("@#DJULIAN@ 1 JAN 1700", 1700)],
+)
+def test_bounded_calendars_are_unchanged(text: str, expected: int) -> None:
+    # The conversion must not touch the two calendars that never needed it
     assert extract_year_for_validation(DateValue.parse(text)) == expected
 
 
