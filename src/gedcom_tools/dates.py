@@ -5,6 +5,11 @@ from __future__ import annotations
 import datetime
 import re
 
+from convertdate import (  # type: ignore[import-untyped]
+    french_republican,
+    hebrew,
+)
+
 # ged4py DateValueTypes - import once at module level for performance
 try:
     from ged4py.date import DateValueTypes
@@ -151,57 +156,163 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
 # bounds them directly. GEDCOM 5.5.1 also defines HEBREW and FRENCH R, whose
 # years count from another epoch - 5786 and 230 are dates in 2026 and 2021 - so
 # those are converted first. Both halves get the same bound afterwards.
-_BOUNDED_CALENDARS = ("GregorianDate", "JulianDate")
+_GREGORIAN_SCALE_CALENDARS = ("GregorianDate", "JulianDate")
 
 # Julian Day 1721425.5 is 0001-01-01 proleptic Gregorian, which is ordinal 1.
-_JD_AT_ORDINAL_ZERO = 1721424.5
+# GEDCOM names Hebrew months from Tishrei; convertdate numbers them from
+# Nisan. ged4py feeds its own GEDCOM index straight into convertdate, which is
+# why its HebrewDate.key() lands ~6 months out - Tishrei-Tevet a year high,
+# Nisan-Elul a year LOW, and a year low publishes a living person.
+_HEBREW_MONTH_TO_CONVERTDATE = {
+    "TSH": 7,
+    "CSH": 8,
+    "KSL": 9,
+    "TVT": 10,
+    "SHV": 11,
+    "ADR": 12,
+    "ADS": 13,
+    "NSN": 1,
+    "IYR": 2,
+    "SVN": 3,
+    "TMZ": 4,
+    "AAV": 5,
+    "ELL": 6,
+}
+
+_FRENCH_MONTH_TO_CONVERTDATE = {
+    "VEND": 1,
+    "BRUM": 2,
+    "FRIM": 3,
+    "NIVO": 4,
+    "PLUV": 5,
+    "VENT": 6,
+    "GERM": 7,
+    "FLOR": 8,
+    "PRAI": 9,
+    "MESS": 10,
+    "THER": 11,
+    "FRUC": 12,
+    "COMP": 13,
+}
 
 
-def _gregorian_year(cal_date: object) -> int | None:
+def _hebrew_gregorian_year(
+    year: int, month: int | None, day: int | None, latest: bool
+) -> int | None:
+    """Gregorian year for a Hebrew date, or None if it will not convert."""
+    if month is None:
+        # A Hebrew year spans two Gregorian ones, so a year with no month has
+        # no single answer - take the end the caller asked for.
+        month = 6 if latest else 7
+    if month > hebrew.year_months(year):
+        # ADS in a common year: 13 months were named, 12 exist.
+        return None
+    if day is None:
+        day = hebrew.month_days(year, month) if latest else 1
+    if day > hebrew.month_days(year, month):
+        # to_gregorian does no range checking of its own and would silently
+        # roll "30 ELL" into the following year.
+        return None
+    return int(hebrew.to_gregorian(year, month, day)[0])
+
+
+def _french_gregorian_year(
+    year: int, month: int | None, day: int | None, latest: bool
+) -> int | None:
+    """Gregorian year for a French Republican date, or None if invalid.
+
+    Unlike hebrew, french_republican DOES validate and raises ValueError, so
+    the range check is the call itself.
+    """
+    if month is None:
+        month = 13 if latest else 1
+    if day is None:
+        day = (6 if french_republican.leap(year) else 5) if month == 13 else 30
+        if not latest:
+            day = 1
+    return int(french_republican.to_gregorian(year, month, day)[0])
+
+
+def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
     """Year on the Gregorian scale, whatever calendar the date is written in.
 
     estimate_living and the age checks subtract the year from the current one,
     so a Hebrew or French Republican year means nothing to them until it is
-    converted. ged4py computes a Julian Day for every calendar class it
-    supports, so the conversion is arithmetic on a number it already has - no
-    second date library and no conversion table to keep correct.
+    converted.
 
-    None means the year could not be put on that scale, which callers treat the
-    same way as no year at all.
+    None means the year could not be put on that scale, which callers treat
+    the same way as no year at all.
     """
-    if type(cal_date).__name__ in _BOUNDED_CALENDARS:
-        year = getattr(cal_date, "year", None)
-        return None if year is None else int(year)
-
-    key = getattr(cal_date, "key", None)
-    if key is None:
+    year = getattr(cal_date, "year", None)
+    if year is None:
         return None
     try:
-        ordinal = int(key()[0] - _JD_AT_ORDINAL_ZERO)
-    except (TypeError, ValueError, IndexError):
+        year = int(year)
+    except (TypeError, ValueError):
         return None
-    # date.fromordinal covers years 1..9999; anything outside is out of the
-    # plausible range anyway, so it fails as "no usable year".
-    if not 1 <= ordinal <= datetime.date.max.toordinal():
+
+    # BC applies to every calendar, not just the converted ones. Negating it
+    # here lets the policy bound reject it rather than reading 100 B.C. as AD.
+    if getattr(cal_date, "bc", False):
+        year = -year
+
+    name = type(cal_date).__name__
+    if name in _GREGORIAN_SCALE_CALENDARS:
+        return year
+    if year < 1:
         return None
-    return datetime.date.fromordinal(ordinal).year
+
+    month_token = getattr(cal_date, "month", None)
+    day = getattr(cal_date, "day", None)
+    try:
+        if name == "HebrewDate":
+            month = (
+                None
+                if month_token is None
+                else _HEBREW_MONTH_TO_CONVERTDATE.get(str(month_token).upper())
+            )
+            if month_token is not None and month is None:
+                return None
+            return _hebrew_gregorian_year(year, month, day, latest)
+        if name == "FrenchDate":
+            month = (
+                None
+                if month_token is None
+                else _FRENCH_MONTH_TO_CONVERTDATE.get(str(month_token).upper())
+            )
+            if month_token is not None and month is None:
+                return None
+            return _french_gregorian_year(year, month, day, latest)
+    except (TypeError, ValueError, IndexError, ArithmeticError):
+        # ArithmeticError covers OverflowError, which a 400-digit year raises.
+        # ValueError is french_republican's own range rejection, and a year
+        # over ~4300 digits raises it from int-to-str conversion.
+        return None
+
+    return None
 
 
 def _converted_year(date_val: object, *, latest: bool) -> int | None:
-    """Gregorian-scale year, but only for calendars that need converting.
+    """Gregorian-scale year folded across every readable half.
 
-    Returns None for Gregorian and Julian dates so those keep reporting the
-    year exactly as the existing extractors read it.
+    Every half is converted, including Gregorian and Julian ones: dropping
+    those lost the Gregorian bound of a mixed-calendar range, so
+    "BET @#DHEBREW@ 1 TSH 5600 AND 2010" read as 1840 and published a living
+    person.
+
+    Precondition: _is_trustworthy has already run and returned True, so every
+    present half is known to convert. There is no poison check here because it
+    could never fire - the trust gate rejects an unreadable half before either
+    reader gets this far.
     """
     years = [
         year
         for year in (
-            _gregorian_year(cal_date)
+            _gregorian_year(cal_date, latest=latest)
             for cal_date in (
                 getattr(date_val, attr, None) for attr in ("date", "date1", "date2")
             )
             if cal_date is not None
-            and type(cal_date).__name__ not in _BOUNDED_CALENDARS
         )
         if year is not None
     ]
