@@ -191,28 +191,69 @@ def _is_trustworthy(
         if cal_date is None:
             continue
 
-        month = getattr(cal_date, "month", None)
-        if month and getattr(cal_date, "month_num", None) is None:
-            # month_num is set for Hebrew/French-Republican months too, so this
-            # only reaches junk; MONTH_TO_NUM still admits ged4py's "JUNE".
-            if MONTH_TO_NUM.get(str(month).upper()[:3]) is None:
-                return False
+        if _cal_date_is_misparsed(cal_date):
+            return False
 
         year = getattr(cal_date, "year", None)
-
-        # "3/1990" is a dual-year mis-parse: ged4py reads year 3, dual 1990.
-        # A real dual date spans one year boundary ("1750/51" -> 1750/1751),
-        # so the gap is the discriminator. The floor used to catch this by
-        # accident; validation drops the floor, so it has to be explicit.
-        dual_year = getattr(cal_date, "dual_year", None)
-        if year is not None and dual_year is not None:
-            if int(dual_year) - int(year) != 1:
-                return False
-
         if year is not None and type(cal_date).__name__ in _BOUNDED_CALENDARS:
             if not year_floor <= int(year) <= max_year:
                 return False
     return True
+
+
+def _cal_date_is_misparsed(cal_date: object) -> bool:
+    """Whether ged4py's parse of one calendar date is a mis-parse.
+
+    It validates neither the month token nor the dual-year form, so "Reg 1823"
+    arrives as a SIMPLE date whose month is "REG", and "3/1990" as the dual
+    year 3. Both look structured; neither is a date.
+
+    Says nothing about whether the year is plausible - that is a separate
+    question with a separate answer, and conflating them tells the user of
+    "25 DEC 9999" to fix a format that is already correct.
+    """
+    month = getattr(cal_date, "month", None)
+    if month and getattr(cal_date, "month_num", None) is None:
+        # month_num is set for Hebrew/French-Republican months too, so this
+        # only reaches junk; MONTH_TO_NUM still admits ged4py's "JUNE".
+        if MONTH_TO_NUM.get(str(month).upper()[:3]) is None:
+            return True
+
+    # A real dual date spans one year boundary ("1750/51" -> 1750/1751), so the
+    # gap is the discriminator. royal92 carries both shapes: "1 MAR 1665/6" is
+    # genuine, "1056/1060" is a range written the wrong way.
+    year = getattr(cal_date, "year", None)
+    dual_year = getattr(cal_date, "dual_year", None)
+    if year is not None and dual_year is not None:
+        if int(dual_year) - int(year) != 1:
+            return True
+
+    return False
+
+
+def has_unreadable_structure(date_val: object) -> bool:
+    """Whether a STRUCTURED date is a mis-parse rather than a date.
+
+    ged4py validates neither the month token nor the dual-year form, so
+    "Reg 1823" becomes a SIMPLE date whose month is "REG", and "3/1990" becomes
+    the dual year 3. Both arrive looking structured and neither is a date.
+
+    Deliberately ignores the plausibility bound. "25 DEC 9999" IS in GEDCOM
+    form - its problem is the year, not the form - so telling the user to write
+    it as DD MMM YYYY would be wrong on both counts.
+    """
+    if is_phrase_date(date_val):
+        return False
+
+    for attr in ("date", "date1", "date2"):
+        cal_date = getattr(date_val, attr, None)
+        if cal_date is None:
+            continue
+
+        if _cal_date_is_misparsed(cal_date):
+            return True
+
+    return False
 
 
 def extract_year_for_validation(

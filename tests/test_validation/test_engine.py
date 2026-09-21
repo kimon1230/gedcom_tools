@@ -1274,6 +1274,41 @@ class TestNonStandardDateWarning:
         body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE (during the war) "]
         assert self._issues(tmp_path, body) == []
 
+    def test_deep_paren_line_is_still_exempt(self, tmp_path):
+        # The exemption index is an array("Q") searched with bisect, not a set.
+        # TWO parenthesised lines, far apart: a lookup that only ever checks the
+        # first entry is correct for the early one and wrong for the late one,
+        # so a single-paren fixture would not catch it.
+        body = ["0 @P1@ INDI", "1 NAME Early /Paren/", "1 BIRT"]
+        body += ["2 DATE (first paren)"]
+        for i in range(1, 201):
+            body += [
+                f"0 @F{i}@ INDI",
+                f"1 NAME F{i} /X/",
+                "1 BIRT",
+                "2 DATE 1 JAN 1900",
+            ]
+        body += ["0 @P2@ INDI", "1 NAME Late /Paren/", "1 BIRT"]
+        body += ["2 DATE (second paren)"]
+        body += ["0 @I2@ INDI", "1 NAME C /D/", "1 BIRT", "2 DATE 30 November 1989"]
+        issues = self._issues(tmp_path, body)
+        # Both paren lines are exempt; only the bare phrase warns.
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+
+    def test_quick_and_full_report_the_same_w035_set(self, tmp_path):
+        # --quick runs W035 and consults the same exemption index, so skipping
+        # the index in quick mode would emit a false warning on spec-legal input
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE (during the war)"]
+        body += ["0 @I2@ INDI", "1 NAME C /D/", "1 BIRT", "2 DATE 30 November 1989"]
+        ged = _write_ged(tmp_path / "w035_modes.ged", body)
+        codes = {}
+        for mode in ("quick", "full"):
+            result = ValidationEngine(ged, mode=mode, quiet=True).validate()
+            codes[mode] = [i.message for i in result.warnings if i.code.value == "W035"]
+        assert codes["quick"] == codes["full"]
+        assert len(codes["full"]) == 1
+
     def test_empty_date_line_does_not_warn(self, tmp_path):
         assert (
             self._issues(tmp_path, ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE"])
@@ -1390,11 +1425,110 @@ class TestNonStandardDateWarning:
         ]
         assert len(self._issues(tmp_path, body)) == 4
 
-    def test_royal92_reports_exactly_its_two_phrase_dates(self):
+    # W035 is a UNION of two rules, and the union is the point. The phrase
+    # rule catches what ged4py could not parse; the structural rule catches
+    # what it parsed WRONG. Keying the whole check on the trust gate instead
+    # would swap the two sets rather than widen them.
+    STRUCTURAL_MISPARSES = ["3/1990", "1/1985", "Reg 1823", "Vol 1823"]
+
+    @pytest.mark.parametrize("text", STRUCTURAL_MISPARSES)
+    def test_structural_misparse_now_warns(self, tmp_path, text):
+        issues = self._issues(tmp_path, self._birth(text))
+        assert len(issues) == 1
+
+    def test_structural_misparse_echoes_the_files_own_text(self, tmp_path):
+        # str(date_val) would give ged4py's NORMALISED "3/90", which the user
+        # cannot find by searching their file. The echo comes from the raw line.
+        issues = self._issues(tmp_path, self._birth("3/1990"))
+        assert '"3/1990"' in issues[0].message
+        assert "3/90" not in issues[0].message
+
+    # In GEDCOM form already - the year may be wrong, but the FORM is not,
+    # so "use the DD MMM YYYY form" would be false advice.
+    CONFORMANT_BUT_ODD = [
+        "25 DEC 9999",  # implausible year, correct form
+        "1750/51",  # genuine Julian/Gregorian dual date
+        "1699/00",  # the same, across a century
+        "BEF 1950",
+        "1 JAN 0950",  # pre-1000 but perfectly readable
+        "1 JAN 1900",
+    ]
+
+    @pytest.mark.parametrize("text", CONFORMANT_BUT_ODD)
+    def test_conformant_date_never_warns(self, tmp_path, text):
+        assert self._issues(tmp_path, self._birth(text)) == []
+
+    # Every one of these warned before the structural rule was added and must
+    # still warn after it - the union must not become a swap.
+    PHRASE_BASELINE = [
+        "30 November 1989",
+        "12/2/1882",
+        "Christmas 1901",
+        "10 JAN",
+        "1801-1875",
+        "Census 1900 record",
+        "vol 6789 p. 4",
+    ]
+
+    @pytest.mark.parametrize("text", PHRASE_BASELINE)
+    def test_phrase_baseline_still_warns(self, tmp_path, text):
+        assert len(self._issues(tmp_path, self._birth(text))) == 1
+
+    def test_second_birth_event_is_also_checked(self, tmp_path):
+        # sub_tag returns the FIRST match, so the second BIRT of a merged
+        # record used to be checked by nothing at all.
+        body = ["0 @I1@ INDI", "1 NAME A /B/"]
+        body += ["1 BIRT", "2 DATE 1 JAN 1900"]
+        body += ["1 BIRT", "2 DATE 30 November 1989"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+
+    def test_second_marriage_event_is_also_checked(self, tmp_path):
+        # MARR lives in _process_fam, so one walk over INDI cannot reach it
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "0 @I2@ INDI", "1 NAME C /D/"]
+        body += ["0 @F1@ FAM", "1 HUSB @I1@", "1 WIFE @I2@"]
+        body += ["1 MARR", "2 DATE 1 JAN 1900"]
+        body += ["1 MARR", "2 DATE 12/2/1882"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        assert "12/2/1882" in issues[0].message
+
+    @pytest.mark.parametrize("tag", ["BIRT", "CHR", "BAPM", "DEAT", "BURI"])
+    def test_each_event_warns_exactly_once(self, tmp_path, tag):
+        # The walk must not run alongside a surviving per-path check. A double
+        # visit halves the reporting budget and inflates total_warnings - and a
+        # cherry-pick conflict has already tried to reintroduce exactly that.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", f"1 {tag}", "2 DATE 30 November 1989"]
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_marriage_warns_exactly_once(self, tmp_path):
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "0 @I2@ INDI", "1 NAME C /D/"]
+        body += ["0 @F1@ FAM", "1 HUSB @I1@", "1 WIFE @I2@"]
+        body += ["1 MARR", "2 DATE 30 November 1989"]
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_royal92_reports_its_four_nonstandard_dates(self):
+        # 6436 and 27126 are bare phrases ("10 JAN", "20 JUL") that ged4py
+        # could not parse at all. 12060 and 12199 are informal ranges -
+        # "1056/1060", "ABT 1103/1105" - that it mis-parses as dual years.
+        # A real dual date spans ONE year boundary, so a gap of 4 or 2 is a
+        # range written the wrong way and belongs in BET x AND y form.
         royal92 = FIXTURES / "royal92.ged"
         engine = ValidationEngine(royal92, mode="full", quiet=True)
         issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
-        assert sorted(i.line for i in issues) == [6436, 27126]
+        assert sorted(i.line for i in issues) == [6436, 12060, 12199, 27126]
+
+    def test_royal92_real_dual_dates_stay_silent(self):
+        # The same file carries genuine dual dates - "1 MAR 1665/6",
+        # "29 SEP 1657/8" - which must NOT warn, or the rule is just
+        # "anything with a slash".
+        royal92 = FIXTURES / "royal92.ged"
+        engine = ValidationEngine(royal92, mode="full", quiet=True)
+        issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
+        echoed = " ".join(i.message for i in issues)
+        assert "1665/6" not in echoed
+        assert "1657/8" not in echoed
 
 
 class TestIssueTextIsScrubbed:
