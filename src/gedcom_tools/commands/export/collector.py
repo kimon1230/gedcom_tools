@@ -15,8 +15,9 @@ from gedcom_tools.commands.export.models import (
 )
 from gedcom_tools.dates import (
     extract_year_from_date,
-    extract_year_latest_from_date,
+    extract_year_latest_for_liveness,
     is_phrase_date,
+    phrase_text,
 )
 from gedcom_tools.utils import (
     count_sources_recursive,
@@ -47,11 +48,18 @@ def _extract_year(record: Record, path: str) -> int | None:
     return extract_year_from_date(date_rec.value)
 
 
-def _extract_year_latest(record: Record, path: str) -> int | None:
+def _liveness_year(record: Record, path: str) -> int | None:
+    """Year for the liveness decision only.
+
+    Stricter than _extract_year on purpose: a year recovered from a free-text
+    phrase is reported as birth_year/death_year, but feeding it to
+    estimate_living would let "Reg. 1823 vol II" publish someone who is alive.
+    """
     date_rec = record.sub_tag(path)
     if date_rec is None or date_rec.value is None:
         return None
-    return extract_year_latest_from_date(date_rec.value)
+
+    return extract_year_latest_for_liveness(date_rec.value)
 
 
 def _extract_date_str(record: Record, path: str) -> str:
@@ -64,8 +72,7 @@ def _extract_date_str(record: Record, path: str) -> str:
     if date_rec is None or date_rec.value is None:
         return ""
     if is_phrase_date(date_rec.value):
-        phrase = getattr(date_rec.value, "phrase", None)
-        return str(phrase) if phrase else ""
+        return phrase_text(date_rec.value)
     return str(date_rec.value)
 
 
@@ -77,12 +84,17 @@ def _detect_living_marker(record: Record) -> str:
     """
     from gedcom_tools.commands.export.models import _LIVING_TAGS, _NOT_LIVING_TAGS
 
+    # Collect both before deciding: returning on the first match makes the
+    # verdict depend on line order, so a record carrying _LVG and _NLIV would
+    # publish or redact according to which the exporter happened to write
+    # first. A claim that someone IS living always wins - it fails safe.
+    not_living = ""
     for sub in record.sub_records:
-        if sub.tag in _NOT_LIVING_TAGS:
-            return sub.tag
         if sub.tag in _LIVING_TAGS:
             return sub.tag
-    return ""
+        if sub.tag in _NOT_LIVING_TAGS and not not_living:
+            not_living = sub.tag
+    return not_living
 
 
 def _extract_suffix(name_record: Record) -> str:
@@ -123,7 +135,6 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
     # Birth: date string + year + place, with fallbacks
     birth_date = _extract_date_str(record, "BIRT/DATE")
     birth_year = _extract_year(record, "BIRT/DATE")
-    birth_year_latest = _extract_year_latest(record, "BIRT/DATE")
     birth_place = _extract_place(record, "BIRT")
 
     # Fallback for birth year: CHR, then BAPM (year only, not date string)
@@ -131,11 +142,21 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
         if birth_year is not None:
             break
         birth_year = _extract_year(record, fallback_path)
-        birth_year_latest = _extract_year_latest(record, fallback_path)
+
+    # Liveness needs its own walk of the same three tags. Reusing the loop above
+    # would stop at a free-text year it must not act on, and never reach a clean
+    # CHR/BAPM date behind it.
+    liveness_birth_year = None
+    for liveness_path in ("BIRT/DATE", "CHR/DATE", "BAPM/DATE"):
+        liveness_birth_year = _liveness_year(record, liveness_path)
+        if liveness_birth_year is not None:
+            break
 
     # Death: date string + year + place
     death_date = _extract_date_str(record, "DEAT/DATE")
     death_year = _extract_year(record, "DEAT/DATE")
+    liveness_death_year = _liveness_year(record, "DEAT/DATE")
+    liveness_burial_year = _liveness_year(record, "BURI/DATE")
     death_place = _extract_place(record, "DEAT")
 
     # Fallback for death year: BURI (year only)
@@ -182,7 +203,6 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
         sex=sex,
         birth_date=birth_date,
         birth_year=birth_year,
-        birth_year_latest=birth_year_latest,
         birth_place=birth_place,
         death_date=death_date,
         death_year=death_year,
@@ -194,6 +214,9 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
         famc_xref=famc_xref,
         fams_xrefs=fams_xrefs,
         living_marker=living_marker,
+        liveness_birth_year=liveness_birth_year,
+        liveness_death_year=liveness_death_year,
+        liveness_burial_year=liveness_burial_year,
         alt_names=alt_names,
         notes=notes,
     )

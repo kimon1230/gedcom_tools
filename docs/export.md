@@ -85,10 +85,10 @@ gedcom-tools export family.ged -o individuals.csv --force
 | `suffix` | Name suffix (Jr., Sr., III, etc.) |
 | `sex` | Sex code: M, F, U, or X |
 | `birth_date` | GEDCOM date string (e.g., `15 JAN 1850`, `ABT 1920`) |
-| `birth_year` | Extracted numeric year (empty if unknown) |
+| `birth_year` | Extracted numeric year, including from non-standard date text (empty if none found) |
 | `birth_place` | Birth place string |
 | `death_date` | GEDCOM date string |
-| `death_year` | Extracted numeric year (empty if unknown) |
+| `death_year` | Extracted numeric year, including from non-standard date text (empty if none found) |
 | `death_place` | Death place string |
 | `burial_date` | Burial date string |
 | `burial_place` | Burial place string |
@@ -257,7 +257,7 @@ When no custom tag decides the matter, estimation falls back to dates:
 1. **Birth year more than max_age years ago** → not living, whether or not the
    record has a death date
 2. **Has death year or burial date** → not living
-3. **Everything else, including an absent or unparseable birth date** →
+3. **Everything else, including an absent or unreadable birth date** →
    estimated living, so **redacted**
 
 The `--max-age` option controls the threshold (default: 110 years, inclusive;
@@ -269,6 +269,45 @@ For a birth date that is a range or period (`BET 1900 AND 1995`), the **latest**
 bound drives the decision, since that is the reading under which the person may
 still be alive. The exported `birth_year` column is unaffected and keeps
 reporting the earliest bound.
+
+#### Years recovered from non-standard date text
+
+GEDCOM asks for a three-letter month (`30 NOV 1989`), and a date written any
+other way — `30 November 1989`, `12/2/1882`, `1801-1875` — is free text as far
+as the parser is concerned. The exported `birth_year` and `death_year` recover a
+year from that text wherever one is present.
+
+Liveness estimation ignores every one of those recovered years, deliberately.
+A year that came from free text never decides whether someone is published:
+
+| Date text | `birth_year` (reported) | Used for liveness? |
+|-----------|-------------------------|--------------------|
+| `30 November 1989` | 1989 | **no** |
+| `12/2/1882` | 1882 | **no** |
+| `1801-1875` (a range) | 1801 | **no** |
+| `Census 1900 record` | 1900 | **no** |
+| `Reg. 1823 vol II` | 1823 | **no** |
+| `vol 6789 p. 4` | *(none)* | no |
+| `30 NOV 1989` (conformant) | 1989 | **yes** |
+
+The reason is that the recovery cannot tell a date from a citation shaped like
+one. `12.1823.4` — volume 12, year 1823, page 4 — has the same token profile as
+`12/2/1882`: a small number, a four-digit year, a small number. Any rule that
+accepts the second accepts the first, and reading an archive reference as
+"born long ago" publishes someone who is alive.
+
+So a record whose only date is free text is treated as having no birth year at
+all, which by the rule above means redacted. The cost is over-redacting people
+whose free-text dates prove them long dead. That is the intended trade: a
+wrongly withheld row is a nuisance, a wrongly published one is a disclosure.
+
+Dates GEDCOM writes conformantly are unaffected — they are parsed, not
+recovered, and decide liveness exactly as before.
+
+A recovered year is also range-checked before it is reported at all. Four-digit
+runs are filtered to plausible years and the first survivor wins, so
+`ref 6789 b. 1850` reports 1850 while `vol 6789 p. 4` reports nothing rather
+than 6789.
 
 ### What Gets Redacted
 
@@ -328,7 +367,9 @@ file permissions are managed by the OS and this step is skipped.
 - Date strings are ged4py's canonical form, not verbatim original GEDCOM text
 - `--redact-living` errs toward redaction: an individual with no custom tag, no
   usable birth year and no death record is redacted, so a file thin on dates
-  loses more rows than one might expect
+  loses more rows than one might expect. A year recovered from free-text date
+  notes does not count as usable for this purpose — see
+  [Years recovered from non-standard date text](#years-recovered-from-non-standard-date-text)
 - Only inline NOTE text is exported; pointer-referenced notes (`NOTE @N1@`) are
   skipped
 - `--table` is ignored for JSON format (always includes both individuals and

@@ -1110,6 +1110,7 @@ in a specific format. See [Export Command](docs/export.md) for full details.
 **Living estimation:**
 - Uses birth year, death records, and any custom living tags in the file to estimate whether someone is living
 - Unknown means living: an individual with no usable birth date and no death record **is** redacted, so a file thin on dates loses more rows than a birth-year-only rule would take
+- A year recovered from non-standard date text (`30 November 1989`, `12/2/1882`, `1801-1875`) is reported in `birth_year`/`death_year`, but only decides living/not-living when the text is a date and nothing else — `Census 1900 record` yields `birth_year` 1900 and is still treated as undated for redaction. See [Export Command](docs/export.md) for the full rule
 - A living couple's `marriage_date`, `marriage_year` and `marriage_place` are cleared too — one living spouse is enough, since a wedding date and venue re-identify the pair
 - `meta.redacted_count` in JSON reports how many individuals were actually redacted; `meta.redacted_living` only reports that the flag was set
 

@@ -97,6 +97,13 @@ Buckets: 1, 2-3, 4-6, 7-9, 10+
 Monthly distribution of births.
 
 **Important:** Only includes actual birth dates that are not approximate.
+Dates written in a non-standard form — a full month name (`30 November 1989`),
+a slash date (`12/2/1882`), or a day and month with no year (`10 JAN`) — are
+read for their year and month where those are present, rather than being
+counted as missing. GEDCOM asks for a three-letter month, and ged4py parses
+only May, June and July in full, so a file written by software that spells
+months out would otherwise report an empty timeline.
+
 Dates marked with ABT, BEF, AFT, etc. are excluded because the month may
 be uncertain. Christening/baptism dates are also excluded.
 

@@ -5,6 +5,7 @@ import csv
 import io
 import json
 from pathlib import Path
+from types import EllipsisType
 from typing import Any
 
 import pytest
@@ -48,7 +49,16 @@ def _indi(
     living_marker: str = "",
     alt_names: list[tuple[str, str]] | None = None,
     notes: list[str] | None = None,
+    liveness_birth_year: int | None | EllipsisType = ...,
+    liveness_death_year: int | None | EllipsisType = ...,
 ) -> ExportIndividual:
+    # Most tests only care about the reported years; mirror them into the
+    # liveness fields so redaction behaves the way the test names imply.
+    # Ellipsis rather than -1: a negative year is a legal value here.
+    if liveness_birth_year is ...:
+        liveness_birth_year = birth_year
+    if liveness_death_year is ...:
+        liveness_death_year = death_year
     return ExportIndividual(
         xref=xref,
         given_name=given_name,
@@ -68,6 +78,8 @@ def _indi(
         famc_xref=famc_xref,
         fams_xrefs=fams_xrefs if fams_xrefs is not None else ["@F1@", "@F7@"],
         living_marker=living_marker,
+        liveness_birth_year=liveness_birth_year,
+        liveness_death_year=liveness_death_year,
         alt_names=alt_names or [],
         notes=notes or [],
     )
@@ -222,6 +234,47 @@ class TestCsvIndividuals:
         reader = csv.reader(io.StringIO(out))
         rows = list(reader)
         assert rows[1][1] == "John"
+
+    def test_reported_year_alone_does_not_publish(self) -> None:
+        # The two field sets exist precisely so they can disagree: a year the
+        # gate refused is reported but must not decide. Without this, reverting
+        # formatters.py to read birth_year/death_year passes every test here.
+        untrusted = _indi(
+            birth_year=1900,
+            death_year=None,
+            liveness_birth_year=None,
+            liveness_death_year=None,
+        )
+        out = format_csv(
+            _result(individuals=[untrusted]),
+            include_bom=False,
+            redact_living=True,
+        )
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[1][1] == "Living"
+
+    def test_trusted_year_does_publish(self) -> None:
+        trusted = _indi(birth_year=1900, death_year=None, liveness_birth_year=1900)
+        out = format_csv(
+            _result(individuals=[trusted]),
+            include_bom=False,
+            redact_living=True,
+        )
+        rows = list(csv.reader(io.StringIO(out)))
+        assert rows[1][1] == "John"
+
+    def test_reported_death_year_alone_does_not_publish(self) -> None:
+        untrusted = _indi(
+            birth_year=None,
+            death_year=1823,
+            liveness_birth_year=None,
+            liveness_death_year=None,
+            burial_date="",
+        )
+        data = json.loads(
+            format_json(_result(individuals=[untrusted]), redact_living=True)
+        )
+        assert data["individuals"][0]["given_name"] == "Living"
 
 
 # ---------------------------------------------------------------------------

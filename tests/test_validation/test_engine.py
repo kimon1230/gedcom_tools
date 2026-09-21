@@ -1151,3 +1151,59 @@ class TestEncodingErrors:
         ]
         assert len(decode_failures) == 1
         assert "0xff" in decode_failures[0].message
+
+
+class TestPhraseDatesDoNotFabricateWarnings:
+    """Age and chronology checks act on the year, so they take the strict reading.
+
+    A four-digit run in a free-text date note is as often an archive reference
+    as a year, and validate must not fail a user's file on one.
+    """
+
+    def _codes(self, tmp_path, body):
+        ged = _write_ged(tmp_path / "t.ged", body)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        return {i.code.value for i in engine.validate().warnings}
+
+    def test_reference_number_does_not_imply_an_age(self, tmp_path):
+        codes = self._codes(
+            tmp_path,
+            [
+                "0 @I1@ INDI",
+                "1 NAME Bob /Alive/",
+                "1 BIRT",
+                "2 DATE Reg. 1823 vol II",
+                "1 DEAT",
+                "2 DATE 4 October 1950",
+            ],
+        )
+        assert "W023" not in codes
+
+    def test_a_real_implausible_age_still_fires(self, tmp_path):
+        codes = self._codes(
+            tmp_path,
+            [
+                "0 @I1@ INDI",
+                "1 NAME Bob /Old/",
+                "1 BIRT",
+                "2 DATE 3 MAR 1823",
+                "1 DEAT",
+                "2 DATE 4 October 1950",
+            ],
+        )
+        assert "W023" in codes
+
+    def test_a_clean_phrase_date_is_trusted(self, tmp_path):
+        # "4 October 1950" is free text to ged4py but unambiguously a date
+        codes = self._codes(
+            tmp_path,
+            [
+                "0 @I1@ INDI",
+                "1 NAME Ann /Old/",
+                "1 BIRT",
+                "2 DATE 3 March 1823",
+                "1 DEAT",
+                "2 DATE 4 October 1950",
+            ],
+        )
+        assert "W023" in codes
