@@ -312,3 +312,36 @@ class TestMetaphoneCollector:
         # Primary codes should still be set
         assert ind.surname_phonetic == "S530"
         assert ind.given_phonetic != ""
+
+
+class TestPhraseDatesReachMatching:
+    """Issue #20's year recovery changed what `compare` sees.
+
+    Recovering a year from free text was reasoned about for export, stats and
+    search. It also feeds compare/duplicates: the blocking keys and the Birth
+    Year field score both read `birth_year`, so a record that carried no year
+    on main now carries one. These rows pin that, so the next person to touch
+    the phrase gate sees which commands move with it.
+    """
+
+    def test_phrase_birth_date_now_yields_a_year(self, tmp_path: Path) -> None:
+        # main: None, so this individual sat out every year-keyed blocking pass
+        ged = "0 @I1@ INDI\n1 NAME Ann /Smith/\n1 BIRT\n2 DATE 30 November 1989\n"
+        ind = collect_individuals(_write_ged(tmp_path, ged), "A")[0]
+        assert ind.birth_year == 1989
+        assert ind.birth_decade == "1980s"
+
+    def test_citation_year_also_reaches_matching(self, tmp_path: Path) -> None:
+        # Known and accepted: "Reg. 1823 vol II" is an archive reference, and
+        # the recovery cannot tell it from a date. It is now a matching year.
+        # Documented in docs/export.md; noted here because compare scores on it.
+        ged = "0 @I1@ INDI\n1 NAME Bob /Jones/\n1 BIRT\n2 DATE Reg. 1823 vol II\n"
+        ind = collect_individuals(_write_ged(tmp_path, ged), "A")[0]
+        assert ind.birth_year == 1823
+
+    def test_implausible_run_still_yields_no_year(self, tmp_path: Path) -> None:
+        # The bound keeps an ID fragment out of the blocking key entirely.
+        ged = "0 @I1@ INDI\n1 NAME Cal /Brown/\n1 BIRT\n2 DATE vol 6789 p. 4\n"
+        ind = collect_individuals(_write_ged(tmp_path, ged), "A")[0]
+        assert ind.birth_year is None
+        assert ind.birth_decade == ""

@@ -623,16 +623,20 @@ class TestRedactLiving:
 class TestRedactLivingPhraseDates:
     """Which recovered years may influence redaction.
 
-    Three roles here, and they fail under different breakages:
-      * leak guards fail if the clean-date gate is reverted
+    Since the phrase gate landed, NO recovered free-text year reaches the
+    redaction decision. Roles here, and what each fails under:
+      * leak guards fail if the phrase gate is reverted
       * the over-redaction guard fails if liveness stops walking CHR/BAPM itself
-      * intent and invariant rows hold under both
+      * the reporting rows fail if issue #20's recovery is reverted
+      * the structured row fails if the liveness reader stops reading real dates
     """
 
-    def test_clean_death_phrase_publishes(self, tmp_path: Path) -> None:
-        # intent: a clean death phrase must publish
+    def test_clean_death_phrase_now_stays_redacted(self, tmp_path: Path) -> None:
+        # Accepted cost of the phrase gate: a death recorded as free text is
+        # no longer death evidence, so Ada is withheld although she is plainly
+        # dead. Over-redacting one row beats publishing one living person.
         ged = "0 @I1@ INDI\n1 NAME Ada /Gone/\n1 DEAT\n2 DATE 4 October 1950\n"
-        assert _redacted_xrefs(tmp_path, ged) == set()
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
     def test_reference_number_birth_phrase_stays_redacted(self, tmp_path: Path) -> None:
         # leak guard: 1823 is an archive reference, not a birth year
@@ -666,24 +670,45 @@ class TestRedactLivingPhraseDates:
         )
         assert _redacted_xrefs(tmp_path, ged) == set()
 
-    def test_clean_phrase_in_living_range_stays_redacted(self, tmp_path: Path) -> None:
-        # Assert the recovered year too: redaction alone is indistinguishable
-        # from the no-date case, so it would survive any mutation of the gate.
+    def test_clean_phrase_reports_its_year_but_never_decides(
+        self, tmp_path: Path
+    ) -> None:
+        # The whole of issue #20 and the whole of the phrase gate, in one row:
+        # the year IS recovered for reporting, and is NOT available to the
+        # redaction decision.
         ged = "0 @I1@ INDI\n1 NAME Gus /Alive/\n1 BIRT\n2 DATE 30 November 1989\n"
         ind = collect_export_data(_write_ged(tmp_path, ged)).individuals[0]
-        assert ind.birth_year == 1989
+        assert ind.birth_year == 1989  # issue #20: still recovered
+        assert ind.liveness_birth_year is None  # but withheld from the gate
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_structured_year_in_living_range_still_decides(
+        self, tmp_path: Path
+    ) -> None:
+        # Mutation guard, re-pointed at a structured date now that the phrase
+        # row above can no longer carry it: redaction alone is indistinguishable
+        # from the no-date case, so assert the year the gate actually used.
+        ged = "0 @I1@ INDI\n1 NAME Gus /Alive/\n1 BIRT\n2 DATE 30 NOV 1989\n"
+        ind = collect_export_data(_write_ged(tmp_path, ged)).individuals[0]
         assert ind.liveness_birth_year == 1989
         assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
-    def test_clean_phrase_long_ago_publishes(self, tmp_path: Path) -> None:
+    def test_slash_date_no_longer_publishes(self, tmp_path: Path) -> None:
+        # THE issue-#20 regression. Recovering 1882 from "12/2/1882" turned
+        # "unknown -> redact" into "age 144 -> publish"; main redacts this and
+        # the branch did not. A citation like "12.1823.4" has the same token
+        # profile, so the class has to go rather than the instance.
         ged = "0 @I1@ INDI\n1 NAME Hal /Gone/\n1 BIRT\n2 DATE 12/2/1882\n"
-        assert _redacted_xrefs(tmp_path, ged) == set()
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
-    def test_year_range_phrase_publishes(self, tmp_path: Path) -> None:
+    def test_year_range_phrase_now_stays_redacted(self, tmp_path: Path) -> None:
         # The commonest phrase shape in real files: a bare "1801-1875" range.
-        # ged4py reads it as free text, but the upper bound is a real one.
+        # ged4py reads it as free text, so the gate withholds it even though
+        # the upper bound is real. The reported birth_year is unaffected.
         ged = "0 @I1@ INDI\n1 NAME Ida /Gone/\n1 BIRT\n2 DATE 1801-1875\n"
-        assert _redacted_xrefs(tmp_path, ged) == set()
+        ind = collect_export_data(_write_ged(tmp_path, ged)).individuals[0]
+        assert ind.birth_year == 1801  # issue #20: still recovered
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
     def test_year_list_phrase_stays_redacted(self, tmp_path: Path) -> None:
         # Three or more years is a list of candidate dates, not a range

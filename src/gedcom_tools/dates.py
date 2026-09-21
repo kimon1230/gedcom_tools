@@ -126,15 +126,56 @@ def is_clean_date_phrase(text: str, current_year: int | None = None) -> bool:
     return small_count <= 2 * year_count
 
 
+def plausible_years(text: str, current_year: int | None = None) -> list[int]:
+    """Four-digit runs in free text that could plausibly be a year, in text order.
+
+    The first run in a note is as often an archive reference, a regiment or a
+    page number as a year. Filtering the candidates - rather than bounding
+    whichever one was picked - keeps "ref 6789 b. 1850" reporting 1850 instead
+    of discarding the record entirely.
+
+    Free text only. A structured date's year is whatever the file says, and
+    bounding it here would null legitimate pre-1000 years that ged4py parsed
+    correctly.
+    """
+    base = datetime.date.today().year if current_year is None else current_year
+    max_year = base + 1
+    return [
+        int(run)
+        for run in re.findall(r"\b\d{4}\b", text)
+        if MIN_PLAUSIBLE_YEAR <= int(run) <= max_year
+    ]
+
+
 # Only these calendars use years in the range MIN_PLAUSIBLE_YEAR..now. Hebrew
 # years run ~5786 and French Republican ~230, so bounding those would reject
 # every legitimate non-Gregorian date.
 _BOUNDED_CALENDARS = ("GregorianDate", "JulianDate")
 
 
-def _is_trustworthy(date_val: object, current_year: int | None = None) -> bool:
-    """Whether this date value's year is safe to make a decision on."""
+def _is_trustworthy(
+    date_val: object,
+    current_year: int | None = None,
+    *,
+    allow_phrase: bool,
+    year_floor: int,
+) -> bool:
+    """Whether this date value's year is safe to make a decision on.
+
+    The two callers need different answers, so the policy is a parameter:
+
+    - liveness (export redaction) rejects free text outright and keeps
+      MIN_PLAUSIBLE_YEAR. A citation shaped exactly like a date - "12.1823.4"
+      has the same token profile as "12/2/1882" - would otherwise read as a
+      birth year and publish someone the file never said was dead.
+    - validation (chronology checks) accepts a clean phrase, because
+      "12/2/1882" is a date a human reads without difficulty and it produces a
+      correct E011 today; and it drops the 1000 floor, which was written for
+      free text and has no business rejecting a spec-conformant "1 JAN 0950".
+    """
     if is_phrase_date(date_val):
+        if not allow_phrase:
+            return False
         return is_clean_date_phrase(phrase_text(date_val), current_year)
 
     base = datetime.date.today().year if current_year is None else current_year
@@ -158,31 +199,48 @@ def _is_trustworthy(date_val: object, current_year: int | None = None) -> bool:
                 return False
 
         year = getattr(cal_date, "year", None)
+
+        # "3/1990" is a dual-year mis-parse: ged4py reads year 3, dual 1990.
+        # A real dual date spans one year boundary ("1750/51" -> 1750/1751),
+        # so the gap is the discriminator. The floor used to catch this by
+        # accident; validation drops the floor, so it has to be explicit.
+        dual_year = getattr(cal_date, "dual_year", None)
+        if year is not None and dual_year is not None:
+            if int(dual_year) - int(year) != 1:
+                return False
+
         if year is not None and type(cal_date).__name__ in _BOUNDED_CALENDARS:
-            if not MIN_PLAUSIBLE_YEAR <= int(year) <= max_year:
+            if not year_floor <= int(year) <= max_year:
                 return False
     return True
 
 
-def extract_year_trusted(
+def extract_year_for_validation(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Year, but only when it is safe to make a decision on.
+    """Year for the chronology checks (E011/E012/W020-W023).
 
-    extract_year_from_date reports whatever year the text contains, which is
-    what export and stats want. Callers that act on the year - redaction,
-    age and chronology checks - need the stricter reading.
+    Accepts a clean phrase - "12/2/1882" is a readable date that yields a
+    correct E011 - and applies no MIN_PLAUSIBLE_YEAR floor, so a 10th-century
+    record is still checked.
     """
-    if not _is_trustworthy(date_val, current_year):
+    if not _is_trustworthy(date_val, current_year, allow_phrase=True, year_floor=1):
         return None
     return extract_year_from_date(date_val)
 
 
-def extract_year_latest_trusted(
+def extract_year_latest_for_liveness(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Upper bound of extract_year_trusted, for the liveness decision."""
-    if not _is_trustworthy(date_val, current_year):
+    """Upper bound of the birth year, for the --redact-living decision.
+
+    Rejects free text: a year recovered from a note cannot be told apart from
+    an archive citation, and acting on a wrong one publishes a living person.
+    Unknown means living, so returning None here redacts.
+    """
+    if not _is_trustworthy(
+        date_val, current_year, allow_phrase=False, year_floor=MIN_PLAUSIBLE_YEAR
+    ):
         return None
     return extract_year_latest_from_date(date_val)
 
@@ -197,10 +255,11 @@ def extract_year_from_date(date_val: object) -> int | None:
     if date_val is None:
         return None
 
-    # PHRASE has no .date/.date1/.year - recover the year from its free text
+    # PHRASE has no .date/.date1/.year - recover the year from its free text.
+    # First plausible candidate, not the first run: "ref 6789 b. 1850" is 1850.
     if is_phrase_date(date_val):
-        match = re.search(r"\b(\d{4})\b", phrase_text(date_val))
-        return int(match.group(1)) if match else None
+        years = plausible_years(phrase_text(date_val))
+        return years[0] if years else None
 
     # TODO: remove this once ged4py exposes .year directly on DateValue
     if hasattr(date_val, "year") and date_val.year:
@@ -253,8 +312,7 @@ def extract_year_latest_from_date(date_val: object) -> int | None:
     # Word order in free text is not chronological, so take the largest year
     # rather than the last one. default= keeps a year-less phrase from raising.
     if is_phrase_date(date_val):
-        years = re.findall(r"\b\d{4}\b", phrase_text(date_val))
-        return max((int(y) for y in years), default=None)
+        return max(plausible_years(phrase_text(date_val)), default=None)
 
     # Raw strings never reach the structured branches below, and the shared
     # regex fallback takes the FIRST year it finds, so handle them here.
@@ -374,7 +432,9 @@ def classify_date_precision(date_val: object) -> tuple[str, bool]:
 
         # Regex, not a token scan - "12/2/1882" is a single non-isdigit token,
         # and a bare prefix test matches MAYBE, MARried, DECeased.
-        has_year = bool(re.search(r"\b\d{4}\b", date_str))
+        # Same bound as the extractors: otherwise "vol 6789 p. 4" reports a
+        # null year while the precision beside it claims "partial".
+        has_year = bool(plausible_years(date_str))
         has_month = bool(MONTH_PATTERN.search(date_str))
 
         for p in parts:

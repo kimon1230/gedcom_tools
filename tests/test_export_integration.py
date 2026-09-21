@@ -57,6 +57,28 @@ def _make_args(
     return ns
 
 
+REPRO_GED = """\
+0 HEAD
+1 SOUR TEST
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Smith/
+1 SEX M
+1 BIRT
+2 DATE 30 November 1989
+0 @I2@ INDI
+1 NAME Jane /Doe/
+1 SEX F
+1 BIRT
+2 DATE 12/2/1882
+1 DEAT
+2 DATE 4 October 1950
+0 TRLR
+"""
+
+
 MINIMAL_GED = """\
 0 HEAD
 1 SOUR TEST
@@ -605,3 +627,31 @@ class TestFormatResolution:
         with pytest.raises(SystemExit) as exc:
             main(["export", str(ged), "--to", "text"])
         assert exc.value.code == 2
+
+
+class TestNonStandardDatesEndToEnd:
+    """The bug as reported: a date the parser cannot read left birth_year null
+    in the JSON while the date string sat right beside it."""
+
+    def test_json_reports_years_for_non_standard_dates(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ged = _write_ged(tmp_path, REPRO_GED)
+        assert run(_make_args(ged, to="json")) == EXIT_SUCCESS
+
+        data = json.loads(capsys.readouterr().out)
+        by_xref = {i["xref"]: i for i in data["individuals"]}
+
+        assert by_xref["@I1@"]["birth_date"] == "30 November 1989"
+        assert by_xref["@I1@"]["birth_year"] == 1989
+        assert by_xref["@I2@"]["birth_year"] == 1882
+        assert by_xref["@I2@"]["death_year"] == 1950
+
+    def test_csv_reports_years_for_non_standard_dates(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ged = _write_ged(tmp_path, REPRO_GED)
+        assert run(_make_args(ged, to="csv")) == EXIT_SUCCESS
+
+        rows = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
+        assert {r["birth_year"] for r in rows} == {"1989", "1882"}

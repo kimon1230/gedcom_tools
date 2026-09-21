@@ -11,10 +11,10 @@ from gedcom_tools.dates import (
     MONTH_TO_NUM,
     classify_date_precision,
     extract_month,
+    extract_year_for_validation,
     extract_year_from_date,
+    extract_year_latest_for_liveness,
     extract_year_latest_from_date,
-    extract_year_latest_trusted,
-    extract_year_trusted,
     get_century,
     is_clean_date_phrase,
     is_phrase_date,
@@ -616,6 +616,12 @@ PHRASE_CASES = [
     ("Maybe 1905", 1905, 1905, None, "partial"),
     ("Tombstone erected 1901", 1901, 1901, None, "partial"),
     ("born 1990, per 1890 bible", 1990, 1990, None, "partial"),
+    # An implausible run is not a year on any of the three paths: the year, the
+    # upper bound and the precision beside them must agree, or "partial" ends up
+    # sitting next to a null year.
+    ("vol 6789 p. 4", None, None, None, "missing"),
+    # ...but a plausible year later in the same text is still recovered.
+    ("ref 6789 b. 1850", 1850, 1850, None, "partial"),
 ]
 
 
@@ -729,19 +735,32 @@ def test_year_below_the_plausible_floor_is_rejected() -> None:
     assert is_clean_date_phrase("1000") is True
 
 
-def test_trusted_year_drops_a_free_text_year() -> None:
+def test_validation_year_drops_an_unclean_free_text_year() -> None:
     dirty = DateValue.parse("Reg. 1823 vol II")
-    assert extract_year_from_date(dirty) == 1823
-    assert extract_year_trusted(dirty) is None
+    assert extract_year_from_date(dirty) == 1823  # still reported
+    assert extract_year_for_validation(dirty) is None
 
 
-def test_trusted_year_keeps_a_clean_phrase_year() -> None:
+def test_validation_year_keeps_a_clean_phrase_year() -> None:
+    # "12/2/1882" and "30 November 1989" are dates a human reads without
+    # difficulty; the chronology checks must keep seeing them.
     clean = DateValue.parse("30 November 1989")
-    assert extract_year_trusted(clean) == 1989
+    assert extract_year_for_validation(clean) == 1989
 
 
-def test_trusted_year_passes_structured_dates_through() -> None:
-    assert extract_year_trusted(DateValue.parse("15 JAN 1850")) == 1850
+def test_liveness_year_rejects_even_a_clean_phrase() -> None:
+    # The liveness twin of the test above. A clean phrase cannot be told apart
+    # from a citation shaped like a date, and acting on a wrong one publishes
+    # a living person - so redaction refuses the whole class.
+    clean = DateValue.parse("30 November 1989")
+    assert extract_year_latest_for_liveness(clean) is None
+    assert extract_year_from_date(clean) == 1989  # reporting is unaffected
+
+
+def test_both_policies_pass_structured_dates_through() -> None:
+    date_val = DateValue.parse("15 JAN 1850")
+    assert extract_year_for_validation(date_val) == 1850
+    assert extract_year_latest_for_liveness(date_val) == 1850
 
 
 # ged4py does not validate month tokens, so junk parses as a SIMPLE date
@@ -754,17 +773,18 @@ def test_junk_month_is_not_trusted(text: str) -> None:
     date_val = DateValue.parse(text)
     assert is_phrase_date(date_val) is False  # it is SIMPLE, not a phrase
     assert extract_year_from_date(date_val) == 1823  # still reported
-    assert extract_year_trusted(date_val) is None  # but not acted on
-    assert extract_year_latest_trusted(date_val) is None
+    assert extract_year_for_validation(date_val) is None  # but not acted on
+    assert extract_year_latest_for_liveness(date_val) is None
 
 
 @pytest.mark.parametrize("text", ["3 JUNE 1900", "15 JAN 1850", "4 July 1776"])
 def test_real_months_stay_trusted(text: str) -> None:
-    assert extract_year_trusted(DateValue.parse(text)) is not None
+    assert extract_year_for_validation(DateValue.parse(text)) is not None
 
 
 def test_range_upper_bound_is_trusted() -> None:
-    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND 1995")) == 1995
+    date_val = DateValue.parse("BET 1900 AND 1995")
+    assert extract_year_latest_for_liveness(date_val) == 1995
 
 
 def test_digit_soup_is_rejected() -> None:
@@ -775,18 +795,31 @@ def test_digit_soup_is_rejected() -> None:
 
 # ged4py validates neither month tokens nor years, so a "structured" date is
 # not proof of a date. These all reach estimate_living if left untrusted.
-IMPLAUSIBLE_STRUCTURED = [
+# Rejected by BOTH policies. The first two are ged4py dual-year mis-parses
+# caught by the dual_year guard, not by the floor - validation drops the floor,
+# so without the guard "3/1990" would re-enter the chronology checks as year 3.
+REJECTED_BY_BOTH = [
     "3/1990",  # read as the dual year 3, not March 1990
     "1/1985",
-    "1 JAN 0002",
-    "25 DEC 9999",
-    "0007",
+    "25 DEC 9999",  # above the current+1 ceiling, which both policies keep
 ]
 
+# Implausible for redaction, legitimate for validation: a 10th-century record
+# is a real record, and E011 must still check it. Only the 1000 floor differs.
+VALIDATION_ONLY = [("1 JAN 0002", 2), ("0007", 7)]
 
-@pytest.mark.parametrize("text", IMPLAUSIBLE_STRUCTURED)
-def test_implausible_structured_year_is_not_trusted(text: str) -> None:
-    assert extract_year_trusted(DateValue.parse(text)) is None
+
+@pytest.mark.parametrize("text", REJECTED_BY_BOTH)
+def test_implausible_structured_year_is_rejected_by_both(text: str) -> None:
+    date_val = DateValue.parse(text)
+    assert extract_year_for_validation(date_val) is None
+    assert extract_year_latest_for_liveness(date_val) is None
+
+
+@pytest.mark.parametrize("text,expected", VALIDATION_ONLY)
+def test_pre_floor_year_is_validated_but_not_acted_on(text: str, expected: int) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+    assert extract_year_latest_for_liveness(DateValue.parse(text)) is None
 
 
 @pytest.mark.parametrize(
@@ -798,15 +831,19 @@ def test_implausible_structured_year_is_not_trusted(text: str) -> None:
     ],
 )
 def test_plausible_structured_year_survives(text: str, expected: int) -> None:
-    assert extract_year_trusted(DateValue.parse(text)) == expected
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
 
 
 def test_reversed_range_uses_the_larger_bound() -> None:
     # A range written backwards must not age the person out
-    assert extract_year_latest_trusted(DateValue.parse("BET 2010 AND 1823")) == 2010
-    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND 1995")) == 1995
+    latest = extract_year_latest_for_liveness
+    assert latest(DateValue.parse("BET 2010 AND 1823")) == 2010
+    assert latest(DateValue.parse("BET 1900 AND 1995")) == 1995
 
 
 def test_junk_month_on_the_upper_bound_is_caught() -> None:
     # date2 is the bound the liveness reader consumes, so it needs the same check
-    assert extract_year_latest_trusted(DateValue.parse("BET 1900 AND Reg 1823")) is None
+    assert (
+        extract_year_latest_for_liveness(DateValue.parse("BET 1900 AND Reg 1823"))
+        is None
+    )

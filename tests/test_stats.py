@@ -3912,3 +3912,52 @@ class TestNoteLanguageBuffering:
         assert collector._note_texts == []
         assert collector._note_bytes == 0
         assert result.distinct_languages == 0
+
+
+class TestNonStandardDatesPopulateStats:
+    """A file written with spelled-out months used to report no date data at
+    all, because the parser reads those dates as free text."""
+
+    @pytest.fixture
+    def repro_ged(self, tmp_path: Path) -> Path:
+        gedcom = tmp_path / "nonstandard.ged"
+        gedcom.write_text(
+            """\
+0 HEAD
+1 SOUR Test
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME John /Smith/
+1 SEX M
+1 BIRT
+2 DATE 30 November 1989
+0 @I2@ INDI
+1 NAME Jane /Doe/
+1 SEX F
+1 BIRT
+2 DATE 12/2/1882
+1 DEAT
+2 DATE 4 October 1950
+0 TRLR
+""",
+            encoding="utf-8",
+        )
+        return gedcom
+
+    def test_timeline_is_populated(self, repro_ged: Path) -> None:
+        result = _collect(repro_ged)
+        assert result.earliest_year.year == 1882
+        assert result.date_span_years == 1989 - 1882
+
+    def test_precision_breakdown_is_populated(self, repro_ged: Path) -> None:
+        # Both births were counted as missing before the fix. The slash date
+        # is partial rather than full: it carries no recognisable month token.
+        result = _collect(repro_ged)
+        assert result.date_precision.missing == 0
+        assert result.date_precision.full == 1
+        assert result.date_precision.partial == 1
+
+    def test_month_histogram_counts_spelled_out_months(self, repro_ged: Path) -> None:
+        assert _collect(repro_ged).birth_by_month[11] == 1  # 30 November 1989

@@ -277,25 +277,37 @@ other way — `30 November 1989`, `12/2/1882`, `1801-1875` — is free text as f
 as the parser is concerned. The exported `birth_year` and `death_year` recover a
 year from that text wherever one is present.
 
-Liveness estimation is stricter, and deliberately so. A recovered year is
-allowed to decide whether someone is published only when the text is a date and
-nothing else:
+Liveness estimation ignores every one of those recovered years, deliberately.
+A year that came from free text never decides whether someone is published:
 
-| Date text | `birth_year` | Used for liveness? |
-|-----------|--------------|--------------------|
-| `30 November 1989` | 1989 | yes |
-| `12/2/1882` | 1882 | yes |
-| `1801-1875` (a range) | 1801 | yes — on the 1875 bound |
+| Date text | `birth_year` (reported) | Used for liveness? |
+|-----------|-------------------------|--------------------|
+| `30 November 1989` | 1989 | **no** |
+| `12/2/1882` | 1882 | **no** |
+| `1801-1875` (a range) | 1801 | **no** |
 | `Census 1900 record` | 1900 | **no** |
 | `Reg. 1823 vol II` | 1823 | **no** |
-| `1901, 1902, 1903, 1904` | 1901 | **no** — a list of candidates, not a range |
-| `sometime in the 90s` | *(none)* | no |
+| `vol 6789 p. 4` | *(none)* | no |
+| `30 NOV 1989` (conformant) | 1989 | **yes** |
 
-The first four digits of a free-text note are as likely to be an archive
-reference, a regiment or a page number as a year, and a wrong one reading as
-"born long ago" publishes someone who is alive. Where the year cannot be
-trusted, the record is treated as having no birth year at all — which, by the
-rule above, means redacted.
+The reason is that the recovery cannot tell a date from a citation shaped like
+one. `12.1823.4` — volume 12, year 1823, page 4 — has the same token profile as
+`12/2/1882`: a small number, a four-digit year, a small number. Any rule that
+accepts the second accepts the first, and reading an archive reference as
+"born long ago" publishes someone who is alive.
+
+So a record whose only date is free text is treated as having no birth year at
+all, which by the rule above means redacted. The cost is over-redacting people
+whose free-text dates prove them long dead. That is the intended trade: a
+wrongly withheld row is a nuisance, a wrongly published one is a disclosure.
+
+Dates GEDCOM writes conformantly are unaffected — they are parsed, not
+recovered, and decide liveness exactly as before.
+
+A recovered year is also range-checked before it is reported at all. Four-digit
+runs are filtered to plausible years and the first survivor wins, so
+`ref 6789 b. 1850` reports 1850 while `vol 6789 p. 4` reports nothing rather
+than 6789.
 
 ### What Gets Redacted
 

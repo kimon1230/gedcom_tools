@@ -15,7 +15,7 @@ from gedcom_tools.commands.export.models import (
 )
 from gedcom_tools.dates import (
     extract_year_from_date,
-    extract_year_latest_trusted,
+    extract_year_latest_for_liveness,
     is_phrase_date,
     phrase_text,
 )
@@ -59,7 +59,7 @@ def _liveness_year(record: Record, path: str) -> int | None:
     if date_rec is None or date_rec.value is None:
         return None
 
-    return extract_year_latest_trusted(date_rec.value)
+    return extract_year_latest_for_liveness(date_rec.value)
 
 
 def _extract_date_str(record: Record, path: str) -> str:
