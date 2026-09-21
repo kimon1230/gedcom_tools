@@ -169,26 +169,48 @@ These check structural integrity of multimedia object records. A valid OBJE shou
 |------|-------------|
 | W035 | **Date not in GEDCOM format** - DATE value the parser cannot read as a date |
 
-GEDCOM asks for a three-letter month (`30 NOV 1989`). A date written any other
-way — `30 November 1989`, `12/2/1882`, `10 JAN` with no year — is free text to
-the parser, so its year is recovered heuristically rather than read. This
-warning names the dates that were guessed at:
+GEDCOM asks for a three-letter month (`30 NOV 1989`). This warning names dates
+written any other way, in two distinct situations.
+
+**Dates the parser cannot read at all.** `30 November 1989`, `12/2/1882`,
+`10 JAN` with no year, `Census 1900 record` — these arrive as free text and
+their year is recovered heuristically rather than read.
+
+**Dates the parser reads WRONG.** These are the dangerous ones, because nothing
+looks amiss:
+
+| Written | Read as | Why |
+|---------|---------|-----|
+| `Reg 1823` | month "REG", year 1823 | the month token is not validated |
+| `3/1990` | year 3, dual year 1990 | read as a dual date, not March 1990 |
+| `1056/1060` | year 1056, dual year 1060 | a range written as a dual date |
 
 ```
 [W035] Date not in GEDCOM format
   Line 42: Date not in GEDCOM format: "30 November 1989" - use the 3-letter form "NOV"
   Line 58: Date not in GEDCOM format: "12/2/1882" - use the DD MMM YYYY form
+  Line 91: Date not in GEDCOM format: "1056/1060" - use the DD MMM YYYY form
 ```
 
 A concrete rewrite is offered only when the month is spelled out. `12/2/1882`
 is ambiguous — 12 February or 2 December, with no locale signal to decide — and
 `Christmas 1901` cannot be converted at all, so both get the generic rule.
 
-Checked on every date whose year `export` and `search` recover — `BIRT`, `CHR`,
-`BAPM`, `DEAT`, `BURI` and `MARR` — so the warning set matches the set of dates
-that can produce a guessed year. A parenthesised phrase (`2 DATE (during the war)`) is valid
-GEDCOM 5.5.1 and does **not** warn. Like the per-line warnings above, W035
-reports the first 10 occurrences and then one summary line.
+**What does NOT warn.** A parenthesised phrase (`2 DATE (during the war)`) is
+valid GEDCOM 5.5.1. So is a genuine dual date: `1750/51` spans one year
+boundary and is how Julian/Gregorian transition years are written, which is
+what separates it from `1056/1060`. And a date in correct form whose *year* is
+implausible — `25 DEC 9999` — is not a format problem, so telling you to
+rewrite it as `DD MMM YYYY` would be wrong twice over.
+
+Checked on every `BIRT`, `CHR`, `BAPM`, `DEAT`, `BURI` and `MARR` date, and on
+**every** such event in a record rather than the first — a tree merged from two
+sources often carries two `BIRT` events, and the second used to go unchecked.
+Like the per-line warnings above, W035 reports the first 10 occurrences and
+then one summary line giving the number suppressed.
+
+Only the date line itself is echoed. A `DATE` carrying `CONT` continuations
+would otherwise spill the rest of that record's text into the report.
 
 Related: `export` and `stats` still recover a year from these dates rather than
 reporting them as unknown — see [Export Command](export.md#years-recovered-from-non-standard-date-text)

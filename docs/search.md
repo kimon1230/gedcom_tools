@@ -76,7 +76,8 @@ filters what the file reports, and that recovered year is what `export` reports
 for the same record. It follows that a free-text note containing a four-digit
 run matches on that number: `born:1900` will match a record whose birth date
 reads `Census 1900 record`. Run `validate` to see which dates were recovered
-this way — they are reported as `W035`.
+this way — they are reported as `W035`, which also names dates the parser reads
+*wrong* rather than not at all (`Reg 1823`, `3/1990`).
 
 ### Operators
 

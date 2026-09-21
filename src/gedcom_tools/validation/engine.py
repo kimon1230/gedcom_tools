@@ -475,6 +475,8 @@ class ValidationEngine:
                     else:
                         self._process_generic(record)
 
+                self._emit_nonstandard_date_summary()
+
                 if not has_trlr:
                     self._add_issue(
                         ErrorCode.E006_MISSING_TRLR,
@@ -843,26 +845,35 @@ class ValidationEngine:
         count = self._nonstandard_date_count
         self._nonstandard_date_count += 1
         if count < MAX_ISSUES_PER_CODE:
-            # Only suggest the abbreviation when the month is actually
-            # spelled out - "10 JAN" is already abbreviated and its real
-            # problem is the missing year, not the month form.
+            # Echo the DATE line's own value and nothing else. ged4py joins
+            # CONT sub-lines into the value with newlines, so a record whose
+            # date carries continuations would otherwise spill arbitrary prose
+            # - an address, a national ID - into a report that has no
+            # --redact-living and gets pasted into bug trackers. Keeping the
+            # first line rather than dropping the echo entirely leaves the
+            # message actionable. CONC joins without a newline and cannot be
+            # separated this way.
+            shown = text.split("\n", 1)[0]
+
             # Scrub before truncating so the echo budget counts visible
             # characters, not stripped escape bytes - and so the cut cannot
             # land mid-escape. Both are inside the cap branch because the
             # result is only ever read here.
-            shown = sanitize_error(text)
+            shown = sanitize_error(shown)
             if len(shown) > _MAX_ECHOED_DATE:
                 shown = shown[:_MAX_ECHOED_DATE] + "..."
 
-            # The month must be spelled out AND inside the echoed window -
-            # pointing at an abbreviation for text we truncated away is not
-            # an actionable message.
-            month = MONTH_PATTERN.search(text)
-            if (
-                month is not None
-                and len(month.group(1)) > 3
-                and month.start() < _MAX_ECHOED_DATE
-            ):
+            # Search what we are actually showing. Searching the raw text and
+            # then testing that offset against the echoed window compares two
+            # different coordinate systems: escape bytes shift every position,
+            # so a padded value mis-measures exactly the case the scrub-first
+            # ordering above exists to handle. A month found in `shown` is by
+            # construction inside the window.
+            # Only suggest the abbreviation when the month is actually spelled
+            # out - "10 JAN" is already abbreviated and its real problem is the
+            # missing year, not the month form.
+            month = MONTH_PATTERN.search(shown)
+            if month is not None and len(month.group(1)) > 3:
                 hint = f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
             else:
                 hint = " - use the DD MMM YYYY form"
@@ -871,21 +882,29 @@ class ValidationEngine:
                 f'Date not in GEDCOM format: "{shown}"{hint}',
                 line=line,
             )
-        elif count == MAX_ISSUES_PER_CODE:
-            self._add_issue(
-                ErrorCode.W035_NONSTANDARD_DATE,
-                "More non-standard dates were suppressed "
-                f"(first {MAX_ISSUES_PER_CODE} shown)",
-                line=line,
-            )
-        # Only record a dropped count once the cap is actually exceeded.
+        # No summary here. It needs the TOTAL, and at date 11 the rest of the
+        # file has not been read - which is why this code used to print
+        # "More ... were suppressed" while every other capped code printed
+        # "1,234 more ...". _emit_nonstandard_date_summary closes that.
+
+    def _emit_nonstandard_date_summary(self) -> None:
+        """One summary line for W035, worded like every other capped code.
+
+        Emitted after the record walk rather than mid-stream, so the count is
+        known. Mirrors the per-line codes, which do the same after their loop.
+        """
+        suppressed = self._nonstandard_date_count - MAX_ISSUES_PER_CODE
+        if suppressed <= 0:
+            return
         # ValidationResult subtracts one per entry, for the synthetic summary
         # issue each truncated code leaves behind - so writing a zero here
         # makes total_warnings report one FEWER than the file contains.
-        if self._nonstandard_date_count > MAX_ISSUES_PER_CODE:
-            self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = (
-                self._nonstandard_date_count - MAX_ISSUES_PER_CODE
-            )
+        self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = suppressed
+        self._add_issue(
+            ErrorCode.W035_NONSTANDARD_DATE,
+            f"{suppressed:,} more dates with this issue were "
+            f"suppressed (first {MAX_ISSUES_PER_CODE} shown)",
+        )
 
     def _extract_year(self, record: Record, path: str) -> int | None:
         """Extract year from a date at the given path."""

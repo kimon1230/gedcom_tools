@@ -1508,6 +1508,54 @@ class TestNonStandardDateWarning:
         body += ["1 MARR", "2 DATE 30 November 1989"]
         assert len(self._issues(tmp_path, body)) == 1
 
+    def test_continuation_prose_is_not_echoed(self, tmp_path):
+        # ged4py joins CONT sub-lines into the DATE value. validate has no
+        # --redact-living and its reports get pasted into bug trackers, so an
+        # address or an ID sitting under a bad date must not ride along.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE 30 November 1989"]
+        body += ["3 CONT 12 Privet Drive, Surrey", "3 CONT NHS 4433221100"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        message = issues[0].message
+        assert "Privet Drive" not in message
+        assert "4433221100" not in message
+        # ...but the date itself is still shown, or the warning is unactionable
+        assert '"30 November 1989"' in message
+        assert '"NOV"' in message
+
+    def test_escape_padding_does_not_cost_the_month_hint(self, tmp_path):
+        # The hint used to be gated on an offset into the RAW text compared
+        # against a window into the SCRUBBED text - two coordinate systems.
+        # Escape bytes shift every position, so a padded value lost its hint.
+        padded = "\x1b[31m\x1b[0m\x1b[1m\x1b[0m\x1b[32m30 November 1989"
+        issues = self._issues(tmp_path, self._birth(padded))
+        assert len(issues) == 1
+        assert '"NOV"' in issues[0].message
+        assert "\x1b" not in issues[0].message
+
+    def test_suppression_line_carries_the_count(self, tmp_path):
+        # It used to read "More non-standard dates were suppressed" with no
+        # number, because it fired at date 11 when the total was still unknown.
+        # Every other capped code prints "N more ...", and CLAUDE.md asks for
+        # one format across the tool.
+        body = []
+        for i in range(1, 16):  # 15 dates, cap is 10
+            body += [f"0 @I{i}@ INDI", f"1 NAME P{i} /X/"]
+            body += ["1 BIRT", f"2 DATE 30 November 198{i % 10}"]
+        issues = self._issues(tmp_path, body)
+        summaries = [i for i in issues if "suppressed" in i.message]
+        assert len(summaries) == 1
+        assert "5 more" in summaries[0].message
+        assert f"(first {MAX_ISSUES_PER_CODE} shown)" in summaries[0].message
+
+    def test_no_suppression_line_under_the_cap(self, tmp_path):
+        body = []
+        for i in range(1, 4):
+            body += [f"0 @I{i}@ INDI", f"1 NAME P{i} /X/"]
+            body += ["1 BIRT", f"2 DATE 30 November 198{i}"]
+        issues = self._issues(tmp_path, body)
+        assert [i for i in issues if "suppressed" in i.message] == []
+
     def test_royal92_reports_its_four_nonstandard_dates(self):
         # 6436 and 27126 are bare phrases ("10 JAN", "20 JUL") that ged4py
         # could not parse at all. 12060 and 12199 are informal ranges -

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from gedcom_tools.progress import glyphs
-from gedcom_tools.utils import EncodingInfo, sanitize_error
+from gedcom_tools.utils import EncodingInfo, scrub_line
 from gedcom_tools.validation.issues import Severity, ValidationIssue
 
 if TYPE_CHECKING:
@@ -69,9 +69,9 @@ class ValidationResult:
         # neither passes through its scrub - and both are file-controlled: the
         # filename ships with a traded .ged, and "1 CHAR" is decoded with
         # errors="replace", which preserves every C0 byte.
-        lines.append(f"File: {sanitize_error(self.file_path)}")
+        lines.append(f"File: {scrub_line(self.file_path)}")
         if self.encoding_info:
-            lines.append(f"Encoding: {sanitize_error(str(self.encoding_info))}")
+            lines.append(f"Encoding: {scrub_line(str(self.encoding_info))}")
 
         # Record counts summary
         if self.record_counts:
@@ -157,10 +157,10 @@ class ValidationResult:
         encoding_data: dict[str, object] | None = None
         if self.encoding_info:
             encoding_data = {
-                "detected": sanitize_error(self.encoding_info.encoding),
+                "detected": scrub_line(self.encoding_info.encoding),
                 "has_bom": self.encoding_info.has_bom,
                 "declared": (
-                    sanitize_error(self.encoding_info.declared_charset)
+                    scrub_line(self.encoding_info.declared_charset)
                     if self.encoding_info.declared_charset
                     else self.encoding_info.declared_charset
                 ),
@@ -202,8 +202,8 @@ class ValidationResult:
             summary["suppressed"] = dict(self.suppressed_counts)
 
         data: dict[str, object] = {
-            "file": sanitize_error(self.file_path),
-            "filename": sanitize_error(_Path(self.file_path).name),
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "valid": self.success,
             "encoding": encoding_data,
             "record_counts": self.record_counts,

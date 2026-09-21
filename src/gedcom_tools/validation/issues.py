@@ -5,18 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from gedcom_tools.utils import sanitize_error
+from gedcom_tools.utils import scrub_line
+
+# ged4py's ParserError quotes the entire offending source line, and a GEDCOM
+# line may be 255 bytes before any CONC continuation. That reaches stdout with
+# no --verbose, so bound it here - the one place every producer passes through.
+MAX_ISSUE_TEXT = 300
 
 
-def _scrub(text: str) -> str:
-    """Strip control sequences AND flatten line breaks.
-
-    sanitize_error deliberately keeps "\n" so a wrapped exception still reads
-    as paragraphs. An issue message is a single report line, and ged4py joins
-    CONT sub-lines with "\n", so a file carrying `1 SEX Q` / `2 CONT ✓ Valid`
-    would otherwise print its own forged verdict at column 0 of the report.
-    """
-    return sanitize_error(text).replace("\r", " ").replace("\n", " ")
+def _bounded(text: str) -> str:
+    """Scrub to a single line, then cap the length."""
+    scrubbed = scrub_line(text)
+    if len(scrubbed) > MAX_ISSUE_TEXT:
+        return scrubbed[:MAX_ISSUE_TEXT] + "..."
+    return scrubbed
 
 
 class Severity(Enum):
@@ -166,11 +168,11 @@ class ValidationIssue:
         # SemanticValidator - which build issues independently.
         # frozen, so assign through object.__setattr__ - the scrub is an
         # invariant of the type, not a filter a later producer can skip.
-        object.__setattr__(self, "message", _scrub(self.message))
+        object.__setattr__(self, "message", _bounded(self.message))
         if self.xref is not None:
-            object.__setattr__(self, "xref", _scrub(self.xref))
+            object.__setattr__(self, "xref", _bounded(self.xref))
         if self.context is not None:
-            object.__setattr__(self, "context", _scrub(self.context))
+            object.__setattr__(self, "context", _bounded(self.context))
 
     @property
     def severity(self) -> Severity:

@@ -206,6 +206,18 @@ def sanitize_error(msg: str) -> str:
     return "".join(c for c in result if c not in _BIDI_CHARS)
 
 
+def scrub_line(text: str) -> str:
+    """Strip control sequences AND flatten line breaks, for single-line output.
+
+    sanitize_error deliberately keeps "\n" so a wrapped exception still reads
+    as paragraphs. Anything printed as ONE line of a report needs the stronger
+    form: ged4py joins CONT sub-lines with "\n", and POSIX allows a newline in
+    a filename, so either can otherwise print a forged verdict at column 0 of
+    the tool's own output.
+    """
+    return sanitize_error(text).replace("\r", " ").replace("\n", " ")
+
+
 def report_error(e: Exception) -> None:
     """Print an unexpected exception to stderr in the one house format.
 
