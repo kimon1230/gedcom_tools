@@ -433,36 +433,107 @@ def has_unreadable_structure(date_val: object) -> bool:
     return False
 
 
+def _has_bound(date_val: object, *, latest: bool) -> bool:
+    """Whether the date states a bound on the side being asked for.
+
+    "AFT 1910" gives a lower bound and no upper one; "BEF 1950" the reverse.
+    Reading the stated year as the MISSING bound invents a limit the file never
+    gave - which on the liveness side ages someone into the grave and publishes
+    them, and on the validation side fires a chronology error against a bound
+    that does not exist. A bare FROM/TO is open; "FROM 1900 TO 1950" is a
+    PERIOD and has both.
+    """
+    if not HAS_DATE_VALUE_TYPES:
+        return True
+    kind = getattr(date_val, "kind", None)
+    if kind in (DateValueTypes.AFTER, DateValueTypes.FROM):
+        return not latest
+    if kind in (DateValueTypes.BEFORE, DateValueTypes.TO):
+        return latest
+    return True
+
+
+def _extract_year_bounded(
+    date_val: object,
+    current_year: int | None,
+    *,
+    latest: bool,
+    allow_phrase: bool,
+    year_floor: int,
+) -> int | None:
+    """Shared body of the four policy readers."""
+    if not _has_bound(date_val, latest=latest):
+        return None
+    if not _is_trustworthy(
+        date_val, current_year, allow_phrase=allow_phrase, year_floor=year_floor
+    ):
+        return None
+    converted = _converted_year(date_val, latest=latest)
+    if converted is not None:
+        return converted
+    if latest:
+        return extract_year_latest_from_date(date_val)
+    return extract_year_from_date(date_val)
+
+
 def extract_year_for_validation(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Year for the chronology checks (E011/E012/W020-W023).
+    """Earliest year the date can mean, for the chronology checks.
 
     Accepts a clean phrase - "12/2/1882" is a readable date that yields a
     correct E011 - and applies no MIN_PLAUSIBLE_YEAR floor, so a 10th-century
     record is still checked.
     """
-    if not _is_trustworthy(date_val, current_year, allow_phrase=True, year_floor=1):
-        return None
-    converted = _converted_year(date_val, latest=False)
-    return extract_year_from_date(date_val) if converted is None else converted
+    return _extract_year_bounded(
+        date_val, current_year, latest=False, allow_phrase=True, year_floor=1
+    )
+
+
+def extract_year_latest_for_validation(
+    date_val: object, current_year: int | None = None
+) -> int | None:
+    """Latest year the date can mean, for the chronology checks.
+
+    E011 compares a death against a birth, and a DEFINITE contradiction needs
+    the death's LATEST bound against the birth's earliest - otherwise
+    "DEAT AFT 1850" beside "BIRT 1900" reads as a reversed lifespan that the
+    file never claimed.
+    """
+    return _extract_year_bounded(
+        date_val, current_year, latest=True, allow_phrase=True, year_floor=1
+    )
+
+
+def extract_year_for_liveness(
+    date_val: object, current_year: int | None = None
+) -> int | None:
+    """Earliest year the date can mean, for the --redact-living decision."""
+    return _extract_year_bounded(
+        date_val,
+        current_year,
+        latest=False,
+        allow_phrase=False,
+        year_floor=MIN_PLAUSIBLE_YEAR,
+    )
 
 
 def extract_year_latest_for_liveness(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Upper bound of the birth year, for the --redact-living decision.
+    """Latest year the date can mean, for the --redact-living decision.
 
     Rejects free text: a year recovered from a note cannot be told apart from
     an archive citation, and acting on a wrong one publishes a living person.
     Unknown means living, so returning None here redacts.
     """
-    if not _is_trustworthy(
-        date_val, current_year, allow_phrase=False, year_floor=MIN_PLAUSIBLE_YEAR
-    ):
-        return None
-    converted = _converted_year(date_val, latest=True)
-    return extract_year_latest_from_date(date_val) if converted is None else converted
+    return _extract_year_bounded(
+        date_val,
+        current_year,
+        latest=True,
+        allow_phrase=False,
+        year_floor=MIN_PLAUSIBLE_YEAR,
+    )
 
 
 def get_century(year: int) -> str:

@@ -196,9 +196,15 @@ class IndividualInfo:
 
     xref: str
     line: int
-    birth_year: int | None = None
+    # Both bounds, because different checks need opposite ones for a DEFINITE
+    # verdict. "BIRT AFT 1910" states a lower bound and no upper one, so
+    # reading one year for both invents a limit the file never gave.
+    # E011 wants birth-earliest vs death-latest; W023 wants the mirror.
+    birth_year: int | None = None  # earliest the birth can be
+    birth_year_latest: int | None = None
     birth_month: int | None = None
-    death_year: int | None = None
+    death_year: int | None = None  # earliest the death can be
+    death_year_latest: int | None = None
     sex: str | None = None
     famc_xrefs: list[str] = field(default_factory=list)
     fams_xrefs: list[str] = field(default_factory=list)
@@ -213,7 +219,8 @@ class FamilyInfo:
     husb_xref: str | None = None
     wife_xref: str | None = None
     chil_xrefs: list[str] = field(default_factory=list)
-    marriage_year: int | None = None
+    marriage_year: int | None = None  # earliest the marriage can be
+    marriage_year_latest: int | None = None
 
 
 @dataclass

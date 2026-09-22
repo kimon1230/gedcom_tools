@@ -14,6 +14,7 @@ from gedcom_tools.commands.export.models import (
     ExportResult,
 )
 from gedcom_tools.dates import (
+    extract_year_for_liveness,
     extract_year_from_date,
     extract_year_latest_for_liveness,
     is_phrase_date,
@@ -49,17 +50,39 @@ def _extract_year(record: Record, path: str) -> int | None:
 
 
 def _liveness_year(record: Record, path: str) -> int | None:
-    """Year for the liveness decision only.
+    """Upper bound of a birth-ish year, for the liveness decision only.
 
     Stricter than _extract_year on purpose: a year recovered from a free-text
     phrase is reported as birth_year/death_year, but feeding it to
     estimate_living would let "Reg. 1823 vol II" publish someone who is alive.
+
+    The UPPER bound, because estimate_living asks "were they born long enough
+    ago to be dead" - and an upper bound can only make someone younger, which
+    can only withhold more.
     """
     date_rec = record.sub_tag(path)
     if date_rec is None or date_rec.value is None:
         return None
 
     return extract_year_latest_for_liveness(date_rec.value)
+
+
+def _death_evidence_year(record: Record, path: str) -> int | None:
+    """Any trusted year on a death-ish date, whichever bound states one.
+
+    estimate_living only tests this for PRESENCE - a death year at all means
+    not living - so the side it comes from does not matter. Taking only the
+    upper bound would lose "DEAT AFT 1990" entirely, since an open-ended date
+    has no upper bound, and withhold someone the file plainly records as dead.
+    """
+    date_rec = record.sub_tag(path)
+    if date_rec is None or date_rec.value is None:
+        return None
+
+    latest = extract_year_latest_for_liveness(date_rec.value)
+    if latest is not None:
+        return latest
+    return extract_year_for_liveness(date_rec.value)
 
 
 def _extract_date_str(record: Record, path: str) -> str:
@@ -170,8 +193,8 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
     # Death: date string + year + place
     death_date = _extract_date_str(record, "DEAT/DATE")
     death_year = _extract_year(record, "DEAT/DATE")
-    liveness_death_year = _liveness_year(record, "DEAT/DATE")
-    liveness_burial_year = _liveness_year(record, "BURI/DATE")
+    liveness_death_year = _death_evidence_year(record, "DEAT/DATE")
+    liveness_burial_year = _death_evidence_year(record, "BURI/DATE")
     death_place = _extract_place(record, "DEAT")
 
     # Fallback for death year: BURI (year only)

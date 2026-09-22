@@ -1210,6 +1210,89 @@ class TestPhraseDatesDoNotFabricateWarnings:
         assert "W023" in codes
 
 
+class TestOpenEndedDateBounds:
+    """A date can bound one side only. "AFT 1910" says nothing about an upper
+    limit, and reading the stated year as one invents a fact the file never
+    gave - a false chronology error, or a published living person."""
+
+    def _codes(self, tmp_path, birth, death):
+        body = ["0 @I1@ INDI", "1 NAME A /B/"]
+        body += ["1 BIRT", f"2 DATE {birth}"]
+        body += ["1 DEAT", f"2 DATE {death}"]
+        ged = _write_ged(tmp_path / "bounds.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_open_birth_lower_bound_is_not_read_as_upper(self, tmp_path):
+        # "born before 1950" is consistent with dying in 1900 - it includes
+        # 1890. Reading 1950 as the birth invents a reversal.
+        assert "E011" not in self._codes(tmp_path, "BEF 1950", "1 JAN 1900")
+
+    def test_open_death_lower_bound_is_not_read_as_upper(self, tmp_path):
+        # The mirror: "died after 1850" includes 1990.
+        assert "E011" not in self._codes(tmp_path, "1 JAN 1900", "AFT 1850")
+
+    def test_a_definite_reversal_still_fires(self, tmp_path):
+        assert "E011" in self._codes(tmp_path, "1 JAN 1950", "1 JAN 1900")
+
+    def test_an_open_bound_does_not_excuse_a_definite_reversal(self, tmp_path):
+        # Born AFTER 1990 and dead in 1900 is contradictory whichever year the
+        # open side means - so an open bound must not become a free pass.
+        assert "E011" in self._codes(tmp_path, "AFT 1990", "1 JAN 1900")
+
+    def test_pre_1000_chronology_is_still_checked(self, tmp_path):
+        # Guards the floor split shipped with issue #20.
+        assert "E011" in self._codes(tmp_path, "1 JAN 0950", "1 JAN 0900")
+
+    def test_birth_range_does_not_fake_an_overlong_life(self, tmp_path):
+        # Born somewhere in 1800-1900 and dead in 1950: the age could be 50.
+        # Reading the EARLIEST birth gives 150 and warns about a lifespan the
+        # file never claimed, so W023 needs the latest birth against the
+        # earliest death - the mirror of E011's pairing.
+        assert "W023" not in self._codes(tmp_path, "BET 1800 AND 1900", "1 JAN 1950")
+
+    def test_death_range_does_not_fake_an_overlong_life(self, tmp_path):
+        # The mirror: died somewhere in 1900-1990, born 1850. Earliest death
+        # gives 50; only the latest would give 140.
+        assert "W023" not in self._codes(tmp_path, "1 JAN 1850", "BET 1900 AND 1990")
+
+    def test_definite_overlong_life_still_warns(self, tmp_path):
+        assert "W023" in self._codes(tmp_path, "1 JAN 1800", "1 JAN 1950")
+
+
+class TestParentAgeUsesBothBounds:
+    """W020 (too young) and W021/W022 (too old) sit in one if/elif but need
+    OPPOSITE bound pairs, so a single age cannot serve both."""
+
+    def _codes(self, tmp_path, parent_birth, child_birth):
+        body = ["0 @P1@ INDI", "1 NAME Par /X/"]
+        body += ["1 BIRT", f"2 DATE {parent_birth}", "1 FAMS @F1@"]
+        body += ["0 @C1@ INDI", "1 NAME Chi /X/"]
+        body += ["1 BIRT", f"2 DATE {child_birth}", "1 FAMC @F1@"]
+        body += ["0 @F1@ FAM", "1 HUSB @P1@", "1 CHIL @C1@"]
+        ged = _write_ged(tmp_path / "parent.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_definitely_too_young_warns(self, tmp_path):
+        assert "W020" in self._codes(tmp_path, "1 JAN 1900", "1 JAN 1908")
+
+    def test_definitely_too_old_warns(self, tmp_path):
+        assert "W022" in self._codes(tmp_path, "1 JAN 1900", "1 JAN 1985")
+
+    def test_child_range_spanning_the_limit_does_not_warn(self, tmp_path):
+        # The gap could be 10 or it could be 90. Reading one bound for both
+        # directions picks whichever happens to trip a threshold.
+        codes = self._codes(tmp_path, "1 JAN 1900", "BET 1910 AND 1990")
+        assert "W020" not in codes
+        assert "W022" not in codes
+
+    def test_parent_range_spanning_the_limit_does_not_warn(self, tmp_path):
+        # Parent born somewhere in 1900-1960: the gap to a 1985 child could be
+        # 25, so "too old" is not a definite verdict.
+        assert "W022" not in self._codes(tmp_path, "BET 1900 AND 1960", "1 JAN 1985")
+
+
 class TestNonStandardDateWarning:
     """W035: ged4py parses only three month names in full, so most real-world
     spelled-out dates are free text and their years are recovered heuristically.

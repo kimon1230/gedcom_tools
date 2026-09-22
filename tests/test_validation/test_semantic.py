@@ -16,6 +16,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 death_year=2020,
                 famc_xrefs=[],
                 fams_xrefs=["@F1@"],
@@ -26,6 +27,7 @@ class TestSemanticValidator:
                 xref="@I2@",
                 line=10,
                 birth_year=1955,
+                birth_year_latest=1955,
                 death_year=2021,
                 famc_xrefs=[],
                 fams_xrefs=["@F1@"],
@@ -36,6 +38,7 @@ class TestSemanticValidator:
                 xref="@I3@",
                 line=20,
                 birth_year=1980,
+                birth_year_latest=1980,
                 famc_xrefs=["@F1@"],
                 fams_xrefs=[],
             )
@@ -61,7 +64,9 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 death_year=1940,
+                death_year_latest=1940,
             )
         )
 
@@ -80,6 +85,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -87,7 +93,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1940,  # Born before parent
+                birth_year=1940,
+                birth_year_latest=1940,  # Born before parent
                 famc_xrefs=["@F1@"],
             )
         )
@@ -154,6 +161,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1990,
+                birth_year_latest=1990,
                 sex="M",
                 fams_xrefs=["@F1@"],
             )
@@ -162,7 +170,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=2000,  # Parent was 10
+                birth_year=2000,
+                birth_year_latest=2000,  # Parent was 10
                 famc_xrefs=["@F1@"],
             )
         )
@@ -186,6 +195,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1900,
+                birth_year_latest=1900,
                 sex="F",
                 fams_xrefs=["@F1@"],
             )
@@ -194,7 +204,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1985,  # Mother was 85
+                birth_year=1985,
+                birth_year_latest=1985,  # Mother was 85
                 famc_xrefs=["@F1@"],
             )
         )
@@ -218,6 +229,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1900,
+                birth_year_latest=1900,
                 sex="M",
                 fams_xrefs=["@F1@"],
             )
@@ -226,7 +238,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1990,  # Father was 90
+                birth_year=1990,
+                birth_year_latest=1990,  # Father was 90
                 famc_xrefs=["@F1@"],
             )
         )
@@ -250,7 +263,9 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1800,
+                birth_year_latest=1800,
                 death_year=1950,  # 150 years old
+                death_year_latest=1950,
             )
         )
 
@@ -267,6 +282,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -292,6 +308,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -299,7 +316,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1970,  # Before marriage
+                birth_year=1970,
+                birth_year_latest=1970,  # Before marriage
                 famc_xrefs=["@F1@"],
             )
         )

@@ -16,6 +16,7 @@ from gedcom_tools.dates import (
     classify_date_precision,
     extract_month,
     extract_year_for_validation,
+    extract_year_latest_for_validation,
     has_unreadable_structure,
     is_phrase_date,
     phrase_text,
@@ -521,6 +522,7 @@ class ValidationEngine:
         # Extract birth year and month (month only for non-approximate dates)
         birt_date_rec = record.sub_tag("BIRT/DATE")
         birth_year: int | None = None
+        birth_year_latest: int | None = None
         birth_month: int | None = None
         self._check_all_event_dates(record, _INDI_DATED_EVENT_TAGS)
 
@@ -530,11 +532,13 @@ class ValidationEngine:
             # archive reference, and reading it as a birth year invents a
             # 127-year lifespan the file never claimed.
             birth_year = extract_year_for_validation(birt_date_rec.value)
+            birth_year_latest = extract_year_latest_for_validation(birt_date_rec.value)
             precision, _ = classify_date_precision(birt_date_rec.value)
             if precision in ("full", "partial"):
                 birth_month = extract_month(birt_date_rec.value)
 
         death_year = self._extract_year(record, "DEAT/DATE")
+        death_year_latest = self._extract_year_latest(record, "DEAT/DATE")
 
         # Extract sex and family links via single-pass sub_records iteration
         sex_value: str | None = None
@@ -607,8 +611,10 @@ class ValidationEngine:
                 xref=xref,
                 line=line,
                 birth_year=birth_year,
+                birth_year_latest=birth_year_latest,
                 birth_month=birth_month,
                 death_year=death_year,
+                death_year_latest=death_year_latest,
                 sex=sex_value,
                 famc_xrefs=famc_xrefs,
                 fams_xrefs=fams_xrefs,
@@ -630,6 +636,7 @@ class ValidationEngine:
         self._check_all_event_dates(record, _FAM_DATED_EVENT_TAGS)
 
         marriage_year = self._extract_year(record, "MARR/DATE")
+        marriage_year_latest = self._extract_year_latest(record, "MARR/DATE")
 
         for sub in record.sub_records:
             sub_offset = sub.offset if sub.offset else 0
@@ -686,6 +693,7 @@ class ValidationEngine:
                 wife_xref=wife_xref,
                 chil_xrefs=chil_xrefs,
                 marriage_year=marriage_year,
+                marriage_year_latest=marriage_year_latest,
             )
         )
 
@@ -907,11 +915,22 @@ class ValidationEngine:
         )
 
     def _extract_year(self, record: Record, path: str) -> int | None:
-        """Extract year from a date at the given path."""
+        """Earliest year a date at this path can mean."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
         return extract_year_for_validation(date_rec.value)
+
+    def _extract_year_latest(self, record: Record, path: str) -> int | None:
+        """Latest year a date at this path can mean.
+
+        An open-ended date bounds one side only, so the checks that need a
+        DEFINITE contradiction have to read the side that actually exists.
+        """
+        date_rec = record.sub_tag(path)
+        if date_rec is None or date_rec.value is None:
+            return None
+        return extract_year_latest_for_validation(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
         # --strict mode: enforce version-specific requirements
