@@ -12,6 +12,8 @@ from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
+    BIRTH_EVENT_TAGS,
+    DEATH_EVENT_TAGS,
     MONTH_PATTERN,
     classify_date_precision,
     extract_month,
@@ -85,7 +87,7 @@ _MAX_ECHOED_DATE = 60
 # W035 walks these tags rather than calling sub_tag once per path: sub_tag
 # returns the FIRST match, so a record carrying two BIRT events - the normal
 # shape when two sources are merged - had its second date checked by nothing.
-_INDI_DATED_EVENT_TAGS = ("BIRT", "CHR", "BAPM", "DEAT", "BURI")
+_INDI_DATED_EVENT_TAGS = BIRTH_EVENT_TAGS + DEATH_EVENT_TAGS
 _FAM_DATED_EVENT_TAGS = ("MARR",)
 
 

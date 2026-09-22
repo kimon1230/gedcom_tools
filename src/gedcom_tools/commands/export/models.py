@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import datetime
 from dataclasses import dataclass, field
+
+from gedcom_tools.dates import resolve_current_year
 
 
 @dataclass
@@ -72,6 +73,7 @@ _NOT_LIVING_TAGS = frozenset({"_NLIV"})
 
 
 def estimate_living(
+    *,
     birth_year: int | None,
     death_year: int | None,
     burial_year: int | None,
@@ -98,7 +100,7 @@ def estimate_living(
        that someone has died.
     5. Everything else, including an absent or unparseable birth date → living.
     """
-    current_year = current_year or datetime.date.today().year
+    current_year = resolve_current_year(current_year)
 
     has_death_evidence = death_year is not None or burial_year is not None
 

@@ -10,6 +10,12 @@ from convertdate import (  # type: ignore[import-untyped]
     hebrew,
 )
 
+# ged4py.calendar, not ged4py.date: date re-exports GregorianDate alone, and
+# dispatching on type(...).__name__ meant a rename upstream would silently
+# route a Hebrew date down the Gregorian arm and read 5786 as a year in the
+# 58th century - which is how the conversion bug reached the redaction gate.
+from ged4py.calendar import FrenchDate, GregorianDate, HebrewDate, JulianDate
+
 # ged4py DateValueTypes - import once at module level for performance
 try:
     from ged4py.date import DateValueTypes
@@ -18,6 +24,25 @@ try:
 except ImportError:
     DateValueTypes = None  # type: ignore[misc, assignment]
     HAS_DATE_VALUE_TYPES = False
+
+
+def resolve_current_year(current_year: int | None) -> int:
+    """The year to judge a date against, reading the clock only when asked to.
+
+    Four call sites derived this independently and one of them used ``or``, so
+    an explicit ``current_year=0`` silently became today - in the function that
+    decides whether to publish a living person.
+    """
+    if current_year is None:
+        return datetime.date.today().year
+    return current_year
+
+
+# The dated events whose years the tool recovers. Shared because W035 warns on
+# exactly the set export and compare read from: a recovery path added to one
+# and not the others leaves the warning blind to the dates it creates.
+BIRTH_EVENT_TAGS = ("BIRT", "CHR", "BAPM")
+DEATH_EVENT_TAGS = ("DEAT", "BURI")
 
 
 # Month name to number mapping
@@ -111,8 +136,7 @@ def is_clean_date_phrase(text: str, current_year: int | None = None) -> bool:
         return False
 
     # One year of slack absorbs clock skew and timezone-edge files
-    base = datetime.date.today().year if current_year is None else current_year
-    max_year = base + 1
+    max_year = resolve_current_year(current_year) + 1
     year_count = 0
     small_count = 0
     for token in tokens:
@@ -145,8 +169,8 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
     bounding it here would null legitimate pre-1000 years that ged4py parsed
     correctly.
     """
-    base = datetime.date.today().year if current_year is None else current_year
-    max_year = base + 1
+    # One year of slack absorbs clock skew and timezone-edge files
+    max_year = resolve_current_year(current_year) + 1
     return [
         int(run)
         for run in _YEAR_RUN_RE.findall(text)
@@ -158,7 +182,7 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
 # bounds them directly. GEDCOM 5.5.1 also defines HEBREW and FRENCH R, whose
 # years count from another epoch - 5786 and 230 are dates in 2026 and 2021 - so
 # those are converted first. Both halves get the same bound afterwards.
-_GREGORIAN_SCALE_CALENDARS = ("GregorianDate", "JulianDate")
+_GREGORIAN_SCALE_CALENDARS = (GregorianDate, JulianDate)
 
 # Julian Day 1721425.5 is 0001-01-01 proleptic Gregorian, which is ordinal 1.
 # GEDCOM names Hebrew months from Tishrei; convertdate numbers them from
@@ -258,8 +282,7 @@ def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
     if getattr(cal_date, "bc", False):
         year = -year
 
-    name = type(cal_date).__name__
-    if name in _GREGORIAN_SCALE_CALENDARS:
+    if isinstance(cal_date, _GREGORIAN_SCALE_CALENDARS):
         return year
     if year < 1:
         return None
@@ -267,7 +290,7 @@ def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
     month_token = getattr(cal_date, "month", None)
     day = getattr(cal_date, "day", None)
     try:
-        if name == "HebrewDate":
+        if isinstance(cal_date, HebrewDate):
             month = (
                 None
                 if month_token is None
@@ -276,7 +299,7 @@ def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
             if month_token is not None and month is None:
                 return None
             return _hebrew_gregorian_year(year, month, day, latest)
-        if name == "FrenchDate":
+        if isinstance(cal_date, FrenchDate):
             month = (
                 None
                 if month_token is None
@@ -348,18 +371,19 @@ def _is_trustworthy(
             return False
         return is_clean_date_phrase(phrase_text(date_val), current_year)
 
-    base = datetime.date.today().year if current_year is None else current_year
-    max_year = base + 1
+    max_year = resolve_current_year(current_year) + 1
 
     # A structured kind is NOT proof of a date. ged4py validates neither the
     # month token nor the year, so "Reg 1823" parses as a SIMPLE date whose
     # month is "REG", and "3/1990" is read as the dual year 3 - which ages the
     # person past any lifespan and silently un-redacts them.
     # date2 is included because it is the bound the liveness reader consumes.
+    checked = False
     for attr in ("date", "date1", "date2"):
         cal_date = getattr(date_val, attr, None)
         if cal_date is None:
             continue
+        checked = True
 
         if _cal_date_is_misparsed(cal_date):
             return False
@@ -377,7 +401,10 @@ def _is_trustworthy(
         # so a spec-conformant "1 JAN 0950" still reaches the chronology checks.
         if not year_floor <= year <= max_year:
             return False
-    return True
+    # Nothing was examined, so nothing was verified. A structured kind whose
+    # date attributes are all absent reached the caller as trustworthy, which
+    # is the wrong default for the function that gates redaction.
+    return checked
 
 
 def _cal_date_is_misparsed(cal_date: object) -> bool:

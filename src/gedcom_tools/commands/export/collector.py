@@ -14,6 +14,7 @@ from gedcom_tools.commands.export.models import (
     ExportResult,
 )
 from gedcom_tools.dates import (
+    BIRTH_EVENT_TAGS,
     extract_year_for_liveness,
     extract_year_from_date,
     extract_year_latest_for_liveness,
@@ -51,8 +52,6 @@ def _extract_year(record: Record, path: str) -> int | None:
 
 _RESN_PRIVATE = frozenset({"PRIVACY", "CONFIDENTIAL", "LOCKED"})
 
-_BIRTH_EVENT_TAGS = ("BIRT", "CHR", "BAPM")
-
 
 def _liveness_birth_year(record: Record) -> int | None:
     """Upper bound of the birth year, across EVERY birth-ish event.
@@ -70,7 +69,7 @@ def _liveness_birth_year(record: Record) -> int | None:
     years = [
         year
         for sub in record.sub_records
-        if str(sub.tag).upper() in _BIRTH_EVENT_TAGS
+        if str(sub.tag).upper() in BIRTH_EVENT_TAGS
         for child in sub.sub_records
         if str(child.tag).upper() == "DATE" and child.value is not None
         for year in (extract_year_latest_for_liveness(child.value),)

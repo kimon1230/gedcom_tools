@@ -1,8 +1,10 @@
+import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from ged4py.date import DateValue
+from ged4py.calendar import HebrewDate
+from ged4py.date import DateValue, DateValueTypes
 from ged4py.parser import GedcomReader
 
 from gedcom_tools.dates import (
@@ -11,6 +13,7 @@ from gedcom_tools.dates import (
     MONTH_TO_NUM,
     classify_date_precision,
     extract_month,
+    extract_year_for_liveness,
     extract_year_for_validation,
     extract_year_from_date,
     extract_year_latest_for_liveness,
@@ -18,6 +21,7 @@ from gedcom_tools.dates import (
     get_century,
     is_clean_date_phrase,
     is_phrase_date,
+    resolve_current_year,
 )
 from gedcom_tools.utils import count_sources_recursive
 
@@ -943,3 +947,29 @@ def test_junk_month_on_the_upper_bound_is_caught() -> None:
         extract_year_latest_for_liveness(DateValue.parse("BET 1900 AND Reg 1823"))
         is None
     )
+
+
+def test_a_structured_kind_with_no_calendar_date_is_not_trusted() -> None:
+    # ged4py has no shape like this today, but _is_trustworthy gates redaction
+    # and its loop used to fall through to "trusted" when it examined nothing
+    from gedcom_tools.dates import _is_trustworthy
+
+    stub = type("StubDate", (), {"kind": DateValueTypes.SIMPLE})()
+    assert not _is_trustworthy(stub, None, allow_phrase=False, year_floor=1000)
+
+
+def test_current_year_zero_is_honoured_not_swallowed() -> None:
+    # "or" read an explicit 0 as absent and reached for the clock instead
+    assert resolve_current_year(0) == 0
+    assert resolve_current_year(1850) == 1850
+    assert resolve_current_year(None) == datetime.date.today().year
+
+
+def test_hebrew_dispatch_survives_a_ged4py_class_rename() -> None:
+    # The old dispatch compared type(...).__name__, so a rename upstream would
+    # route Hebrew down the Gregorian arm and read 5786 as a 58th-century year
+    renamed = type("RenamedHebrew", (HebrewDate,), {})
+    date_val = DateValue.parse("@#DHEBREW@ 1 TSH 5786")
+    cal = date_val.date
+    cal.__class__ = renamed
+    assert extract_year_for_liveness(date_val) == 2025

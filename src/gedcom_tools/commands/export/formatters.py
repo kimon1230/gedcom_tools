@@ -191,6 +191,33 @@ def _family_csv_row(
     ]
 
 
+def _living_xrefs(
+    result: ExportResult, redact_living: bool, max_age: int
+) -> set[str] | None:
+    """Xrefs of everyone the liveness rules estimate to be alive.
+
+    The two emitters ran identical copies of this. It decides who gets
+    published, so a change applied to one copy and not the other would have
+    made the CSV and the JSON disagree about who is alive.
+
+    None rather than an empty set when redaction is off, because the row
+    builders treat "no redaction requested" and "nobody is living" differently.
+    """
+    if not redact_living:
+        return None
+    return {
+        indi.xref
+        for indi in result.individuals
+        if estimate_living(
+            birth_year=indi.liveness_birth_year,
+            death_year=indi.liveness_death_year,
+            burial_year=indi.liveness_burial_year,
+            max_age=max_age,
+            living_marker=indi.living_marker,
+        )
+    }
+
+
 def format_csv(
     result: ExportResult,
     table: str = "individuals",
@@ -204,19 +231,7 @@ def format_csv(
 
     writer = csv.writer(buf)
 
-    living_xrefs: set[str] | None = None
-    if redact_living:
-        living_xrefs = {
-            indi.xref
-            for indi in result.individuals
-            if estimate_living(
-                indi.liveness_birth_year,
-                indi.liveness_death_year,
-                indi.liveness_burial_year,
-                max_age=max_age,
-                living_marker=indi.living_marker,
-            )
-        }
+    living_xrefs = _living_xrefs(result, redact_living, max_age)
 
     if table == "families":
         writer.writerow(_FAM_CSV_COLUMNS)
@@ -323,19 +338,7 @@ def format_json(
     redact_living: bool = False,
     max_age: int = 110,
 ) -> str:
-    living_xrefs: set[str] | None = None
-    if redact_living:
-        living_xrefs = {
-            indi.xref
-            for indi in result.individuals
-            if estimate_living(
-                indi.liveness_birth_year,
-                indi.liveness_death_year,
-                indi.liveness_burial_year,
-                max_age=max_age,
-                living_marker=indi.living_marker,
-            )
-        }
+    living_xrefs = _living_xrefs(result, redact_living, max_age)
 
     data: dict[str, Any] = {
         "meta": {
