@@ -22,9 +22,9 @@ dependencies = [
     # relying on the transitive edge breaks the day ged4py drops it.
     "convertdate>=2.4,<3",
     "fast-langdetect>=1.0.0,<2.0.0",
-    "rapidfuzz>=3.0.0",
+    "rapidfuzz>=3.0.0,<4",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.
-    "DoubleMetaphone>=1.2",
+    "DoubleMetaphone>=1.2,<2",
 ]
 
 [project.optional-dependencies]

@@ -640,14 +640,8 @@ def test_phrase_extraction(
     assert classify_date_precision(date_val)[0] == precision
 
 
-@pytest.mark.parametrize("text,year,latest,month,precision", PHRASE_CASES)
-def test_year_and_precision_agree(
-    text: str,
-    year: int | None,
-    latest: int | None,
-    month: int | None,
-    precision: str,
-) -> None:
+@pytest.mark.parametrize("text", [case[0] for case in PHRASE_CASES])
+def test_year_and_precision_agree(text: str) -> None:
     # A populated year and a "missing" precision would let stats put someone in
     # the timeline while its own precision breakdown says the date is absent.
     date_val = DateValue.parse(text)

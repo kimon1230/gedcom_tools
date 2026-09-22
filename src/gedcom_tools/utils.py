@@ -204,15 +204,20 @@ _BIDI_CHARS = frozenset(
 )
 
 
+# A translate table deletes in one pass; the per-character generator this
+# replaces walked the whole string in Python for every message.
+_BIDI_DELETE = dict.fromkeys(ord(c) for c in _BIDI_CHARS)
+
+
 def sanitize_error(msg: str) -> str:
     """Strip control characters, ANSI escapes, and bidi overrides from error text."""
     result = _ANSI_ESCAPE_RE.sub("", msg)
     result = _C0_CONTROL_RE.sub("", result)
-    return "".join(c for c in result if c not in _BIDI_CHARS)
+    return result.translate(_BIDI_DELETE)
 
 
 def scrub_line(text: str) -> str:
-    """Strip control sequences AND flatten line breaks, for single-line output.
+    r"""Strip control sequences AND flatten line breaks, for single-line output.
 
     sanitize_error deliberately keeps "\n" so a wrapped exception still reads
     as paragraphs. Anything printed as ONE line of a report needs the stronger

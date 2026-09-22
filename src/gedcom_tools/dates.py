@@ -81,6 +81,8 @@ MAX_DATE_TEXT = 255
 
 _DATE_TOKEN_RE = re.compile(r"[^\s/\-.,]+")
 _YEAR_TOKEN_RE = re.compile(r"\d{4}")
+# Compiled like the patterns above; three of these run per phrase date.
+_YEAR_RUN_RE = re.compile(r"\b(\d{4})\b")
 # Matches a day or a numeric month - "12/2/1882" has both
 _SMALL_NUMBER_RE = re.compile(r"\d{1,2}")
 
@@ -147,7 +149,7 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
     max_year = base + 1
     return [
         int(run)
-        for run in re.findall(r"\b\d{4}\b", text)
+        for run in _YEAR_RUN_RE.findall(text)
         if MIN_PLAUSIBLE_YEAR <= int(run) <= max_year
     ]
 
@@ -579,7 +581,7 @@ def extract_year_from_date(date_val: object) -> int | None:
 
     # Fallback to regex extraction from string representation
     date_str = str(date_val)
-    match = re.search(r"\b(\d{4})\b", date_str)
+    match = _YEAR_RUN_RE.search(date_str)
     if match:
         return int(match.group(1))
 
@@ -608,7 +610,7 @@ def extract_year_latest_from_date(date_val: object) -> int | None:
     # Raw strings never reach the structured branches below, and the shared
     # regex fallback takes the FIRST year it finds, so handle them here.
     if isinstance(date_val, str):
-        years = re.findall(r"\b\d{4}\b", date_val)
+        years = _YEAR_RUN_RE.findall(date_val)
         return int(years[-1]) if years else None
 
     # ged4py Range, Period - the upper bound is the LARGER of the two, not
@@ -728,6 +730,11 @@ def classify_date_precision(date_val: object) -> tuple[str, bool]:
         has_year = bool(plausible_years(date_str))
         has_month = bool(MONTH_PATTERN.search(date_str))
 
+        # The day check stays a token scan while the two above are regexes:
+        # MONTH_PATTERN matches month NAMES only, so a numeric date like
+        # "12/2/1882" cannot reach "full" however its day is read. A bare
+        # one- or two-digit token beside a month name is the only day shape
+        # that can change the verdict.
         for p in parts:
             if p.isdigit() and len(p) <= 2:
                 try:

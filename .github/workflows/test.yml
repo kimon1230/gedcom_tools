@@ -24,7 +24,13 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        # pip upgrades itself first because the audit step below inspects the
+        # resolved environment: the pip that setup-python ships carries its own
+        # advisories, which would fail the build over the runner image rather
+        # than over anything in this repository.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Lint
         run: ruff check .
@@ -34,6 +40,12 @@ jobs:
 
       - name: Type check
         run: mypy src/
+
+      # Audits the resolved environment, so it can go red from a third-party
+      # advisory rather than a code change - same trade as the uncapped dev
+      # tools. The editable install is skipped automatically (not on PyPI).
+      - name: Audit dependencies
+        run: pip-audit
 
   test:
     strategy:
