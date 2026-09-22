@@ -165,6 +165,30 @@ def test_verbose_prints_the_traceback_scrubbed(tmp_path, monkeypatch, capsys):
     assert "\x1b" not in err  # but no terminal control sequences
 
 
+@pytest.mark.parametrize("command", ["export", "stats", "search", "isolated"])
+def test_oversized_file_reports_cleanly_from_any_command(
+    tmp_path, capsys, monkeypatch, command
+):
+    """The cap was enforced by validate, filter and convert only.
+
+    Handing a large tree to export or stats read it until the OS killed the
+    process - no message, no exit code, nothing the user could act on.
+    """
+    monkeypatch.setattr("gedcom_tools.utils.MAX_FILE_SIZE_BYTES", 10)
+
+    f = tmp_path / "big.ged"
+    f.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", encoding="utf-8")
+
+    argv = [command, str(f)]
+    if command == "search":
+        argv.append("name:Smith")
+
+    assert main(argv) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "too large" in err
+    assert "Maximum supported size" in err
+
+
 def test_validate_oversized_file_reports_cleanly(tmp_path, capsys, monkeypatch):
     """An anticipated size rejection reads as a limit, not as a crash."""
     monkeypatch.setattr("gedcom_tools.validation.engine.MAX_FILE_SIZE_BYTES", 10)

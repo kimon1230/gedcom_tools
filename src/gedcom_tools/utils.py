@@ -23,7 +23,11 @@ from ged4py.parser import (  # type: ignore[attr-defined]
     guess_codec,
 )
 
-from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
+from gedcom_tools.constants import (
+    EXIT_ERROR,
+    EXIT_USAGE_ERROR,
+    MAX_FILE_SIZE_BYTES,
+)
 
 if TYPE_CHECKING:
     from ged4py.model import Record
@@ -560,6 +564,22 @@ def validate_input_file(file_path: Path) -> int | None:
     if not os.access(file_path, os.R_OK):
         print(
             f"Error: Cannot read file (permission denied): {file_path}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # The cap was enforced by validate, filter and convert only, so a large
+    # tree given to export or stats was read until the OS killed the process -
+    # no message, no exit code, nothing to act on. Every command already calls
+    # this gate, so checking here covers all of them. The three existing checks
+    # stay: they guard the same limit for callers using the API directly.
+    file_size = file_path.stat().st_size
+    if file_size > MAX_FILE_SIZE_BYTES:
+        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+        actual_mb = file_size / (1024 * 1024)
+        print(
+            f"Error: File is too large ({actual_mb:.1f} MB). "
+            f"Maximum supported size is {limit_mb} MB.",
             file=sys.stderr,
         )
         return EXIT_ERROR
