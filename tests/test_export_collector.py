@@ -670,6 +670,38 @@ class TestRedactLivingPhraseDates:
         ged = "0 @I1@ INDI\n1 NAME Eve /Alive/\n1 CHR\n2 DATE Census 1900 record\n"
         assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
+    def test_second_birth_event_is_not_ignored(self, tmp_path: Path) -> None:
+        # A tree merged from two sources routinely carries two BIRT events.
+        # Only the first was read, so a transcribed-wrong 1850 beside a real
+        # 1990 published someone who is alive.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_second_birth_event_order_does_not_matter(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_empty_date_line_is_skipped_not_treated_as_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        # "2 DATE" with no value states nothing. ged4py returns an empty
+        # phrase rather than None, so it needs skipping explicitly or a good
+        # birth date beside it would withhold someone long dead.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
     def test_clean_christening_behind_dirty_birth_still_publishes(
         self, tmp_path: Path
     ) -> None:

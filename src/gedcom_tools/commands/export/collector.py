@@ -49,6 +49,34 @@ def _extract_year(record: Record, path: str) -> int | None:
     return extract_year_from_date(date_rec.value)
 
 
+_BIRTH_EVENT_TAGS = ("BIRT", "CHR", "BAPM")
+
+
+def _liveness_birth_year(record: Record) -> int | None:
+    """Upper bound of the birth year, across EVERY birth-ish event.
+
+    sub_tag stops at the first match, so a record carrying two BIRT events -
+    the normal shape when a tree is merged from two sources - decided liveness
+    on whichever one the exporter happened to write first. A transcribed-wrong
+    1850 beside a real 1990 published someone who is alive.
+
+    Unreadable dates are skipped, not treated as unknown: a christening in
+    1750 proves someone is dead whatever an unreadable birth line says beside
+    it. The phrase gate already keeps untrusted text out, so what reaches here
+    is a real year or nothing.
+    """
+    years = [
+        year
+        for sub in record.sub_records
+        if str(sub.tag).upper() in _BIRTH_EVENT_TAGS
+        for child in sub.sub_records
+        if str(child.tag).upper() == "DATE" and child.value is not None
+        for year in (extract_year_latest_for_liveness(child.value),)
+        if year is not None
+    ]
+    return max(years, default=None)
+
+
 def _liveness_year(record: Record, path: str) -> int | None:
     """Upper bound of a birth-ish year, for the liveness decision only.
 
@@ -178,17 +206,7 @@ def _build_individual(record: Record, xref: str) -> ExportIndividual:
     # transcribed-wrong or forged ancient birth year override a later CHR/BAPM
     # date on the same record and publish someone the christening says is alive.
     # A later year can only redact more, so max() is the fail-safe direction.
-    liveness_birth_year = max(
-        (
-            year
-            for year in (
-                _liveness_year(record, path)
-                for path in ("BIRT/DATE", "CHR/DATE", "BAPM/DATE")
-            )
-            if year is not None
-        ),
-        default=None,
-    )
+    liveness_birth_year = _liveness_birth_year(record)
 
     # Death: date string + year + place
     death_date = _extract_date_str(record, "DEAT/DATE")
