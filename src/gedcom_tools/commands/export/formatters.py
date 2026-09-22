@@ -115,6 +115,11 @@ def _spouse_is_living(fam: ExportFamily, living_xrefs: set[str]) -> bool:
     One is enough. A wedding date and a named venue identify the couple that
     married there, so leaving them beside two "Living" placeholders -- plus any
     unredacted child's famc_xref and surname -- hands back the redacted parents.
+
+    A redacted CHILD does NOT trigger this. Nothing links them to the family
+    once their row's famc_xref is blank and their xref is gone from
+    children_xrefs, so blanking the wedding would destroy a deceased couple's
+    marriage record without withholding anything.
     """
     return fam.husband_xref in living_xrefs or fam.wife_xref in living_xrefs
 
@@ -138,6 +143,12 @@ def _family_csv_row(
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        # children_xrefs lists who can be SHOWN; child_count stays the real
+        # total, because how many children a couple had is a fact about the
+        # family and not a way to name one of them. Dropping the withheld
+        # entries rather than blanking them in place is what removes the
+        # birth-order position.
+        children_xrefs = [x for x in children_xrefs if x]
         if _spouse_is_living(fam, living_xrefs):
             marriage_date = ""
             marriage_year = None
@@ -264,7 +275,7 @@ def _family_to_dict(
         if fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
-        children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        children_xrefs = [x for x in children_xrefs if x not in living_xrefs]
         if _spouse_is_living(fam, living_xrefs):
             marriage_date = ""
             marriage_year = None

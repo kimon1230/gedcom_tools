@@ -517,8 +517,10 @@ class TestCsvXrefRedaction:
         assert row[1] == ""  # husband_xref cleared (living)
         assert row[3] == "@I2@"  # wife_xref kept (not living)
         xrefs = row[9].split(";")
-        assert xrefs[0] == ""  # child @I1@ cleared
-        assert xrefs[1] == "@I3@"  # child @I3@ kept
+        # A redacted child is DROPPED, not blanked in place: a blank slot
+        # still gives their position in the birth order.
+        assert "" not in xrefs
+        assert xrefs == ["@I3@"]  # the living child is dropped, not blanked
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +570,7 @@ class TestJsonXrefRedaction:
         assert fam_data["husband_xref"] == ""
         assert fam_data["husband_name"] == "Living"
         assert fam_data["wife_xref"] == "@I2@"
-        assert fam_data["children_xrefs"] == ["", "@I3@"]
+        assert fam_data["children_xrefs"] == ["@I3@"]
 
     def test_no_dates_is_redacted(self) -> None:
         """Nothing in the record rules out a living person, so the row is redacted."""
@@ -720,8 +722,40 @@ class TestMarriageRedaction:
             "St. Mary's Church, London",
         )
 
+    def test_a_redacted_child_is_not_recoverable_from_the_family(self) -> None:
+        # A blank placeholder in children_xrefs still says WHICH child was
+        # withheld - eldest, second, youngest - which narrows a real tree
+        # considerably. The entry is dropped instead.
+        fam = _fam(
+            husband_xref="@I1@",
+            wife_xref="@I2@",
+            child_count=2,
+            children_xrefs=["@I3@", "@I4@"],
+        )
+        individuals = [
+            _deceased("@I1@"),
+            _deceased("@I2@"),
+            _living("@I3@"),
+            _deceased("@I4@"),
+        ]
+        out = format_json(
+            _result(individuals=individuals, families=[fam]), redact_living=True
+        )
+        data = json.loads(out)["families"][0]
+        # The wedding stays: the couple is dead, named, and unlinked to the
+        # withheld child. The BIRTH-ORDER POSITION is what goes.
+        assert data["marriage_date"] != ""
+        # The couple DID have two children - saying otherwise misstates the
+        # record rather than protecting anyone, and meta.redacted_count
+        # already discloses that redaction happened.
+        assert data["child_count"] == 2
+        assert data["children_xrefs"] == ["@I4@"]  # no blank placeholder
+
     def test_csv_keeps_marriage_when_only_a_child_is_living(self) -> None:
-        # Redacting a child does not make the parents' wedding identifying.
+        # Nothing links a redacted child to this family: their row's famc_xref
+        # is blank and their xref is gone from children_xrefs. Clearing the
+        # wedding would destroy a deceased couple's marriage record without
+        # withholding anyone.
         fam = _fam(husband_xref="@I1@", wife_xref="@I2@", children_xrefs=["@I3@"])
         individuals = [_deceased("@I1@"), _deceased("@I2@"), _living("@I3@")]
         assert _fam_csv_marriage(individuals, fam) == (

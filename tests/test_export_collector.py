@@ -696,6 +696,17 @@ class TestRedactLivingPhraseDates:
         )
         assert _redacted_xrefs(tmp_path, ged) == set()
 
+    def test_burial_alone_proves_death(self, tmp_path: Path) -> None:
+        # Born 1950 is well under the age ceiling and there is no DEAT, so the
+        # burial is the ONLY thing that can decide. Without it this record is
+        # withheld. Removing burial evidence entirely used to pass every test.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 3 MAR 1950\n"
+            "1 BURI\n2 DATE 4 OCT 2010\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
     def test_second_birth_event_is_not_ignored(self, tmp_path: Path) -> None:
         # A tree merged from two sources routinely carries two BIRT events.
         # Only the first was read, so a transcribed-wrong 1850 beside a real

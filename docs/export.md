@@ -338,7 +338,15 @@ unaffected.
   identify the couple that married there, so leaving them next to a `"Living"`
   placeholder — plus any unredacted child's `famc_xref` and surname — hands the
   redacted parents straight back.
-- Child xrefs are cleared individually for children who are themselves living.
+- A living child's xref is **removed** from `children_xrefs` rather than
+  blanked in place, because a blank slot still gives their position in the
+  birth order. `child_count` keeps the family's real total — how many children
+  a couple had is a fact about the family, not a way to name one of them, and
+  `meta.redacted_count` already reports that redaction occurred.
+- A living **child** does not clear the marriage fields. Their own row's
+  `famc_xref` is blank and their xref is gone from `children_xrefs`, so nothing
+  links them to the family; clearing the wedding would destroy a deceased
+  couple's marriage record without withholding anything.
 
 ### Design Note
 
