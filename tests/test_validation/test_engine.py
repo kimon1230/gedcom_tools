@@ -1260,6 +1260,141 @@ class TestOpenEndedDateBounds:
         assert "W023" in self._codes(tmp_path, "1 JAN 1800", "1 JAN 1950")
 
 
+class TestSiblingSpacingNeedsExactYears:
+    """A known month does not make a date exact."""
+
+    def _codes(self, tmp_path, first, second):
+        body = [
+            "0 @C1@ INDI",
+            "1 NAME A /X/",
+            "1 BIRT",
+            f"2 DATE {first}",
+            "1 FAMC @F1@",
+        ]
+        body += [
+            "0 @C2@ INDI",
+            "1 NAME B /X/",
+            "1 BIRT",
+            f"2 DATE {second}",
+            "1 FAMC @F1@",
+        ]
+        body += ["0 @F1@ FAM", "1 CHIL @C1@", "1 CHIL @C2@"]
+        ged = _write_ged(tmp_path / "sib.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_exact_dates_five_months_apart_warn(self, tmp_path):
+        assert "W026" in self._codes(tmp_path, "3 MAR 1980", "3 AUG 1980")
+
+    def test_month_without_an_exact_year_does_not_warn(self, tmp_path):
+        # "3 JAN 1801-1875" reads as FULL precision with month 1 - ged4py
+        # cannot parse it, so the month is recovered from the text while the
+        # year stays a 74-year range. Spacing measured on the month alone is
+        # meaningless, so the child is skipped rather than guessed at.
+        assert "W026" not in self._codes(tmp_path, "3 JAN 1801-1875", "3 MAR 1801-1875")
+
+
+class TestFamilyChronologyUsesBothBounds:
+    """Born-before-parent, marriage-before-birth and child-before-marriage all
+    compare two dates, so each needs the bound pair that makes the verdict
+    certain rather than merely possible."""
+
+    def _codes(self, tmp_path, body):
+        ged = _write_ged(tmp_path / "fam.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def _parent_child(self, parent_birth, child_birth):
+        return [
+            "0 @P1@ INDI",
+            "1 NAME Par /X/",
+            "1 BIRT",
+            f"2 DATE {parent_birth}",
+            "1 FAMS @F1@",
+            "0 @C1@ INDI",
+            "1 NAME Chi /X/",
+            "1 BIRT",
+            f"2 DATE {child_birth}",
+            "1 FAMC @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @P1@",
+            "1 CHIL @C1@",
+        ]
+
+    def _marriage(self, spouse_birth, marriage):
+        return [
+            "0 @H1@ INDI",
+            "1 NAME H /X/",
+            "1 BIRT",
+            f"2 DATE {spouse_birth}",
+            "1 FAMS @F1@",
+            "0 @W1@ INDI",
+            "1 NAME W /X/",
+            "1 FAMS @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @H1@",
+            "1 WIFE @W1@",
+            "1 MARR",
+            f"2 DATE {marriage}",
+        ]
+
+    def test_definitely_born_before_parent(self, tmp_path):
+        codes = self._codes(tmp_path, self._parent_child("1 JAN 1950", "1 JAN 1900"))
+        assert "E012" in codes
+
+    def test_open_child_birth_is_not_born_before_parent(self, tmp_path):
+        # "born after 1900" includes 1990, which is after the parent.
+        codes = self._codes(tmp_path, self._parent_child("1 JAN 1950", "AFT 1900"))
+        assert "E012" not in codes
+
+    def _child_marriage(self, child_birth, marriage):
+        return [
+            "0 @H1@ INDI",
+            "1 NAME H /X/",
+            "1 FAMS @F1@",
+            "0 @C1@ INDI",
+            "1 NAME Chi /X/",
+            "1 BIRT",
+            f"2 DATE {child_birth}",
+            "1 FAMC @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @H1@",
+            "1 CHIL @C1@",
+            "1 MARR",
+            f"2 DATE {marriage}",
+        ]
+
+    def test_definitely_born_before_the_marriage(self, tmp_path):
+        codes = self._codes(tmp_path, self._child_marriage("1 JAN 1900", "1 JAN 1950"))
+        assert "W025" in codes
+
+    def test_open_child_birth_is_not_born_before_the_marriage(self, tmp_path):
+        # "born after 1900" includes 1990, which is after the marriage.
+        codes = self._codes(tmp_path, self._child_marriage("AFT 1900", "1 JAN 1950"))
+        assert "W025" not in codes
+
+    def test_child_birth_range_spanning_the_marriage_does_not_warn(self, tmp_path):
+        codes = self._codes(
+            tmp_path, self._child_marriage("BET 1900 AND 1990", "1 JAN 1950")
+        )
+        assert "W025" not in codes
+
+    def test_definitely_married_before_birth(self, tmp_path):
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "1 JAN 1880"))
+        assert "W024" in codes
+
+    def test_open_marriage_is_not_married_before_birth(self, tmp_path):
+        # "married after 1880" includes 1990.
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "AFT 1880"))
+        assert "W024" not in codes
+
+    def test_bounded_marriage_before_birth_still_fires(self, tmp_path):
+        # "married before 1880" has a real upper bound, and it is still before
+        # the 1900 birth - so this one IS definite.
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "BEF 1880"))
+        assert "W024" in codes
+
+
 class TestParentAgeUsesBothBounds:
     """W020 (too young) and W021/W022 (too old) sit in one if/elif but need
     OPPOSITE bound pairs, so a single age cannot serve both."""

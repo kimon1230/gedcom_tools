@@ -51,6 +51,7 @@ class TestSemanticValidator:
                 wife_xref="@I2@",
                 chil_xrefs=["@I3@"],
                 marriage_year=1975,
+                marriage_year_latest=1975,
             )
         )
 
@@ -291,7 +292,8 @@ class TestSemanticValidator:
                 xref="@F1@",
                 line=20,
                 husb_xref="@I1@",
-                marriage_year=1940,  # Before birth
+                marriage_year=1940,
+                marriage_year_latest=1940,  # Before birth
             )
         )
 
@@ -328,6 +330,7 @@ class TestSemanticValidator:
                 husb_xref="@I1@",
                 chil_xrefs=["@I2@"],
                 marriage_year=1980,
+                marriage_year_latest=1980,
             )
         )
 
@@ -399,10 +402,22 @@ class TestSiblingSpacing:
     def test_siblings_5_months_apart_w026(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=8)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=8,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -416,10 +431,22 @@ class TestSiblingSpacing:
     def test_siblings_9_months_apart_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=1)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=1,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=10)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=10,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -432,10 +459,22 @@ class TestSiblingSpacing:
     def test_twins_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=6)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=6,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=6)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=6,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -448,10 +487,22 @@ class TestSiblingSpacing:
     def test_year_only_dates_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=None)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=None,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=None)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=None,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -465,10 +516,22 @@ class TestSiblingSpacing:
         validator = SemanticValidator()
         # I2 is older but listed second in GEDCOM
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=8)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=8,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -481,14 +544,32 @@ class TestSiblingSpacing:
     def test_three_siblings_one_pair_violating(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1978, birth_month=1)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1978,
+                birth_year_latest=1978,
+                birth_month=1,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         # I3 is only 4 months after I2
         validator.collect_individual(
-            IndividualInfo(xref="@I3@", line=20, birth_year=1980, birth_month=7)
+            IndividualInfo(
+                xref="@I3@",
+                line=20,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=7,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=30, chil_xrefs=["@I1@", "@I2@", "@I3@"])
@@ -501,10 +582,22 @@ class TestSiblingSpacing:
     def test_cross_year_boundary(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1979, birth_month=10)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1979,
+                birth_year_latest=1979,
+                birth_month=10,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])

@@ -147,16 +147,21 @@ class SemanticValidator:
                         if not parent_xref:
                             continue
                         parent = self.individuals.get(parent_xref)
+                        # Latest the child could be born against the earliest
+                        # the parent could be - the only pairing where "before"
+                        # is certain rather than merely possible.
+                        child_latest = indi.birth_year_latest
+                        parent_earliest = parent.birth_year if parent else None
                         if (
-                            parent
-                            and parent.birth_year is not None
-                            and indi.birth_year < parent.birth_year
+                            child_latest is not None
+                            and parent_earliest is not None
+                            and child_latest < parent_earliest
                         ):
                             issues.append(
                                 ValidationIssue(
                                     code=ErrorCode.E012_BIRTH_BEFORE_PARENT,
-                                    message=f"Born ({indi.birth_year}) before parent "
-                                    f"{parent_xref} ({parent.birth_year})",
+                                    message=f"Born ({child_latest}) before parent "
+                                    f"{parent_xref} ({parent_earliest})",
                                     line=indi.line,
                                     xref=xref,
                                 )
@@ -164,9 +169,12 @@ class SemanticValidator:
 
         # Marriage before birth
         for fam_xref, fam in self.families.items():
-            if fam.marriage_year is None:
+            if fam.marriage_year is None and fam.marriage_year_latest is None:
                 continue
 
+            # Latest the marriage could be against the earliest the spouse
+            # could be born. "MARR BEF 1950" beside "BIRT 1900" is consistent.
+            marriage_latest = fam.marriage_year_latest
             for spouse_xref in [fam.husb_xref, fam.wife_xref]:
                 if not spouse_xref:
                     continue
@@ -174,12 +182,13 @@ class SemanticValidator:
                 if (
                     spouse
                     and spouse.birth_year is not None
-                    and fam.marriage_year < spouse.birth_year
+                    and marriage_latest is not None
+                    and marriage_latest < spouse.birth_year
                 ):
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W024_MARRIAGE_BEFORE_BIRTH,
-                            message=f"Marriage ({fam.marriage_year}) before "
+                            message=f"Marriage ({marriage_latest}) before "
                             f"{spouse_xref} birth ({spouse.birth_year})",
                             line=fam.line,
                             xref=fam_xref,
@@ -189,16 +198,18 @@ class SemanticValidator:
             # Child born before marriage (just a warning)
             for child_xref in fam.chil_xrefs:
                 child = self.individuals.get(child_xref)
+                child_latest = child.birth_year_latest if child else None
+                marriage_earliest = fam.marriage_year
                 if (
-                    child
-                    and child.birth_year is not None
-                    and child.birth_year < fam.marriage_year
+                    child_latest is not None
+                    and marriage_earliest is not None
+                    and child_latest < marriage_earliest
                 ):
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W025_CHILD_BEFORE_MARRIAGE,
-                            message=f"Child {child_xref} born ({child.birth_year}) "
-                            f"before marriage ({fam.marriage_year})",
+                            message=f"Child {child_xref} born ({child_latest}) "
+                            f"before marriage ({marriage_earliest})",
                             line=fam.line,
                             xref=fam_xref,
                         )
@@ -307,7 +318,10 @@ class SemanticValidator:
         issues: list[ValidationIssue] = []
 
         for fam_xref, fam in self.families.items():
-            # Collect children with both birth_year and birth_month
+            # Only children whose birth year is a single year. A month alone
+            # does not make a date exact: "3 JAN 1801-1875" reads as a full
+            # precision date with month 1, but the year could be anywhere in a
+            # 74-year span, and spacing measured against that is meaningless.
             dated_children: list[tuple[int, int, str]] = []
             for child_xref in fam.chil_xrefs:
                 child = self.individuals.get(child_xref)
@@ -315,6 +329,7 @@ class SemanticValidator:
                     child
                     and child.birth_year is not None
                     and child.birth_month is not None
+                    and child.birth_year_latest == child.birth_year
                 ):
                     dated_children.append(
                         (child.birth_year, child.birth_month, child_xref)
