@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import sys
+import traceback
 import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
@@ -218,15 +219,25 @@ def scrub_line(text: str) -> str:
     return sanitize_error(text).replace("\r", " ").replace("\n", " ")
 
 
-def report_error(e: Exception) -> None:
+def report_error(e: Exception, verbose: bool = False) -> None:
     """Print an unexpected exception to stderr in the one house format.
 
     Every generic ``except Exception`` handler routes through here so the same
     failure reads the same way whichever command hit it. The type name matters:
     a bare ``Error: 'foo'`` from a KeyError tells the user nothing.
+
+    Under --verbose the traceback is printed here rather than by re-raising.
+    Re-raising bypassed the scrub, and ged4py's ParserError quotes the whole
+    offending line - which in a real tree is somebody's name, address or note,
+    plus any escape sequence the file carries. The traceback keeps its
+    newlines, because a traceback that is not on separate lines is useless.
     """
     print(f"Error: {type(e).__name__}: {sanitize_error(str(e))}", file=sys.stderr)
-    print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+    if verbose:
+        trace = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(sanitize_error(trace), file=sys.stderr, end="")
+    else:
+        print("Re-run with --verbose for a full traceback.", file=sys.stderr)
 
 
 def check_output_safety(
