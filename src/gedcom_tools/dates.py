@@ -5,6 +5,11 @@ from __future__ import annotations
 import datetime
 import re
 
+from convertdate import (  # type: ignore[import-untyped]
+    french_republican,
+    hebrew,
+)
+
 # ged4py DateValueTypes - import once at module level for performance
 try:
     from ged4py.date import DateValueTypes
@@ -147,10 +152,173 @@ def plausible_years(text: str, current_year: int | None = None) -> list[int]:
     ]
 
 
-# Only these calendars use years in the range MIN_PLAUSIBLE_YEAR..now. Hebrew
-# years run ~5786 and French Republican ~230, so bounding those would reject
-# every legitimate non-Gregorian date.
-_BOUNDED_CALENDARS = ("GregorianDate", "JulianDate")
+# These two already state a year on the Gregorian scale, so MIN_PLAUSIBLE_YEAR
+# bounds them directly. GEDCOM 5.5.1 also defines HEBREW and FRENCH R, whose
+# years count from another epoch - 5786 and 230 are dates in 2026 and 2021 - so
+# those are converted first. Both halves get the same bound afterwards.
+_GREGORIAN_SCALE_CALENDARS = ("GregorianDate", "JulianDate")
+
+# Julian Day 1721425.5 is 0001-01-01 proleptic Gregorian, which is ordinal 1.
+# GEDCOM names Hebrew months from Tishrei; convertdate numbers them from
+# Nisan. ged4py feeds its own GEDCOM index straight into convertdate, which is
+# why its HebrewDate.key() lands ~6 months out - Tishrei-Tevet a year high,
+# Nisan-Elul a year LOW, and a year low publishes a living person.
+_HEBREW_MONTH_TO_CONVERTDATE = {
+    "TSH": 7,
+    "CSH": 8,
+    "KSL": 9,
+    "TVT": 10,
+    "SHV": 11,
+    "ADR": 12,
+    "ADS": 13,
+    "NSN": 1,
+    "IYR": 2,
+    "SVN": 3,
+    "TMZ": 4,
+    "AAV": 5,
+    "ELL": 6,
+}
+
+_FRENCH_MONTH_TO_CONVERTDATE = {
+    "VEND": 1,
+    "BRUM": 2,
+    "FRIM": 3,
+    "NIVO": 4,
+    "PLUV": 5,
+    "VENT": 6,
+    "GERM": 7,
+    "FLOR": 8,
+    "PRAI": 9,
+    "MESS": 10,
+    "THER": 11,
+    "FRUC": 12,
+    "COMP": 13,
+}
+
+
+def _hebrew_gregorian_year(
+    year: int, month: int | None, day: int | None, latest: bool
+) -> int | None:
+    """Gregorian year for a Hebrew date, or None if it will not convert."""
+    if month is None:
+        # A Hebrew year spans two Gregorian ones, so a year with no month has
+        # no single answer - take the end the caller asked for.
+        month = 6 if latest else 7
+    if month > hebrew.year_months(year):
+        # ADS in a common year: 13 months were named, 12 exist.
+        return None
+    if day is None:
+        day = hebrew.month_days(year, month) if latest else 1
+    if day > hebrew.month_days(year, month):
+        # to_gregorian does no range checking of its own and would silently
+        # roll "30 ELL" into the following year.
+        return None
+    return int(hebrew.to_gregorian(year, month, day)[0])
+
+
+def _french_gregorian_year(
+    year: int, month: int | None, day: int | None, latest: bool
+) -> int | None:
+    """Gregorian year for a French Republican date, or None if invalid.
+
+    Unlike hebrew, french_republican DOES validate and raises ValueError, so
+    the range check is the call itself.
+    """
+    if month is None:
+        month = 13 if latest else 1
+    if day is None:
+        day = (6 if french_republican.leap(year) else 5) if month == 13 else 30
+        if not latest:
+            day = 1
+    return int(french_republican.to_gregorian(year, month, day)[0])
+
+
+def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
+    """Year on the Gregorian scale, whatever calendar the date is written in.
+
+    estimate_living and the age checks subtract the year from the current one,
+    so a Hebrew or French Republican year means nothing to them until it is
+    converted.
+
+    None means the year could not be put on that scale, which callers treat
+    the same way as no year at all.
+    """
+    year = getattr(cal_date, "year", None)
+    if year is None:
+        return None
+    try:
+        year = int(year)
+    except (TypeError, ValueError):
+        return None
+
+    # BC applies to every calendar, not just the converted ones. Negating it
+    # here lets the policy bound reject it rather than reading 100 B.C. as AD.
+    if getattr(cal_date, "bc", False):
+        year = -year
+
+    name = type(cal_date).__name__
+    if name in _GREGORIAN_SCALE_CALENDARS:
+        return year
+    if year < 1:
+        return None
+
+    month_token = getattr(cal_date, "month", None)
+    day = getattr(cal_date, "day", None)
+    try:
+        if name == "HebrewDate":
+            month = (
+                None
+                if month_token is None
+                else _HEBREW_MONTH_TO_CONVERTDATE.get(str(month_token).upper())
+            )
+            if month_token is not None and month is None:
+                return None
+            return _hebrew_gregorian_year(year, month, day, latest)
+        if name == "FrenchDate":
+            month = (
+                None
+                if month_token is None
+                else _FRENCH_MONTH_TO_CONVERTDATE.get(str(month_token).upper())
+            )
+            if month_token is not None and month is None:
+                return None
+            return _french_gregorian_year(year, month, day, latest)
+    except (TypeError, ValueError, IndexError, ArithmeticError):
+        # ArithmeticError covers OverflowError, which a 400-digit year raises.
+        # ValueError is french_republican's own range rejection, and a year
+        # over ~4300 digits raises it from int-to-str conversion.
+        return None
+
+    return None
+
+
+def _converted_year(date_val: object, *, latest: bool) -> int | None:
+    """Gregorian-scale year folded across every readable half.
+
+    Every half is converted, including Gregorian and Julian ones: dropping
+    those lost the Gregorian bound of a mixed-calendar range, so
+    "BET @#DHEBREW@ 1 TSH 5600 AND 2010" read as 1840 and published a living
+    person.
+
+    Precondition: _is_trustworthy has already run and returned True, so every
+    present half is known to convert. There is no poison check here because it
+    could never fire - the trust gate rejects an unreadable half before either
+    reader gets this far.
+    """
+    years = [
+        year
+        for year in (
+            _gregorian_year(cal_date, latest=latest)
+            for cal_date in (
+                getattr(date_val, attr, None) for attr in ("date", "date1", "date2")
+            )
+            if cal_date is not None
+        )
+        if year is not None
+    ]
+    if not years:
+        return None
+    return max(years) if latest else min(years)
 
 
 def _is_trustworthy(
@@ -191,58 +359,181 @@ def _is_trustworthy(
         if cal_date is None:
             continue
 
-        month = getattr(cal_date, "month", None)
-        if month and getattr(cal_date, "month_num", None) is None:
-            # month_num is set for Hebrew/French-Republican months too, so this
-            # only reaches junk; MONTH_TO_NUM still admits ged4py's "JUNE".
-            if MONTH_TO_NUM.get(str(month).upper()[:3]) is None:
-                return False
+        if _cal_date_is_misparsed(cal_date):
+            return False
 
-        year = getattr(cal_date, "year", None)
-
-        # "3/1990" is a dual-year mis-parse: ged4py reads year 3, dual 1990.
-        # A real dual date spans one year boundary ("1750/51" -> 1750/1751),
-        # so the gap is the discriminator. The floor used to catch this by
-        # accident; validation drops the floor, so it has to be explicit.
-        dual_year = getattr(cal_date, "dual_year", None)
-        if year is not None and dual_year is not None:
-            if int(dual_year) - int(year) != 1:
-                return False
-
-        if year is not None and type(cal_date).__name__ in _BOUNDED_CALENDARS:
-            if not year_floor <= int(year) <= max_year:
-                return False
+        # Converted first, so the bound means the same thing on every calendar.
+        # Skipping it for Hebrew and French Republican let "@#DFRENCH R@ 1 VEND
+        # 230" - a date in 2021 - reach estimate_living as the number 230 and
+        # read as an age of ~1796, publishing a living person.
+        year = _gregorian_year(cal_date)
+        if year is None:
+            # A Gregorian date with no year is as unreadable as a Hebrew one
+            # that would not convert; neither is safe to decide on.
+            return False
+        # year_floor, not MIN_PLAUSIBLE_YEAR: validation drops the 1000 floor
+        # so a spec-conformant "1 JAN 0950" still reaches the chronology checks.
+        if not year_floor <= year <= max_year:
+            return False
     return True
+
+
+def _cal_date_is_misparsed(cal_date: object) -> bool:
+    """Whether ged4py's parse of one calendar date is a mis-parse.
+
+    It validates neither the month token nor the dual-year form, so "Reg 1823"
+    arrives as a SIMPLE date whose month is "REG", and "3/1990" as the dual
+    year 3. Both look structured; neither is a date.
+
+    Says nothing about whether the year is plausible - that is a separate
+    question with a separate answer, and conflating them tells the user of
+    "25 DEC 9999" to fix a format that is already correct.
+    """
+    month = getattr(cal_date, "month", None)
+    if month and getattr(cal_date, "month_num", None) is None:
+        # month_num is set for Hebrew/French-Republican months too, so this
+        # only reaches junk; MONTH_TO_NUM still admits ged4py's "JUNE".
+        if MONTH_TO_NUM.get(str(month).upper()[:3]) is None:
+            return True
+
+    # A real dual date spans one year boundary ("1750/51" -> 1750/1751), so the
+    # gap is the discriminator. royal92 carries both shapes: "1 MAR 1665/6" is
+    # genuine, "1056/1060" is a range written the wrong way.
+    year = getattr(cal_date, "year", None)
+    dual_year = getattr(cal_date, "dual_year", None)
+    if year is not None and dual_year is not None:
+        if int(dual_year) - int(year) != 1:
+            return True
+
+    return False
+
+
+def has_unreadable_structure(date_val: object) -> bool:
+    """Whether a STRUCTURED date is a mis-parse rather than a date.
+
+    ged4py validates neither the month token nor the dual-year form, so
+    "Reg 1823" becomes a SIMPLE date whose month is "REG", and "3/1990" becomes
+    the dual year 3. Both arrive looking structured and neither is a date.
+
+    Deliberately ignores the plausibility bound. "25 DEC 9999" IS in GEDCOM
+    form - its problem is the year, not the form - so telling the user to write
+    it as DD MMM YYYY would be wrong on both counts.
+    """
+    if is_phrase_date(date_val):
+        return False
+
+    for attr in ("date", "date1", "date2"):
+        cal_date = getattr(date_val, attr, None)
+        if cal_date is None:
+            continue
+
+        if _cal_date_is_misparsed(cal_date):
+            return True
+
+    return False
+
+
+def _has_bound(date_val: object, *, latest: bool) -> bool:
+    """Whether the date states a bound on the side being asked for.
+
+    "AFT 1910" gives a lower bound and no upper one; "BEF 1950" the reverse.
+    Reading the stated year as the MISSING bound invents a limit the file never
+    gave - which on the liveness side ages someone into the grave and publishes
+    them, and on the validation side fires a chronology error against a bound
+    that does not exist. A bare FROM/TO is open; "FROM 1900 TO 1950" is a
+    PERIOD and has both.
+    """
+    if not HAS_DATE_VALUE_TYPES:
+        return True
+    kind = getattr(date_val, "kind", None)
+    if kind in (DateValueTypes.AFTER, DateValueTypes.FROM):
+        return not latest
+    if kind in (DateValueTypes.BEFORE, DateValueTypes.TO):
+        return latest
+    return True
+
+
+def _extract_year_bounded(
+    date_val: object,
+    current_year: int | None,
+    *,
+    latest: bool,
+    allow_phrase: bool,
+    year_floor: int,
+) -> int | None:
+    """Shared body of the four policy readers."""
+    if not _has_bound(date_val, latest=latest):
+        return None
+    if not _is_trustworthy(
+        date_val, current_year, allow_phrase=allow_phrase, year_floor=year_floor
+    ):
+        return None
+    converted = _converted_year(date_val, latest=latest)
+    if converted is not None:
+        return converted
+    if latest:
+        return extract_year_latest_from_date(date_val)
+    return extract_year_from_date(date_val)
 
 
 def extract_year_for_validation(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Year for the chronology checks (E011/E012/W020-W023).
+    """Earliest year the date can mean, for the chronology checks.
 
     Accepts a clean phrase - "12/2/1882" is a readable date that yields a
     correct E011 - and applies no MIN_PLAUSIBLE_YEAR floor, so a 10th-century
     record is still checked.
     """
-    if not _is_trustworthy(date_val, current_year, allow_phrase=True, year_floor=1):
-        return None
-    return extract_year_from_date(date_val)
+    return _extract_year_bounded(
+        date_val, current_year, latest=False, allow_phrase=True, year_floor=1
+    )
+
+
+def extract_year_latest_for_validation(
+    date_val: object, current_year: int | None = None
+) -> int | None:
+    """Latest year the date can mean, for the chronology checks.
+
+    E011 compares a death against a birth, and a DEFINITE contradiction needs
+    the death's LATEST bound against the birth's earliest - otherwise
+    "DEAT AFT 1850" beside "BIRT 1900" reads as a reversed lifespan that the
+    file never claimed.
+    """
+    return _extract_year_bounded(
+        date_val, current_year, latest=True, allow_phrase=True, year_floor=1
+    )
+
+
+def extract_year_for_liveness(
+    date_val: object, current_year: int | None = None
+) -> int | None:
+    """Earliest year the date can mean, for the --redact-living decision."""
+    return _extract_year_bounded(
+        date_val,
+        current_year,
+        latest=False,
+        allow_phrase=False,
+        year_floor=MIN_PLAUSIBLE_YEAR,
+    )
 
 
 def extract_year_latest_for_liveness(
     date_val: object, current_year: int | None = None
 ) -> int | None:
-    """Upper bound of the birth year, for the --redact-living decision.
+    """Latest year the date can mean, for the --redact-living decision.
 
     Rejects free text: a year recovered from a note cannot be told apart from
     an archive citation, and acting on a wrong one publishes a living person.
     Unknown means living, so returning None here redacts.
     """
-    if not _is_trustworthy(
-        date_val, current_year, allow_phrase=False, year_floor=MIN_PLAUSIBLE_YEAR
-    ):
-        return None
-    return extract_year_latest_from_date(date_val)
+    return _extract_year_bounded(
+        date_val,
+        current_year,
+        latest=True,
+        allow_phrase=False,
+        year_floor=MIN_PLAUSIBLE_YEAR,
+    )
 
 
 def get_century(year: int) -> str:

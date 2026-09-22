@@ -12,9 +12,14 @@ CLAUDE.md
 .tabnine/
 .sourcegraph/
 
-# GEDCOM data files (prevent accidental commit of large/private files)
-*.ged
-!tests/fixtures/*.ged
+# GEDCOM data files (prevent accidental commit of large/private files).
+# Case-folded: PAF, Legacy and Family Tree Maker write .GED, and git is
+# case-sensitive here, so a bare *.ged leaves a real family tree stageable.
+# The second rule catches the backup and archive forms (.ged.bak, .ged.gz,
+# .ged.1) that a bare extension glob misses.
+*.[Gg][Ee][Dd]
+*.[Gg][Ee][Dd].*
+!tests/fixtures/*.[Gg][Ee][Dd]
 
 # Virtual environment
 .venv/

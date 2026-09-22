@@ -286,3 +286,42 @@ class TestAsciiDecorations:
         text = self._result_with_context().format_text(Colors(force_disable=True))
         assert "✗ Invalid" in text
         assert "→ 1 FAMC @F99@" in text
+
+
+class TestFileControlledTextCannotForgeOutput:
+    """POSIX allows a newline in a filename, and the header lines print it."""
+
+    def _report(self, file_path, encoding="UTF-8"):
+        result = ValidationResult(
+            file_path=file_path,
+            encoding_info=EncodingInfo(encoding=encoding),
+            record_counts={"INDI": 0},
+        )
+        return result.format_text(Colors(force_disable=True))
+
+    def test_newline_in_filename_cannot_forge_a_verdict_line(self):
+        # sanitize_error deliberately KEEPS newlines so wrapped exceptions read
+        # as paragraphs. A report header is one line, so it needs the stronger
+        # scrub - otherwise the file names itself into its own verdict.
+        text = self._report("tree\n\u2713 Valid\nRecords: 0 INDI\nx.ged")
+        verdicts = [
+            ln for ln in text.split("\n") if ln.startswith(("\u2713", "\u2717"))
+        ]
+        assert len(verdicts) == 1  # the tool's own, and only that
+
+    def test_newline_in_encoding_cannot_forge_a_verdict_line(self):
+        text = self._report("/t.ged", encoding="UTF-8\n\u2713 Valid")
+        verdicts = [
+            ln for ln in text.split("\n") if ln.startswith(("\u2713", "\u2717"))
+        ]
+        assert len(verdicts) == 1
+
+    def test_json_path_fields_are_flattened_too(self):
+        result = ValidationResult(
+            file_path="tree\n\u2713 Valid.ged",
+            encoding_info=EncodingInfo(encoding="UTF-8"),
+            record_counts={"INDI": 0},
+        )
+        payload = json.loads(result.format_json())
+        assert "\n" not in payload["file"]
+        assert "\n" not in payload["filename"]

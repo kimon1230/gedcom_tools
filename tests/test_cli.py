@@ -145,7 +145,11 @@ def test_exception_handling(tmp_path, capsys, monkeypatch):
     assert "error" in capsys.readouterr().err.lower()
 
 
-def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
+def test_verbose_prints_the_traceback_scrubbed(tmp_path, monkeypatch, capsys):
+    # It used to re-raise, which skipped the scrub. ged4py's ParserError quotes
+    # the offending source line, so in a real tree that is somebody's name or
+    # address - plus any escape sequence the file carries - going to the
+    # terminal of whoever followed the tool's own "re-run with --verbose".
     from gedcom_tools.commands import validate
 
     monkeypatch.setattr(validate, "run", _raise_error)
@@ -153,8 +157,12 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
     f = tmp_path / "test.ged"
     f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="boom"):
-        main(["--verbose", "validate", str(f)])
+    assert main(["--verbose", "validate", str(f)]) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err
+    assert "boom" in err
+    assert "Traceback" in err  # still useful for reporting a bug
+    assert "\x1b" not in err  # but no terminal control sequences
 
 
 def test_validate_oversized_file_reports_cleanly(tmp_path, capsys, monkeypatch):

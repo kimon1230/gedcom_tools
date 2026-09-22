@@ -827,10 +827,112 @@ def test_pre_floor_year_is_validated_but_not_acted_on(text: str, expected: int) 
     [
         ("1 JAN 1900", 1900),
         ("1750/51", 1750),  # dual date, the older year is real
-        ("@#DHEBREW@ 1 TSH 5786", 5786),  # Hebrew years are out of range by design
     ],
 )
 def test_plausible_structured_year_survives(text: str, expected: int) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+
+
+# Was asserted to survive as the literal 5786. It must not: estimate_living
+# subtracts the year from the current one, so a Hebrew or French Republican
+# year has to reach it on the Gregorian scale or it means nothing.
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Verified against convertdate, not against ged4py: its HebrewDate.key()
+        # feeds the GEDCOM month index (TSH=1) into convertdate's Nisan-based
+        # numbering and lands ~6 months out. Each of these was pinned a year
+        # wrong while that was the conversion.
+        ("@#DHEBREW@ 1 TSH 5786", 2025),
+        ("@#DHEBREW@ 1 TSH 5700", 1939),
+        ("@#DHEBREW@ 1 TSH 5600", 1839),
+        # Tishrei-Tevet landed a year HIGH, which over-redacts and is merely
+        # wrong. Nisan-Elul landed a year LOW, which publishes a living person
+        # - so this row is the one that matters.
+        ("@#DHEBREW@ 1 NSN 5676", 1916),
+        ("@#DFRENCH R@ 1 VEND 230", 2021),  # the French Republic ended in year XIV
+        ("@#DFRENCH R@ 1 VEND 8", 1799),
+    ],
+)
+def test_non_gregorian_year_is_converted_for_decisions(
+    text: str, expected: int
+) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+    assert extract_year_latest_for_liveness(DateValue.parse(text)) == expected
+
+
+def test_adar_sheni_in_a_common_year_does_not_convert() -> None:
+    # ADS names a 13th month. A common year has 12, and convertdate's to_jd
+    # would silently return 1 Nisan rather than refusing.
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 ADS 5785")) is None
+    # ...but a leap year really does have one.
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 ADS 5784")) == 2024
+
+
+def test_day_beyond_the_month_does_not_convert() -> None:
+    # Elul has 29 days; to_gregorian would roll a 30th into the next year.
+    assert (
+        extract_year_for_validation(DateValue.parse("@#DHEBREW@ 30 ELL 5785")) is None
+    )
+
+
+def test_mixed_calendar_range_keeps_its_gregorian_bound() -> None:
+    # Dropping the Gregorian half made this read as 1840 - an age of ~186 -
+    # and published a living person.
+    date_val = DateValue.parse("BET @#DHEBREW@ 1 TSH 5600 AND 2010")
+    assert extract_year_latest_for_liveness(date_val) == 2010
+
+
+def test_unreadable_half_poisons_the_whole_range() -> None:
+    # Skipping the bad half instead would leave the good one standing alone,
+    # so "BET <unreadable> AND 2010" would read as a firm 2010 - a bound the
+    # file never actually gave. Unknown has to stay unknown.
+    for text in (
+        "BET @#DHEBREW@ 30 ELL 5785 AND 2010",  # day 30 of a 29-day month
+        "BET @#DHEBREW@ 1 ADS 5785 AND 2010",  # 13th month of a 12-month year
+    ):
+        date_val = DateValue.parse(text)
+        assert extract_year_latest_for_liveness(date_val) is None
+        assert extract_year_for_validation(date_val) is None
+
+    # ...while a range whose halves both read is unaffected.
+    clean = DateValue.parse("BET 1850 AND 2010")
+    assert extract_year_latest_for_liveness(clean) == 2010
+    assert extract_year_for_validation(clean) == 1850
+
+
+def test_absurd_year_does_not_abort_the_run() -> None:
+    # convertdate raises ValueError for a French year past its range and
+    # OverflowError for a huge one; neither may escape.
+    huge = "@#DFRENCH R@ 1 VEND " + "9" * 400
+    assert extract_year_for_validation(DateValue.parse(huge)) is None
+    assert (
+        extract_year_for_validation(DateValue.parse("@#DFRENCH R@ 1 VEND 3000")) is None
+    )
+
+
+def test_bc_year_is_not_read_as_ad() -> None:
+    # ged4py gives year=100, bc=True. Without the negation the chronology
+    # checks see AD 100 and invent a reversed lifespan.
+    assert extract_year_for_validation(DateValue.parse("100 B.C.")) is None
+
+
+def test_non_gregorian_year_is_still_reported_as_written() -> None:
+    # Only the decision path converts; export and stats show the file's value
+    assert extract_year_from_date(DateValue.parse("@#DHEBREW@ 1 TSH 5786")) == 5786
+
+
+def test_year_outside_the_convertible_range_is_not_trusted() -> None:
+    # Hebrew year 100 predates the proleptic Gregorian epoch
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 TSH 100")) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("1 JAN 1900", 1900), ("@#DJULIAN@ 1 JAN 1700", 1700)],
+)
+def test_bounded_calendars_are_unchanged(text: str, expected: int) -> None:
+    # The conversion must not touch the two calendars that never needed it
     assert extract_year_for_validation(DateValue.parse(text)) == expected
 
 

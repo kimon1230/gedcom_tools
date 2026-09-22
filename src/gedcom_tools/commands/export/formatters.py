@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -56,12 +57,35 @@ _FAM_CSV_COLUMNS = [
 # than as text. Excel's DDE syntax (=cmd|' /C calc'!A0) turns an exported name
 # into code execution on whoever opens the file, so every cell carrying raw
 # GEDCOM text is prefixed with an apostrophe to force literal interpretation.
+# Xref columns are deliberately NOT routed through _csv_safe: ged4py's grammar
+# is @[A-Za-z0-9][^@]*@, so an xref can only ever lead with "@", which is not a
+# formula start in any current spreadsheet - and prefixing every ID cell would
+# break loading the export into another tool.
 _CSV_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _csv_safe(value: str) -> str:
-    """Neutralise a cell that a spreadsheet would otherwise read as a formula."""
-    return "'" + value if value and value[0] in _CSV_TRIGGERS else value
+    """Neutralise a cell that a spreadsheet would otherwise read as a formula.
+
+    Testing value[0] alone was not enough. A spreadsheet trims leading
+    whitespace on an unquoted field, so " =cmd|..." imports as a live formula,
+    and an invisible character hides the trigger just as well.
+
+    So: skip anything that could HIDE a trigger - whitespace, control and
+    format characters - and test whatever it is hiding. A trigger is never
+    skipped, because tab and CR are both control characters and triggers in
+    their own right.
+
+    The value is returned UNCHANGED apart from the prefix. A leading
+    apostrophe already makes the whole cell text, so there is no reason to
+    edit someone's name or place on the way through.
+    """
+    for char in value:
+        if char in _CSV_TRIGGERS:
+            return "'" + value
+        if not (char.isspace() or unicodedata.category(char) in ("Cc", "Cf")):
+            return value
+    return value
 
 
 def _redact_individual_csv(indi: ExportIndividual) -> list[str]:
@@ -115,6 +139,11 @@ def _spouse_is_living(fam: ExportFamily, living_xrefs: set[str]) -> bool:
     One is enough. A wedding date and a named venue identify the couple that
     married there, so leaving them beside two "Living" placeholders -- plus any
     unredacted child's famc_xref and surname -- hands back the redacted parents.
+
+    A redacted CHILD does NOT trigger this. Nothing links them to the family
+    once their row's famc_xref is blank and their xref is gone from
+    children_xrefs, so blanking the wedding would destroy a deceased couple's
+    marriage record without withholding anything.
     """
     return fam.husband_xref in living_xrefs or fam.wife_xref in living_xrefs
 
@@ -138,6 +167,12 @@ def _family_csv_row(
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        # children_xrefs lists who can be SHOWN; child_count stays the real
+        # total, because how many children a couple had is a fact about the
+        # family and not a way to name one of them. Dropping the withheld
+        # entries rather than blanking them in place is what removes the
+        # birth-order position.
+        children_xrefs = [x for x in children_xrefs if x]
         if _spouse_is_living(fam, living_xrefs):
             marriage_date = ""
             marriage_year = None
@@ -264,7 +299,7 @@ def _family_to_dict(
         if fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
-        children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
+        children_xrefs = [x for x in children_xrefs if x not in living_xrefs]
         if _spouse_is_living(fam, living_xrefs):
             marriage_date = ""
             marriage_year = None

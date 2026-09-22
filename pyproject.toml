@@ -15,6 +15,12 @@ dependencies = [
     # too, but relying on that transitive edge breaks `convert` at import time
     # the day ged4py drops it.
     "ansel>=1.0,<2",
+    # Imported directly by dates.py for Hebrew and French Republican dates.
+    # ged4py depends on it too, but its own HebrewDate.key() feeds the GEDCOM
+    # month index into convertdate's Nisan-based numbering and lands ~6 months
+    # out, so we call convertdate ourselves. Same reasoning as ansel above:
+    # relying on the transitive edge breaks the day ged4py drops it.
+    "convertdate>=2.4,<3",
     "fast-langdetect>=1.0.0,<2.0.0",
     "rapidfuzz>=3.0.0",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.

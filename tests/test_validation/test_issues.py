@@ -1,5 +1,6 @@
 from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import (
+    MAX_ISSUE_TEXT,
     ErrorCode,
     FamilyInfo,
     IndividualInfo,
@@ -166,3 +167,30 @@ class TestUsageInfo:
         info = UsageInfo(line=15, context="1 SOUR @S1@")
         assert info.line == 15
         assert info.context == "1 SOUR @S1@"
+
+
+class TestIssueTextIsBounded:
+    """ged4py quotes the offending source line into its exception text, and
+    that reaches stdout with no --verbose."""
+
+    def _issue(self, message):
+        return ValidationIssue(
+            code=ErrorCode.E003_INVALID_LEVEL,
+            message=message,
+        )
+
+    def test_long_message_is_truncated(self):
+        # A GEDCOM line may be 255 bytes before any CONC continuation, and a
+        # quoted one arrives whole.
+        issue = self._issue("x" * 5000)
+        assert len(issue.message) <= MAX_ISSUE_TEXT + 3
+        assert issue.message.endswith("...")
+
+    def test_short_message_is_untouched(self):
+        assert self._issue("Invalid level").message == "Invalid level"
+
+    def test_truncation_happens_after_scrubbing(self):
+        # Scrub first, or the budget is spent on bytes that are stripped
+        # anyway and the visible text is cut far shorter than intended.
+        padded = "\x1b[31m" * 200 + "the real message"
+        assert "the real message" in self._issue(padded).message

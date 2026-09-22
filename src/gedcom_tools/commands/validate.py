@@ -94,10 +94,8 @@ def run(args: Namespace) -> int:
 
         print(f"Error: {sanitize_error(str(e))}", file=sys.stderr)
         return EXIT_ERROR
-    except Exception as e:
-        if verbose:
-            raise
+    except Exception as e:  # noqa: BLE001 - CLI boundary, see report_error
         from gedcom_tools.utils import report_error
 
-        report_error(e)
+        report_error(e, verbose=verbose)
         return EXIT_ERROR

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
+from gedcom_tools.progress import Colors
 from gedcom_tools.validation import validate_file
 from gedcom_tools.validation.engine import (
     MAX_ISSUES_PER_CODE,
@@ -1207,3 +1208,664 @@ class TestPhraseDatesDoNotFabricateWarnings:
             ],
         )
         assert "W023" in codes
+
+
+class TestOpenEndedDateBounds:
+    """A date can bound one side only. "AFT 1910" says nothing about an upper
+    limit, and reading the stated year as one invents a fact the file never
+    gave - a false chronology error, or a published living person."""
+
+    def _codes(self, tmp_path, birth, death):
+        body = ["0 @I1@ INDI", "1 NAME A /B/"]
+        body += ["1 BIRT", f"2 DATE {birth}"]
+        body += ["1 DEAT", f"2 DATE {death}"]
+        ged = _write_ged(tmp_path / "bounds.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_open_birth_lower_bound_is_not_read_as_upper(self, tmp_path):
+        # "born before 1950" is consistent with dying in 1900 - it includes
+        # 1890. Reading 1950 as the birth invents a reversal.
+        assert "E011" not in self._codes(tmp_path, "BEF 1950", "1 JAN 1900")
+
+    def test_open_death_lower_bound_is_not_read_as_upper(self, tmp_path):
+        # The mirror: "died after 1850" includes 1990.
+        assert "E011" not in self._codes(tmp_path, "1 JAN 1900", "AFT 1850")
+
+    def test_a_definite_reversal_still_fires(self, tmp_path):
+        assert "E011" in self._codes(tmp_path, "1 JAN 1950", "1 JAN 1900")
+
+    def test_an_open_bound_does_not_excuse_a_definite_reversal(self, tmp_path):
+        # Born AFTER 1990 and dead in 1900 is contradictory whichever year the
+        # open side means - so an open bound must not become a free pass.
+        assert "E011" in self._codes(tmp_path, "AFT 1990", "1 JAN 1900")
+
+    def test_pre_1000_chronology_is_still_checked(self, tmp_path):
+        # Guards the floor split shipped with issue #20.
+        assert "E011" in self._codes(tmp_path, "1 JAN 0950", "1 JAN 0900")
+
+    def test_birth_range_does_not_fake_an_overlong_life(self, tmp_path):
+        # Born somewhere in 1800-1900 and dead in 1950: the age could be 50.
+        # Reading the EARLIEST birth gives 150 and warns about a lifespan the
+        # file never claimed, so W023 needs the latest birth against the
+        # earliest death - the mirror of E011's pairing.
+        assert "W023" not in self._codes(tmp_path, "BET 1800 AND 1900", "1 JAN 1950")
+
+    def test_death_range_does_not_fake_an_overlong_life(self, tmp_path):
+        # The mirror: died somewhere in 1900-1990, born 1850. Earliest death
+        # gives 50; only the latest would give 140.
+        assert "W023" not in self._codes(tmp_path, "1 JAN 1850", "BET 1900 AND 1990")
+
+    def test_definite_overlong_life_still_warns(self, tmp_path):
+        assert "W023" in self._codes(tmp_path, "1 JAN 1800", "1 JAN 1950")
+
+
+class TestSiblingSpacingNeedsExactYears:
+    """A known month does not make a date exact."""
+
+    def _codes(self, tmp_path, first, second):
+        body = [
+            "0 @C1@ INDI",
+            "1 NAME A /X/",
+            "1 BIRT",
+            f"2 DATE {first}",
+            "1 FAMC @F1@",
+        ]
+        body += [
+            "0 @C2@ INDI",
+            "1 NAME B /X/",
+            "1 BIRT",
+            f"2 DATE {second}",
+            "1 FAMC @F1@",
+        ]
+        body += ["0 @F1@ FAM", "1 CHIL @C1@", "1 CHIL @C2@"]
+        ged = _write_ged(tmp_path / "sib.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_exact_dates_five_months_apart_warn(self, tmp_path):
+        assert "W026" in self._codes(tmp_path, "3 MAR 1980", "3 AUG 1980")
+
+    def test_month_without_an_exact_year_does_not_warn(self, tmp_path):
+        # "3 JAN 1801-1875" reads as FULL precision with month 1 - ged4py
+        # cannot parse it, so the month is recovered from the text while the
+        # year stays a 74-year range. Spacing measured on the month alone is
+        # meaningless, so the child is skipped rather than guessed at.
+        assert "W026" not in self._codes(tmp_path, "3 JAN 1801-1875", "3 MAR 1801-1875")
+
+
+class TestFamilyChronologyUsesBothBounds:
+    """Born-before-parent, marriage-before-birth and child-before-marriage all
+    compare two dates, so each needs the bound pair that makes the verdict
+    certain rather than merely possible."""
+
+    def _codes(self, tmp_path, body):
+        ged = _write_ged(tmp_path / "fam.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def _parent_child(self, parent_birth, child_birth):
+        return [
+            "0 @P1@ INDI",
+            "1 NAME Par /X/",
+            "1 BIRT",
+            f"2 DATE {parent_birth}",
+            "1 FAMS @F1@",
+            "0 @C1@ INDI",
+            "1 NAME Chi /X/",
+            "1 BIRT",
+            f"2 DATE {child_birth}",
+            "1 FAMC @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @P1@",
+            "1 CHIL @C1@",
+        ]
+
+    def _marriage(self, spouse_birth, marriage):
+        return [
+            "0 @H1@ INDI",
+            "1 NAME H /X/",
+            "1 BIRT",
+            f"2 DATE {spouse_birth}",
+            "1 FAMS @F1@",
+            "0 @W1@ INDI",
+            "1 NAME W /X/",
+            "1 FAMS @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @H1@",
+            "1 WIFE @W1@",
+            "1 MARR",
+            f"2 DATE {marriage}",
+        ]
+
+    def test_definitely_born_before_parent(self, tmp_path):
+        codes = self._codes(tmp_path, self._parent_child("1 JAN 1950", "1 JAN 1900"))
+        assert "E012" in codes
+
+    def test_open_child_birth_is_not_born_before_parent(self, tmp_path):
+        # "born after 1900" includes 1990, which is after the parent.
+        codes = self._codes(tmp_path, self._parent_child("1 JAN 1950", "AFT 1900"))
+        assert "E012" not in codes
+
+    def _child_marriage(self, child_birth, marriage):
+        return [
+            "0 @H1@ INDI",
+            "1 NAME H /X/",
+            "1 FAMS @F1@",
+            "0 @C1@ INDI",
+            "1 NAME Chi /X/",
+            "1 BIRT",
+            f"2 DATE {child_birth}",
+            "1 FAMC @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @H1@",
+            "1 CHIL @C1@",
+            "1 MARR",
+            f"2 DATE {marriage}",
+        ]
+
+    def test_definitely_born_before_the_marriage(self, tmp_path):
+        codes = self._codes(tmp_path, self._child_marriage("1 JAN 1900", "1 JAN 1950"))
+        assert "W025" in codes
+
+    def test_open_child_birth_is_not_born_before_the_marriage(self, tmp_path):
+        # "born after 1900" includes 1990, which is after the marriage.
+        codes = self._codes(tmp_path, self._child_marriage("AFT 1900", "1 JAN 1950"))
+        assert "W025" not in codes
+
+    def test_child_birth_range_spanning_the_marriage_does_not_warn(self, tmp_path):
+        codes = self._codes(
+            tmp_path, self._child_marriage("BET 1900 AND 1990", "1 JAN 1950")
+        )
+        assert "W025" not in codes
+
+    def test_definitely_married_before_birth(self, tmp_path):
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "1 JAN 1880"))
+        assert "W024" in codes
+
+    def test_open_marriage_is_not_married_before_birth(self, tmp_path):
+        # "married after 1880" includes 1990.
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "AFT 1880"))
+        assert "W024" not in codes
+
+    def test_bounded_marriage_before_birth_still_fires(self, tmp_path):
+        # "married before 1880" has a real upper bound, and it is still before
+        # the 1900 birth - so this one IS definite.
+        codes = self._codes(tmp_path, self._marriage("1 JAN 1900", "BEF 1880"))
+        assert "W024" in codes
+
+
+class TestParentAgeUsesBothBounds:
+    """W020 (too young) and W021/W022 (too old) sit in one if/elif but need
+    OPPOSITE bound pairs, so a single age cannot serve both."""
+
+    def _codes(self, tmp_path, parent_birth, child_birth):
+        body = ["0 @P1@ INDI", "1 NAME Par /X/"]
+        body += ["1 BIRT", f"2 DATE {parent_birth}", "1 FAMS @F1@"]
+        body += ["0 @C1@ INDI", "1 NAME Chi /X/"]
+        body += ["1 BIRT", f"2 DATE {child_birth}", "1 FAMC @F1@"]
+        body += ["0 @F1@ FAM", "1 HUSB @P1@", "1 CHIL @C1@"]
+        ged = _write_ged(tmp_path / "parent.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        return [i.code.value for i in result.errors + result.warnings]
+
+    def test_definitely_too_young_warns(self, tmp_path):
+        assert "W020" in self._codes(tmp_path, "1 JAN 1900", "1 JAN 1908")
+
+    def test_definitely_too_old_warns(self, tmp_path):
+        assert "W022" in self._codes(tmp_path, "1 JAN 1900", "1 JAN 1985")
+
+    def test_child_range_spanning_the_limit_does_not_warn(self, tmp_path):
+        # The gap could be 10 or it could be 90. Reading one bound for both
+        # directions picks whichever happens to trip a threshold.
+        codes = self._codes(tmp_path, "1 JAN 1900", "BET 1910 AND 1990")
+        assert "W020" not in codes
+        assert "W022" not in codes
+
+    def test_parent_range_spanning_the_limit_does_not_warn(self, tmp_path):
+        # Parent born somewhere in 1900-1960: the gap to a 1985 child could be
+        # 25, so "too old" is not a definite verdict.
+        assert "W022" not in self._codes(tmp_path, "BET 1900 AND 1960", "1 JAN 1985")
+
+
+class TestNonStandardDateWarning:
+    """W035: ged4py parses only three month names in full, so most real-world
+    spelled-out dates are free text and their years are recovered heuristically.
+    The user needs to know which dates were guessed at."""
+
+    def _issues(self, tmp_path, body):
+        ged = _write_ged(tmp_path / "w035.ged", body)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+        return [i for i in result.warnings if i.code.value == "W035"]
+
+    def _birth(self, date_value):
+        return ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", f"2 DATE {date_value}"]
+
+    def test_spelled_out_month_suggests_the_abbreviation(self, tmp_path):
+        issues = self._issues(tmp_path, self._birth("30 November 1989"))
+        assert len(issues) == 1
+        assert '"NOV"' in issues[0].message
+
+    def test_ambiguous_slash_date_gets_the_generic_rule(self, tmp_path):
+        # 12 Feb or 2 Dec? No locale signal, so no rewrite is offered
+        issues = self._issues(tmp_path, self._birth("12/2/1882"))
+        assert len(issues) == 1
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_already_abbreviated_month_gets_the_generic_rule(self, tmp_path):
+        # "10 JAN" is missing a year, not mis-spelling a month
+        issues = self._issues(tmp_path, self._birth("10 JAN"))
+        assert len(issues) == 1
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_two_phrases_in_one_value_are_not_exempt(self, tmp_path):
+        # Greedy (.*) would read this as one parenthesised DATE_PHRASE
+        issues = self._issues(tmp_path, self._birth("(1850) and later (see note)"))
+        assert len(issues) == 1
+
+    def test_christening_and_burial_dates_are_checked(self, tmp_path):
+        # search and export recover years from these too, so W035 must cover
+        # them or docs/search.md promises a warning that never appears
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 CHR",
+            "2 DATE 30 November 1989",
+            "1 BURI",
+            "2 DATE 4 October 1950",
+        ]
+        assert len(self._issues(tmp_path, body)) == 2
+
+    def test_unconvertible_phrase_still_warns(self, tmp_path):
+        issues = self._issues(tmp_path, self._birth("Christmas 1901"))
+        assert len(issues) == 1
+
+    def test_parenthesised_phrase_is_conformant(self, tmp_path):
+        # GEDCOM 5.5.1 permits (DATE_PHRASE); ged4py strips the parens, so only
+        # the raw line can tell this apart from a bare phrase
+        assert self._issues(tmp_path, self._birth("(during the war)")) == []
+
+    def test_parenthesised_phrase_with_trailing_space_is_still_exempt(self, tmp_path):
+        # The pattern ends \)\s*$ - any fast path that tests the last byte
+        # for ")" skips this line and emits a false warning on valid GEDCOM.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE (during the war) "]
+        assert self._issues(tmp_path, body) == []
+
+    def test_deep_paren_line_is_still_exempt(self, tmp_path):
+        # The exemption index is an array("Q") searched with bisect, not a set.
+        # TWO parenthesised lines, far apart: a lookup that only ever checks the
+        # first entry is correct for the early one and wrong for the late one,
+        # so a single-paren fixture would not catch it.
+        body = ["0 @P1@ INDI", "1 NAME Early /Paren/", "1 BIRT"]
+        body += ["2 DATE (first paren)"]
+        for i in range(1, 201):
+            body += [
+                f"0 @F{i}@ INDI",
+                f"1 NAME F{i} /X/",
+                "1 BIRT",
+                "2 DATE 1 JAN 1900",
+            ]
+        body += ["0 @P2@ INDI", "1 NAME Late /Paren/", "1 BIRT"]
+        body += ["2 DATE (second paren)"]
+        body += ["0 @I2@ INDI", "1 NAME C /D/", "1 BIRT", "2 DATE 30 November 1989"]
+        issues = self._issues(tmp_path, body)
+        # Both paren lines are exempt; only the bare phrase warns.
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+
+    def test_quick_and_full_report_the_same_w035_set(self, tmp_path):
+        # --quick runs W035 and consults the same exemption index, so skipping
+        # the index in quick mode would emit a false warning on spec-legal input
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE (during the war)"]
+        body += ["0 @I2@ INDI", "1 NAME C /D/", "1 BIRT", "2 DATE 30 November 1989"]
+        ged = _write_ged(tmp_path / "w035_modes.ged", body)
+        codes = {}
+        for mode in ("quick", "full"):
+            result = ValidationEngine(ged, mode=mode, quiet=True).validate()
+            codes[mode] = [i.message for i in result.warnings if i.code.value == "W035"]
+        assert codes["quick"] == codes["full"]
+        assert len(codes["full"]) == 1
+
+    def test_empty_date_line_does_not_warn(self, tmp_path):
+        assert (
+            self._issues(tmp_path, ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE"])
+            == []
+        )
+
+    def test_conformant_date_does_not_warn(self, tmp_path):
+        assert self._issues(tmp_path, self._birth("30 NOV 1989")) == []
+
+    def test_death_and_marriage_dates_are_checked_too(self, tmp_path):
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 DEAT",
+            "2 DATE 4 October 1950",
+            "1 FAMS @F1@",
+            "0 @F1@ FAM",
+            "1 HUSB @I1@",
+            "1 MARR",
+            "2 DATE 3 August 1910",
+        ]
+        assert len(self._issues(tmp_path, body)) == 2
+
+    def test_volume_is_capped_with_a_notice(self, tmp_path):
+        body = []
+        for i in range(1, 26):
+            body += [
+                f"0 @I{i}@ INDI",
+                f"1 NAME P{i} /X/",
+                "1 BIRT",
+                f"2 DATE {i} November 1989",
+            ]
+        ged = _write_ged(tmp_path / "vol.ged", body)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+        issues = [i for i in result.warnings if i.code.value == "W035"]
+
+        # 10 shown plus one stand-in summary, and the dropped count recorded so
+        # total_warnings still reports what the file actually contains
+        assert len(issues) == MAX_ISSUES_PER_CODE + 1
+        assert sum("suppressed" in i.message for i in issues) == 1
+        assert result.suppressed_counts["W035"] == 15
+
+    def test_under_the_cap_records_no_dropped_count(self, tmp_path):
+        # ValidationResult subtracts one per suppressed-code entry for the
+        # summary issue it assumes was emitted. A zero entry therefore makes
+        # total_warnings report one fewer warning than the file contains.
+        ged = _write_ged(tmp_path / "under.ged", self._birth("30 November 1989"))
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        result = engine.validate()
+
+        assert "W035" not in result.suppressed_counts
+        summary = json.loads(result.format_json())["summary"]
+        assert summary["total_warnings"] == summary["warnings"]
+
+    def test_exactly_at_the_cap_records_no_dropped_count(self, tmp_path):
+        # The boundary the guard exists for. At exactly MAX_ISSUES_PER_CODE
+        # nothing was dropped, so writing a zero here would make
+        # total_warnings subtract a summary issue that was never emitted.
+        body = []
+        for i in range(1, MAX_ISSUES_PER_CODE + 1):
+            body += [
+                f"0 @I{i}@ INDI",
+                f"1 NAME P{i} /X/",
+                "1 BIRT",
+                f"2 DATE {i} November 1989",
+            ]
+        ged = _write_ged(tmp_path / "cap.ged", body)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+
+        summary = json.loads(result.format_json())["summary"]
+        assert "W035" not in result.suppressed_counts
+        assert "suppressed" not in summary
+        assert summary["total_warnings"] == summary["warnings"]
+
+    def test_long_value_is_truncated_and_drops_the_month_hint(self, tmp_path):
+        # The month sits past the echo window, so naming its abbreviation
+        # would point at text the user cannot see in the message.
+        value = (
+            "recorded in the parish register of the county office "
+            "in the year of November 1989"
+        )
+        issues = self._issues(tmp_path, self._birth(value))
+
+        assert len(issues) == 1
+        assert "..." in issues[0].message
+        assert "NOV" not in issues[0].message
+        assert "DD MMM YYYY" in issues[0].message
+
+    def test_echo_budget_counts_visible_characters(self, tmp_path):
+        # Scrubbing must precede truncation: otherwise the 60-character
+        # window is spent on escape bytes the user never sees, and the cut
+        # can land mid-sequence.
+        padded = ("\x1b[31m" * 12) + "30 November 1989"
+        issues = self._issues(tmp_path, self._birth(padded))
+
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+        assert "..." not in issues[0].message
+
+    def test_each_fallback_tag_is_checked_individually(self, tmp_path):
+        # Dropping any one path from the tuple must fail this
+        body = [
+            "0 @I1@ INDI",
+            "1 NAME A /B/",
+            "1 CHR",
+            "2 DATE 1 November 1989",
+            "1 BAPM",
+            "2 DATE 2 November 1989",
+            "1 DEAT",
+            "2 DATE 3 November 1989",
+            "1 BURI",
+            "2 DATE 4 November 1989",
+        ]
+        assert len(self._issues(tmp_path, body)) == 4
+
+    # W035 is a UNION of two rules, and the union is the point. The phrase
+    # rule catches what ged4py could not parse; the structural rule catches
+    # what it parsed WRONG. Keying the whole check on the trust gate instead
+    # would swap the two sets rather than widen them.
+    STRUCTURAL_MISPARSES = ["3/1990", "1/1985", "Reg 1823", "Vol 1823"]
+
+    @pytest.mark.parametrize("text", STRUCTURAL_MISPARSES)
+    def test_structural_misparse_now_warns(self, tmp_path, text):
+        issues = self._issues(tmp_path, self._birth(text))
+        assert len(issues) == 1
+
+    def test_structural_misparse_echoes_the_files_own_text(self, tmp_path):
+        # str(date_val) would give ged4py's NORMALISED "3/90", which the user
+        # cannot find by searching their file. The echo comes from the raw line.
+        issues = self._issues(tmp_path, self._birth("3/1990"))
+        assert '"3/1990"' in issues[0].message
+        assert "3/90" not in issues[0].message
+
+    # In GEDCOM form already - the year may be wrong, but the FORM is not,
+    # so "use the DD MMM YYYY form" would be false advice.
+    CONFORMANT_BUT_ODD = [
+        "25 DEC 9999",  # implausible year, correct form
+        "1750/51",  # genuine Julian/Gregorian dual date
+        "1699/00",  # the same, across a century
+        "BEF 1950",
+        "1 JAN 0950",  # pre-1000 but perfectly readable
+        "1 JAN 1900",
+    ]
+
+    @pytest.mark.parametrize("text", CONFORMANT_BUT_ODD)
+    def test_conformant_date_never_warns(self, tmp_path, text):
+        assert self._issues(tmp_path, self._birth(text)) == []
+
+    # Every one of these warned before the structural rule was added and must
+    # still warn after it - the union must not become a swap.
+    PHRASE_BASELINE = [
+        "30 November 1989",
+        "12/2/1882",
+        "Christmas 1901",
+        "10 JAN",
+        "1801-1875",
+        "Census 1900 record",
+        "vol 6789 p. 4",
+    ]
+
+    @pytest.mark.parametrize("text", PHRASE_BASELINE)
+    def test_phrase_baseline_still_warns(self, tmp_path, text):
+        assert len(self._issues(tmp_path, self._birth(text))) == 1
+
+    def test_second_birth_event_is_also_checked(self, tmp_path):
+        # sub_tag returns the FIRST match, so the second BIRT of a merged
+        # record used to be checked by nothing at all.
+        body = ["0 @I1@ INDI", "1 NAME A /B/"]
+        body += ["1 BIRT", "2 DATE 1 JAN 1900"]
+        body += ["1 BIRT", "2 DATE 30 November 1989"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        assert "30 November 1989" in issues[0].message
+
+    def test_second_marriage_event_is_also_checked(self, tmp_path):
+        # MARR lives in _process_fam, so one walk over INDI cannot reach it
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "0 @I2@ INDI", "1 NAME C /D/"]
+        body += ["0 @F1@ FAM", "1 HUSB @I1@", "1 WIFE @I2@"]
+        body += ["1 MARR", "2 DATE 1 JAN 1900"]
+        body += ["1 MARR", "2 DATE 12/2/1882"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        assert "12/2/1882" in issues[0].message
+
+    @pytest.mark.parametrize("tag", ["BIRT", "CHR", "BAPM", "DEAT", "BURI"])
+    def test_each_event_warns_exactly_once(self, tmp_path, tag):
+        # The walk must not run alongside a surviving per-path check. A double
+        # visit halves the reporting budget and inflates total_warnings - and a
+        # cherry-pick conflict has already tried to reintroduce exactly that.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", f"1 {tag}", "2 DATE 30 November 1989"]
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_marriage_warns_exactly_once(self, tmp_path):
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "0 @I2@ INDI", "1 NAME C /D/"]
+        body += ["0 @F1@ FAM", "1 HUSB @I1@", "1 WIFE @I2@"]
+        body += ["1 MARR", "2 DATE 30 November 1989"]
+        assert len(self._issues(tmp_path, body)) == 1
+
+    def test_continuation_prose_is_not_echoed(self, tmp_path):
+        # ged4py joins CONT sub-lines into the DATE value. validate has no
+        # --redact-living and its reports get pasted into bug trackers, so an
+        # address or an ID sitting under a bad date must not ride along.
+        body = ["0 @I1@ INDI", "1 NAME A /B/", "1 BIRT", "2 DATE 30 November 1989"]
+        body += ["3 CONT 12 Privet Drive, Surrey", "3 CONT NHS 4433221100"]
+        issues = self._issues(tmp_path, body)
+        assert len(issues) == 1
+        message = issues[0].message
+        assert "Privet Drive" not in message
+        assert "4433221100" not in message
+        # ...but the date itself is still shown, or the warning is unactionable
+        assert '"30 November 1989"' in message
+        assert '"NOV"' in message
+
+    def test_escape_padding_does_not_cost_the_month_hint(self, tmp_path):
+        # The hint used to be gated on an offset into the RAW text compared
+        # against a window into the SCRUBBED text - two coordinate systems.
+        # Escape bytes shift every position, so a padded value lost its hint.
+        padded = "\x1b[31m\x1b[0m\x1b[1m\x1b[0m\x1b[32m30 November 1989"
+        issues = self._issues(tmp_path, self._birth(padded))
+        assert len(issues) == 1
+        assert '"NOV"' in issues[0].message
+        assert "\x1b" not in issues[0].message
+
+    def test_suppression_line_carries_the_count(self, tmp_path):
+        # It used to read "More non-standard dates were suppressed" with no
+        # number, because it fired at date 11 when the total was still unknown.
+        # Every other capped code prints "N more ...", and CLAUDE.md asks for
+        # one format across the tool.
+        body = []
+        for i in range(1, 16):  # 15 dates, cap is 10
+            body += [f"0 @I{i}@ INDI", f"1 NAME P{i} /X/"]
+            body += ["1 BIRT", f"2 DATE 30 November 198{i % 10}"]
+        issues = self._issues(tmp_path, body)
+        summaries = [i for i in issues if "suppressed" in i.message]
+        assert len(summaries) == 1
+        assert "5 more" in summaries[0].message
+        assert f"(first {MAX_ISSUES_PER_CODE} shown)" in summaries[0].message
+
+    def test_no_suppression_line_under_the_cap(self, tmp_path):
+        body = []
+        for i in range(1, 4):
+            body += [f"0 @I{i}@ INDI", f"1 NAME P{i} /X/"]
+            body += ["1 BIRT", f"2 DATE 30 November 198{i}"]
+        issues = self._issues(tmp_path, body)
+        assert [i for i in issues if "suppressed" in i.message] == []
+
+    def test_royal92_reports_its_four_nonstandard_dates(self):
+        # 6436 and 27126 are bare phrases ("10 JAN", "20 JUL") that ged4py
+        # could not parse at all. 12060 and 12199 are informal ranges -
+        # "1056/1060", "ABT 1103/1105" - that it mis-parses as dual years.
+        # A real dual date spans ONE year boundary, so a gap of 4 or 2 is a
+        # range written the wrong way and belongs in BET x AND y form.
+        royal92 = FIXTURES / "royal92.ged"
+        engine = ValidationEngine(royal92, mode="full", quiet=True)
+        issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
+        assert sorted(i.line for i in issues) == [6436, 12060, 12199, 27126]
+
+    def test_royal92_real_dual_dates_stay_silent(self):
+        # The same file carries genuine dual dates - "1 MAR 1665/6",
+        # "29 SEP 1657/8" - which must NOT warn, or the rule is just
+        # "anything with a slash".
+        royal92 = FIXTURES / "royal92.ged"
+        engine = ValidationEngine(royal92, mode="full", quiet=True)
+        issues = [i for i in engine.validate().warnings if i.code.value == "W035"]
+        echoed = " ".join(i.message for i in issues)
+        assert "1665/6" not in echoed
+        assert "1657/8" not in echoed
+
+
+class TestIssueTextIsScrubbed:
+    """Messages, xrefs and context all carry text straight from the file.
+
+    A crafted GEDCOM can otherwise rewrite the verdict on screen with a
+    carriage return, or reorder a displayed name with a bidi override.
+    """
+
+    def test_escape_in_xref_does_not_reach_output(self, tmp_path):
+        # Reaches ValidationIssue via ReferenceValidator, not via _add_issue
+        ged = _write_ged(
+            tmp_path / "xref.ged",
+            [
+                "0 @I\x1b[31mX\x1b[0m1@ INDI",
+                "1 NAME A /B/",
+                "1 FAMC @NOPE@",
+            ],
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\x1b" not in rendered
+        assert "\x1b" not in json.dumps(json.loads(result.format_json()))
+
+    def test_bidi_override_in_a_parse_error_is_stripped(self, tmp_path):
+        ged = tmp_path / "bidi.ged"
+        ged.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME A /B/\nXX \u202ednuof rorre on\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\u202e" not in rendered
+
+    def test_a_file_cannot_forge_its_own_verdict(self, tmp_path):
+        # ged4py joins CONT sub-lines with "\n" and sanitize_error keeps "\n"
+        # on purpose, so without flattening, a crafted value prints its own
+        # line at column 0 of the report.
+        ged = _write_ged(
+            tmp_path / "spoof.ged",
+            ["0 @I1@ INDI", "1 NAME A /B/", "1 SEX Q", "2 CONT \u2713 Valid"],
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        # Exactly one line may start with the verdict marker: the tool's own
+        # closing line. A second one is the file talking.
+        verdicts = [ln for ln in rendered.splitlines() if ln.startswith("\u2713 Valid")]
+        assert len(verdicts) == 1
+        assert "(with" in verdicts[0]
+        assert all("\n" not in i.message for i in result.warnings)
+
+    def test_declared_charset_cannot_carry_control_bytes(self, tmp_path):
+        # EncodingInfo is not a ValidationIssue, so it never sees that scrub
+        ged = tmp_path / "chr.ged"
+        ged.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\x08\x08\x1b\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n",
+            encoding="utf-8",
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "\x08" not in rendered
+        assert "\x1b" not in rendered
+
+    def test_ordinary_messages_survive_unchanged(self, tmp_path):
+        ged = _write_ged(tmp_path / "plain.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        assert any("family connections" in i.message for i in result.warnings)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from array import array
+from bisect import bisect_left
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal
 
@@ -10,12 +12,22 @@ from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
+    MONTH_PATTERN,
     classify_date_precision,
     extract_month,
     extract_year_for_validation,
+    extract_year_latest_for_validation,
+    has_unreadable_structure,
+    is_phrase_date,
+    phrase_text,
 )
 from gedcom_tools.progress import PhaseTracker
-from gedcom_tools.utils import EncodingInfo, detect_encoding, extract_xref
+from gedcom_tools.utils import (
+    EncodingInfo,
+    detect_encoding,
+    extract_xref,
+    sanitize_error,
+)
 from gedcom_tools.validation.issues import (
     ErrorCode,
     FamilyInfo,
@@ -60,6 +72,22 @@ MAX_NESTING_DEPTH = 99
 # be 500 MB of them.
 MAX_ISSUES_PER_CODE = 10
 
+# "2 DATE (during the war)" - GEDCOM 5.5.1 permits a parenthesised DATE_PHRASE,
+# and it is conformant, so W035 must not fire on it. [^)] not .* : the greedy
+# form spans two phrases, exempting "(1850) and later (see note)", which is
+# not a DATE_PHRASE and whose year really was guessed at.
+_PAREN_DATE_RE = re.compile(rb"^\s*\d+\s+DATE\s+\([^)]*\)\s*$")
+
+# Enough of the offending value to recognise it without pasting a whole note
+_MAX_ECHOED_DATE = 60
+
+
+# W035 walks these tags rather than calling sub_tag once per path: sub_tag
+# returns the FIRST match, so a record carrying two BIRT events - the normal
+# shape when two sources are merged - had its second date checked by nothing.
+_INDI_DATED_EVENT_TAGS = ("BIRT", "CHR", "BAPM", "DEAT", "BURI")
+_FAM_DATED_EVENT_TAGS = ("MARR",)
+
 
 class ValidationEngine:
     """Orchestrates the validation process.
@@ -101,6 +129,12 @@ class ValidationEngine:
         # Keyed by the string, not the ErrorCode member: this reaches
         # json.dumps, which rejects enum keys.
         self._suppressed_counts: dict[str, int] = {}
+        # Line numbers whose DATE value is a spec-legal parenthesised phrase.
+        # ged4py strips the parens before exposing .phrase, so the parsed object
+        # cannot tell "(during the war)" from "30 November 1989" - only the raw
+        # bytes can, and _build_line_map is the one place that has them.
+        self._paren_date_lines: array[int] = array("Q")
+        self._nonstandard_date_count = 0
 
     def validate(self) -> ValidationResult:
         """Run all validation phases and return results.
@@ -176,6 +210,7 @@ class ValidationEngine:
         # "Q" (unsigned long long) keeps the map at 8 bytes per line instead of
         # a full Python int object per line.
         self._line_offsets = array("Q", [0])
+        self._paren_date_lines = array("Q")
         seen: dict[ErrorCode, int] = {}
         with open(self.file_path, "rb") as f:
             offset = 0
@@ -212,6 +247,19 @@ class ValidationEngine:
                             line_num,
                         )
 
+                # No endswith(b")") fast path here: the pattern ends \)\s*$,
+                # so a conformant "(DATE_PHRASE)" with a trailing space would
+                # skip the check and get a false W035. The guard measured 4.6x
+                # on this line but only 0.6% of a validate run - not a trade
+                # worth a false positive on spec-legal input.
+                if _PAREN_DATE_RE.match(line_content):
+                    # array("Q") rather than a set: one boxed int per matching
+                    # line costs ~65 bytes against 8 here, and a file of
+                    # parenthesised dates at the 500 MB cap measured ~3 GB.
+                    # line_num only increases, so the array stays sorted and
+                    # _is_paren_date_line can bisect it.
+                    self._paren_date_lines.append(line_num)
+
                 offset += len(line)
                 self._line_offsets.append(offset)
 
@@ -241,6 +289,44 @@ class ValidationEngine:
         seen[code] = count
         if count <= MAX_ISSUES_PER_CODE:
             self._add_issue(code, message, line=line)
+
+    def _raw_date_value(self, line: int) -> str:
+        """The DATE value exactly as the file writes it.
+
+        A structured mis-parse has no phrase text to echo, and str(date_val) is
+        ged4py's NORMALISED rendering - "3/1990" comes back as "3/90" - which
+        the user cannot find in their own file. Read the source line instead.
+
+        Called at most MAX_ISSUES_PER_CODE times per run, so the re-read is
+        cheaper than holding every DATE line in memory.
+        """
+        if not 1 <= line <= len(self._line_offsets):
+            return ""
+        try:
+            with open(self.file_path, "rb") as f:
+                f.seek(self._line_offsets[line - 1])
+                raw = f.readline()
+        except OSError:
+            return ""
+
+        encoding = "utf-8"
+        if self.encoding_info is not None and self.encoding_info.encoding:
+            encoding = self.encoding_info.encoding
+        text = raw.decode(encoding, errors="replace").rstrip("\r\n")
+
+        # Strip the "N DATE " prefix; keep everything after it verbatim.
+        parts = text.strip().split(None, 2)
+        return parts[2] if len(parts) > 2 else ""
+
+    def _is_paren_date_line(self, line: int) -> bool:
+        """Whether this line is a conformant parenthesised DATE_PHRASE.
+
+        GEDCOM 5.5.1 permits "2 DATE (during the war)" and ged4py strips the
+        parens, so only the byte-level pre-pass can tell it from a bare phrase.
+        """
+        lines = self._paren_date_lines
+        idx = bisect_left(lines, line)
+        return idx < len(lines) and lines[idx] == line
 
     def _offset_to_line(self, offset: int) -> int:
         """Convert byte offset to line number (1-indexed)."""
@@ -390,6 +476,8 @@ class ValidationEngine:
                     else:
                         self._process_generic(record)
 
+                self._emit_nonstandard_date_summary()
+
                 if not has_trlr:
                     self._add_issue(
                         ErrorCode.E006_MISSING_TRLR,
@@ -434,18 +522,23 @@ class ValidationEngine:
         # Extract birth year and month (month only for non-approximate dates)
         birt_date_rec = record.sub_tag("BIRT/DATE")
         birth_year: int | None = None
+        birth_year_latest: int | None = None
         birth_month: int | None = None
+        self._check_all_event_dates(record, _INDI_DATED_EVENT_TAGS)
+
         if birt_date_rec and birt_date_rec.value:
             # Age and chronology checks act on the year, so a year scraped
             # from free text must not reach them: "Reg. 1823 vol II" is an
             # archive reference, and reading it as a birth year invents a
             # 127-year lifespan the file never claimed.
             birth_year = extract_year_for_validation(birt_date_rec.value)
+            birth_year_latest = extract_year_latest_for_validation(birt_date_rec.value)
             precision, _ = classify_date_precision(birt_date_rec.value)
             if precision in ("full", "partial"):
                 birth_month = extract_month(birt_date_rec.value)
 
         death_year = self._extract_year(record, "DEAT/DATE")
+        death_year_latest = self._extract_year_latest(record, "DEAT/DATE")
 
         # Extract sex and family links via single-pass sub_records iteration
         sex_value: str | None = None
@@ -518,8 +611,10 @@ class ValidationEngine:
                 xref=xref,
                 line=line,
                 birth_year=birth_year,
+                birth_year_latest=birth_year_latest,
                 birth_month=birth_month,
                 death_year=death_year,
+                death_year_latest=death_year_latest,
                 sex=sex_value,
                 famc_xrefs=famc_xrefs,
                 fams_xrefs=fams_xrefs,
@@ -538,7 +633,10 @@ class ValidationEngine:
         husb_xref: str | None = None
         wife_xref: str | None = None
         chil_xrefs: list[str] = []
+        self._check_all_event_dates(record, _FAM_DATED_EVENT_TAGS)
+
         marriage_year = self._extract_year(record, "MARR/DATE")
+        marriage_year_latest = self._extract_year_latest(record, "MARR/DATE")
 
         for sub in record.sub_records:
             sub_offset = sub.offset if sub.offset else 0
@@ -595,6 +693,7 @@ class ValidationEngine:
                 wife_xref=wife_xref,
                 chil_xrefs=chil_xrefs,
                 marriage_year=marriage_year,
+                marriage_year_latest=marriage_year_latest,
             )
         )
 
@@ -696,12 +795,142 @@ class ValidationEngine:
             return None
         return extract_xref(value)
 
+    def _check_all_event_dates(self, record: Record, tags: tuple[str, ...]) -> None:
+        """Run W035 over every DATE under every matching event.
+
+        One walk of sub_records rather than a sub_tag per path: sub_tag stops
+        at the first match, so the second of two BIRT events was never checked.
+        Each DATE is visited exactly once, which matters because the per-code
+        cap counts emissions - a double visit would halve the reporting budget.
+        """
+        for sub in record.sub_records:
+            if str(sub.tag).upper() not in tags:
+                continue
+            for child in sub.sub_records:
+                if str(child.tag).upper() == "DATE" and child.value is not None:
+                    self._check_nonstandard_date(child)
+
+    def _check_nonstandard_date(self, date_rec: Record) -> None:
+        """Warn when a DATE value is not in GEDCOM form.
+
+        ged4py parses only three of the twelve month names in full, so
+        "30 November 1989" is free text to it and its year is recovered
+        heuristically. The user needs to know which dates were guessed at.
+        """
+        value = date_rec.value
+        if value is None:
+            return
+
+        # Two routes in, and they must stay a union. The phrase route is the
+        # original rule and covers everything ged4py could not parse at all.
+        # The structural route covers what it parsed WRONG - "Reg 1823" as a
+        # month "REG", "3/1990" as the dual year 3 - which looks structured and
+        # is not a date. Keying the whole check on the trust gate instead would
+        # SWAP the two sets rather than widen them: every clean phrase would go
+        # silent. A merely implausible year is excluded on purpose; "25 DEC
+        # 9999" is in GEDCOM form and its problem is the year, not the form.
+        structural = False
+        if is_phrase_date(value):
+            text = phrase_text(value)
+            if not text:
+                return
+        elif has_unreadable_structure(value):
+            structural = True
+            text = ""
+        else:
+            return
+
+        offset = date_rec.offset if date_rec.offset else 0
+        line = self._offset_to_line(offset)
+        if self._is_paren_date_line(line):
+            return
+
+        if structural:
+            text = self._raw_date_value(line)
+            if not text:
+                return
+
+        count = self._nonstandard_date_count
+        self._nonstandard_date_count += 1
+        if count < MAX_ISSUES_PER_CODE:
+            # Echo the DATE line's own value and nothing else. ged4py joins
+            # CONT sub-lines into the value with newlines, so a record whose
+            # date carries continuations would otherwise spill arbitrary prose
+            # - an address, a national ID - into a report that has no
+            # --redact-living and gets pasted into bug trackers. Keeping the
+            # first line rather than dropping the echo entirely leaves the
+            # message actionable. CONC joins without a newline and cannot be
+            # separated this way.
+            shown = text.split("\n", 1)[0]
+
+            # Scrub before truncating so the echo budget counts visible
+            # characters, not stripped escape bytes - and so the cut cannot
+            # land mid-escape. Both are inside the cap branch because the
+            # result is only ever read here.
+            shown = sanitize_error(shown)
+            if len(shown) > _MAX_ECHOED_DATE:
+                shown = shown[:_MAX_ECHOED_DATE] + "..."
+
+            # Search what we are actually showing. Searching the raw text and
+            # then testing that offset against the echoed window compares two
+            # different coordinate systems: escape bytes shift every position,
+            # so a padded value mis-measures exactly the case the scrub-first
+            # ordering above exists to handle. A month found in `shown` is by
+            # construction inside the window.
+            # Only suggest the abbreviation when the month is actually spelled
+            # out - "10 JAN" is already abbreviated and its real problem is the
+            # missing year, not the month form.
+            month = MONTH_PATTERN.search(shown)
+            if month is not None and len(month.group(1)) > 3:
+                hint = f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
+            else:
+                hint = " - use the DD MMM YYYY form"
+            self._add_issue(
+                ErrorCode.W035_NONSTANDARD_DATE,
+                f'Date not in GEDCOM format: "{shown}"{hint}',
+                line=line,
+            )
+        # No summary here. It needs the TOTAL, and at date 11 the rest of the
+        # file has not been read - which is why this code used to print
+        # "More ... were suppressed" while every other capped code printed
+        # "1,234 more ...". _emit_nonstandard_date_summary closes that.
+
+    def _emit_nonstandard_date_summary(self) -> None:
+        """One summary line for W035, worded like every other capped code.
+
+        Emitted after the record walk rather than mid-stream, so the count is
+        known. Mirrors the per-line codes, which do the same after their loop.
+        """
+        suppressed = self._nonstandard_date_count - MAX_ISSUES_PER_CODE
+        if suppressed <= 0:
+            return
+        # ValidationResult subtracts one per entry, for the synthetic summary
+        # issue each truncated code leaves behind - so writing a zero here
+        # makes total_warnings report one FEWER than the file contains.
+        self._suppressed_counts[ErrorCode.W035_NONSTANDARD_DATE.value] = suppressed
+        self._add_issue(
+            ErrorCode.W035_NONSTANDARD_DATE,
+            f"{suppressed:,} more dates with this issue were "
+            f"suppressed (first {MAX_ISSUES_PER_CODE} shown)",
+        )
+
     def _extract_year(self, record: Record, path: str) -> int | None:
-        """Extract year from a date at the given path."""
+        """Earliest year a date at this path can mean."""
         date_rec = record.sub_tag(path)
         if date_rec is None or date_rec.value is None:
             return None
         return extract_year_for_validation(date_rec.value)
+
+    def _extract_year_latest(self, record: Record, path: str) -> int | None:
+        """Latest year a date at this path can mean.
+
+        An open-ended date bounds one side only, so the checks that need a
+        DEFINITE contradiction have to read the side that actually exists.
+        """
+        date_rec = record.sub_tag(path)
+        if date_rec is None or date_rec.value is None:
+            return None
+        return extract_year_latest_for_validation(date_rec.value)
 
     def _validate_version_compliance(self, header: Record) -> None:
         # --strict mode: enforce version-specific requirements
@@ -785,7 +1014,11 @@ class ValidationEngine:
         xref: str | None = None,
         context: str | None = None,
     ) -> None:
-        """Add a validation issue."""
+        """Add a validation issue.
+
+        Text scrubbing happens in ValidationIssue itself, since the reference
+        and semantic validators build issues without passing through here.
+        """
         self.issues.append(
             ValidationIssue(
                 code=code,

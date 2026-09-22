@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from gedcom_tools.progress import glyphs
-from gedcom_tools.utils import EncodingInfo
+from gedcom_tools.utils import EncodingInfo, scrub_line
 from gedcom_tools.validation.issues import Severity, ValidationIssue
 
 if TYPE_CHECKING:
@@ -23,9 +23,11 @@ class ValidationResult:
     encoding_info: EncodingInfo | None = None
     record_counts: dict[str, int] = field(default_factory=dict)
     # {code: issues dropped}, for codes the per-code reporting cap truncated.
-    # Only the per-line formatting codes (W002/W003/W032) are tallied here;
-    # the custom-tag cap is not, so a file with more than ten distinct custom
-    # tags has a total_warnings low by the dropped-tag count.
+    # The per-line formatting codes (W002/W003/W032) and W035 are tallied
+    # here; the custom-tag cap is not, so a file with more than ten distinct
+    # custom tags has a total_warnings low by the dropped-tag count.
+    # Any code that writes an entry MUST also emit exactly one synthetic
+    # summary issue: total_warnings subtracts one per entry to cancel it.
     suppressed_counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -63,9 +65,13 @@ class ValidationResult:
         lines: list[str] = []
 
         # Header with file info
-        lines.append(f"File: {self.file_path}")
+        # Neither the path nor the declared charset is a ValidationIssue, so
+        # neither passes through its scrub - and both are file-controlled: the
+        # filename ships with a traded .ged, and "1 CHAR" is decoded with
+        # errors="replace", which preserves every C0 byte.
+        lines.append(f"File: {scrub_line(self.file_path)}")
         if self.encoding_info:
-            lines.append(f"Encoding: {self.encoding_info}")
+            lines.append(f"Encoding: {scrub_line(str(self.encoding_info))}")
 
         # Record counts summary
         if self.record_counts:
@@ -151,9 +157,13 @@ class ValidationResult:
         encoding_data: dict[str, object] | None = None
         if self.encoding_info:
             encoding_data = {
-                "detected": self.encoding_info.encoding,
+                "detected": scrub_line(self.encoding_info.encoding),
                 "has_bom": self.encoding_info.has_bom,
-                "declared": self.encoding_info.declared_charset,
+                "declared": (
+                    scrub_line(self.encoding_info.declared_charset)
+                    if self.encoding_info.declared_charset
+                    else self.encoding_info.declared_charset
+                ),
             }
 
         issues_list: list[dict[str, object]] = []
@@ -192,8 +202,8 @@ class ValidationResult:
             summary["suppressed"] = dict(self.suppressed_counts)
 
         data: dict[str, object] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "valid": self.success,
             "encoding": encoding_data,
             "record_counts": self.record_counts,

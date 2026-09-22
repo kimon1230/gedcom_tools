@@ -5,6 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from gedcom_tools.utils import scrub_line
+
+# ged4py's ParserError quotes the entire offending source line, and a GEDCOM
+# line may be 255 bytes before any CONC continuation. That reaches stdout with
+# no --verbose, so bound it here - the one place every producer passes through.
+MAX_ISSUE_TEXT = 300
+
+
+def _bounded(text: str) -> str:
+    """Scrub to a single line, then cap the length."""
+    scrubbed = scrub_line(text)
+    if len(scrubbed) > MAX_ISSUE_TEXT:
+        return scrubbed[:MAX_ISSUE_TEXT] + "..."
+    return scrubbed
+
 
 class Severity(Enum):
     """Severity level of a validation issue."""
@@ -74,6 +89,7 @@ class ErrorCode(Enum):
     W032_LINE_TOO_LONG_STRICT = "W032"
     W033_OBJE_MISSING_FILE = "W033"
     W034_FILE_MISSING_FORM = "W034"
+    W035_NONSTANDARD_DATE = "W035"
 
     @property
     def severity(self) -> Severity:
@@ -128,11 +144,12 @@ class ErrorCode(Enum):
             "W032": "Line exceeds 255 byte limit (strict)",
             "W033": "OBJE record has no FILE subtag",
             "W034": "FILE subtag has no FORM",
+            "W035": "Date not in GEDCOM format",
         }
         return descriptions.get(self.value, "Unknown issue")
 
 
-@dataclass
+@dataclass(frozen=True)
 class ValidationIssue:
     """A single validation issue found in a GEDCOM file."""
 
@@ -141,6 +158,21 @@ class ValidationIssue:
     line: int | None = None
     xref: str | None = None
     context: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every field here can carry text straight from the file: messages
+        # embed ged4py exceptions that quote the offending line, and an xref
+        # is only bounded by ged4py's @[A-Za-z0-9][^@]*@, which admits escape
+        # sequences and bidi overrides. Scrubbing here rather than at the
+        # producers covers all three - the engine, ReferenceValidator and
+        # SemanticValidator - which build issues independently.
+        # frozen, so assign through object.__setattr__ - the scrub is an
+        # invariant of the type, not a filter a later producer can skip.
+        object.__setattr__(self, "message", _bounded(self.message))
+        if self.xref is not None:
+            object.__setattr__(self, "xref", _bounded(self.xref))
+        if self.context is not None:
+            object.__setattr__(self, "context", _bounded(self.context))
 
     @property
     def severity(self) -> Severity:
@@ -164,9 +196,15 @@ class IndividualInfo:
 
     xref: str
     line: int
-    birth_year: int | None = None
+    # Both bounds, because different checks need opposite ones for a DEFINITE
+    # verdict. "BIRT AFT 1910" states a lower bound and no upper one, so
+    # reading one year for both invents a limit the file never gave.
+    # E011 wants birth-earliest vs death-latest; W023 wants the mirror.
+    birth_year: int | None = None  # earliest the birth can be
+    birth_year_latest: int | None = None
     birth_month: int | None = None
-    death_year: int | None = None
+    death_year: int | None = None  # earliest the death can be
+    death_year_latest: int | None = None
     sex: str | None = None
     famc_xrefs: list[str] = field(default_factory=list)
     fams_xrefs: list[str] = field(default_factory=list)
@@ -181,7 +219,8 @@ class FamilyInfo:
     husb_xref: str | None = None
     wife_xref: str | None = None
     chil_xrefs: list[str] = field(default_factory=list)
-    marriage_year: int | None = None
+    marriage_year: int | None = None  # earliest the marriage can be
+    marriage_year_latest: int | None = None
 
 
 @dataclass

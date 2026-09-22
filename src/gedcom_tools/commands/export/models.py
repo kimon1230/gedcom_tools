@@ -66,7 +66,8 @@ class ExportResult:
 # Living: Legacy Family Tree / Family Tree Maker (_LVG, _LVNG),
 #         RootsMagic (_LIVING), PAF (_CONF_FLAG).
 # Not living: Brother's Keeper (_NLIV).
-_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG"})
+# RESN is GEDCOM 5.5.1's own restriction notice; the rest are vendor tags.
+_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG", "RESN"})
 _NOT_LIVING_TAGS = frozenset({"_NLIV"})
 
 
@@ -100,6 +101,10 @@ def estimate_living(
     current_year = current_year or datetime.date.today().year
 
     has_death_evidence = death_year is not None or burial_year is not None
+
+    # Case-folded here as well as at the producer, so the tag sets hold for any
+    # caller rather than only for _detect_living_marker's output.
+    living_marker = living_marker.upper()
 
     if living_marker in _LIVING_TAGS:
         return True

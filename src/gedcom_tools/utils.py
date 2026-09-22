@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import sys
+import traceback
 import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
@@ -206,15 +207,37 @@ def sanitize_error(msg: str) -> str:
     return "".join(c for c in result if c not in _BIDI_CHARS)
 
 
-def report_error(e: Exception) -> None:
+def scrub_line(text: str) -> str:
+    """Strip control sequences AND flatten line breaks, for single-line output.
+
+    sanitize_error deliberately keeps "\n" so a wrapped exception still reads
+    as paragraphs. Anything printed as ONE line of a report needs the stronger
+    form: ged4py joins CONT sub-lines with "\n", and POSIX allows a newline in
+    a filename, so either can otherwise print a forged verdict at column 0 of
+    the tool's own output.
+    """
+    return sanitize_error(text).replace("\r", " ").replace("\n", " ")
+
+
+def report_error(e: Exception, verbose: bool = False) -> None:
     """Print an unexpected exception to stderr in the one house format.
 
     Every generic ``except Exception`` handler routes through here so the same
     failure reads the same way whichever command hit it. The type name matters:
     a bare ``Error: 'foo'`` from a KeyError tells the user nothing.
+
+    Under --verbose the traceback is printed here rather than by re-raising.
+    Re-raising bypassed the scrub, and ged4py's ParserError quotes the whole
+    offending line - which in a real tree is somebody's name, address or note,
+    plus any escape sequence the file carries. The traceback keeps its
+    newlines, because a traceback that is not on separate lines is useless.
     """
     print(f"Error: {type(e).__name__}: {sanitize_error(str(e))}", file=sys.stderr)
-    print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+    if verbose:
+        trace = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(sanitize_error(trace), file=sys.stderr, end="")
+    else:
+        print("Re-run with --verbose for a full traceback.", file=sys.stderr)
 
 
 def check_output_safety(

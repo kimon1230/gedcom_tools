@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_json
 from gedcom_tools.commands.export.models import estimate_living
@@ -60,6 +62,13 @@ class TestEstimateLiving:
     def test_living_tag_lvg(self) -> None:
         assert (
             estimate_living(None, None, None, current_year=2026, living_marker="_LVG")
+            is True
+        )
+
+    def test_living_tag_is_case_insensitive(self) -> None:
+        # Guards the fold in estimate_living itself, not the collector's
+        assert (
+            estimate_living(1900, None, None, current_year=2026, living_marker="_lvg")
             is True
         )
 
@@ -396,9 +405,14 @@ class TestCollectorDates:
         assert ind.birth_year == 1795
         assert ind.liveness_birth_year == 1799
 
-    def test_birth_range_beats_christening_for_both_bounds(
+    def test_birth_range_beats_christening_for_the_reported_year(
         self, tmp_path: Path
     ) -> None:
+        # The REPORTED birth_year still takes BIRT and stops. The liveness
+        # bound no longer does: it was 1860 here, because the loop broke at
+        # BIRT, and is now 1861 - the latest of the three, which can only
+        # redact more. A christening cannot precede a birth, so a later CHR
+        # means the ancient BIRT beside it is wrong.
         ged = _write_ged(
             tmp_path,
             "0 @I1@ INDI\n1 NAME A /B/\n"
@@ -407,7 +421,7 @@ class TestCollectorDates:
         )
         ind = collect_export_data(ged).individuals[0]
         assert ind.birth_year == 1850
-        assert ind.liveness_birth_year == 1860
+        assert ind.liveness_birth_year == 1861
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +672,73 @@ class TestRedactLivingPhraseDates:
         ged = "0 @I1@ INDI\n1 NAME Eve /Alive/\n1 CHR\n2 DATE Census 1900 record\n"
         assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
+    @pytest.mark.parametrize("value", ["privacy", "confidential", "locked", "PRIVACY"])
+    def test_restriction_notice_withholds(self, tmp_path: Path, value: str) -> None:
+        # RESN is the only restriction notice GEDCOM 5.5.1 defines. Someone who
+        # marked relatives private in their software and then ran
+        # --redact-living had that ignored in favour of five vendor tags.
+        # The 1850 birth would otherwise publish them.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ann /Private/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    @pytest.mark.parametrize("value", ["none", ""])
+    def test_other_restriction_values_do_not_withhold(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        # Unlike the vendor tags, RESN's VALUE decides - the tag alone is not
+        # a do-not-publish signal.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ada /Gone/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_burial_alone_proves_death(self, tmp_path: Path) -> None:
+        # Born 1950 is well under the age ceiling and there is no DEAT, so the
+        # burial is the ONLY thing that can decide. Without it this record is
+        # withheld. Removing burial evidence entirely used to pass every test.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 3 MAR 1950\n"
+            "1 BURI\n2 DATE 4 OCT 2010\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_second_birth_event_is_not_ignored(self, tmp_path: Path) -> None:
+        # A tree merged from two sources routinely carries two BIRT events.
+        # Only the first was read, so a transcribed-wrong 1850 beside a real
+        # 1990 published someone who is alive.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_second_birth_event_order_does_not_matter(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_empty_date_line_is_skipped_not_treated_as_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        # "2 DATE" with no value states nothing. ged4py returns an empty
+        # phrase rather than None, so it needs skipping explicitly or a good
+        # birth date beside it would withhold someone long dead.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
     def test_clean_christening_behind_dirty_birth_still_publishes(
         self, tmp_path: Path
     ) -> None:
@@ -781,3 +862,97 @@ class TestRedactLivingPhraseDates:
         result = collect_export_data(_write_ged(tmp_path, ged))
         data = json.loads(format_json(result, redact_living=True))
         assert data["individuals"][0]["birth_year"] == 1700
+
+
+class TestLivenessGateHardening:
+    """The three gate defects the security audit reproduced end to end.
+
+    Each test fails if its guard is reverted: restore the calendar skip, drop
+    the .upper() in _detect_living_marker, or put the break back in the
+    liveness birth loop, and exactly one of these goes red.
+    """
+
+    def test_french_republican_date_does_not_publish_a_living_person(
+        self, tmp_path: Path
+    ) -> None:
+        # Year 230 is 2021. Read as the bare number it was an age of ~1796,
+        # which aged a living person out of redaction.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Zoe /Recent/\n"
+            "1 BIRT\n2 DATE @#DFRENCH R@ 1 VEND 230\n2 PLAC 7 Secret Lane\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_hebrew_date_does_not_publish_a_living_person(
+        self, tmp_path: Path
+    ) -> None:
+        # 5786 is 2026
+        ged = (
+            "0 @I1@ INDI\n1 NAME Yael /Recent/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 5786\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_old_hebrew_date_publishes(self, tmp_path: Path) -> None:
+        # The over-redaction half: 5600 is 1840, so this person is long dead.
+        # Before the conversion, 2026 - 5600 was negative, never exceeded
+        # max_age, and every Hebrew-dated record redacted regardless of age.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Miri /Ancient/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 5600\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_unconvertible_hebrew_date_does_not_publish(self, tmp_path: Path) -> None:
+        # Year 100 predates the proleptic Gregorian epoch, so it stays untrusted
+        ged = "0 @I1@ INDI\n1 NAME Ora /Odd/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 100\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_lowercase_living_tag_is_honoured(self, tmp_path: Path) -> None:
+        # The tag sets are upper-case; ged4py returns what the file wrote. A
+        # hand-edited "_lvg" used to match nothing and fall through to the
+        # birth-year rule, which published on the ancient date beside it.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Eve /LowerTag/\n1 _lvg Y\n"
+            "1 BIRT\n2 DATE 1 JAN 1900\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_mixed_case_living_tag_is_honoured(self, tmp_path: Path) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Ivy /MixTag/\n1 _Lvg Y\n1 BIRT\n2 DATE 1 JAN 1900\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_uppercase_living_tag_still_works(self, tmp_path: Path) -> None:
+        # The case the fold must not break
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /UpperTag/\n1 _LVG Y\n"
+            "1 BIRT\n2 DATE 1 JAN 1900\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_christening_overrides_an_ancient_birth(
+        self, tmp_path: Path
+    ) -> None:
+        # A christening cannot precede a birth, so the 1850 BIRT is wrong and
+        # the person is alive. Breaking at BIRT published them.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ivan /Young/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE 1 JAN 2001\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_baptism_overrides_an_ancient_birth(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Iris /Young/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 BAPM\n2 DATE 1 JAN 2001\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_genuinely_old_record_still_publishes(self, tmp_path: Path) -> None:
+        # The over-redaction guard: max() must not redact someone long dead
+        ged = (
+            "0 @I1@ INDI\n1 NAME Obed /Ancient/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE 1 JAN 1851\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
