@@ -94,7 +94,7 @@ Errors (5):
     Line 1813: @I169@ Born (1931) before parent @I812@ (1980)
   ...
 
-✗ Invalid (5 error(s), 33 warning(s))
+✗ Invalid (5 error(s), 39 warning(s))
 ```
 
 Quick mode fails fast on the first error. Use `--full` to see everything.
@@ -127,9 +127,13 @@ Errors (5):
   [E011] Death date before birth date
     Line 22905: @I2948@ Death (1906) before birth (1941)
 
-Warnings (33):
+Warnings (39):
   [W005] Missing SUBM record
     Line 1: No SUBM (submitter) record referenced in HEAD
+  [W035] Date not in GEDCOM format
+    Line 12060: Date not in GEDCOM format: "1056/1060" - use the DD MMM YYYY form
+  [W035] Date not in GEDCOM format
+    Line 27126: Date not in GEDCOM format: "20 JUL" - use the DD MMM YYYY form
   [W014] Individual with no family connections
     Line 1391: @I128@ Individual has no family connections
   [W014] Individual with no family connections
@@ -145,7 +149,7 @@ Warnings (33):
     Line 7294: @I812@ Father @I2946@ was 108 at birth
   ...
 
-✗ Invalid (5 error(s), 33 warning(s))
+✗ Invalid (5 error(s), 39 warning(s))
 ```
 
 Every issue includes a code, description, line number, and actionable message.

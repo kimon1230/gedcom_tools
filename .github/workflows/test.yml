@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by publish.yml so a release runs the same suite rather than a
+  # second copy of it that can drift.
+  workflow_call:
 
 permissions:
   contents: read
@@ -52,6 +55,9 @@ jobs:
       # fixture trees are tracked on purpose; anything else carrying tree data
       # is somebody's relatives. A pre-commit hook would cover this too, but
       # only for people who installed it and did not pass --no-verify.
+      # Inspects what is TRACKED at HEAD, not history. The root-level JSON
+      # rule is broad on purpose - an export lands there by default - so a
+      # future root-level config file would need adding to the exemption.
       - name: Check no tree data is tracked
         run: |
           stray=$(git ls-files \

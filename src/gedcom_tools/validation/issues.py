@@ -90,6 +90,7 @@ class ErrorCode(Enum):
     W033_OBJE_MISSING_FILE = "W033"
     W034_FILE_MISSING_FORM = "W034"
     W035_NONSTANDARD_DATE = "W035"
+    W036_BURIAL_BEFORE_DEATH_OR_BIRTH = "W036"
 
     @property
     def severity(self) -> Severity:
@@ -145,6 +146,7 @@ class ErrorCode(Enum):
             "W033": "OBJE record has no FILE subtag",
             "W034": "FILE subtag has no FORM",
             "W035": "Date not in GEDCOM format",
+            "W036": "Burial before death or birth",
         }
         return descriptions.get(self.value, "Unknown issue")
 
@@ -205,6 +207,8 @@ class IndividualInfo:
     birth_month: int | None = None
     death_year: int | None = None  # earliest the death can be
     death_year_latest: int | None = None
+    burial_year: int | None = None  # earliest the burial can be
+    burial_year_latest: int | None = None
     sex: str | None = None
     famc_xrefs: list[str] = field(default_factory=list)
     fams_xrefs: list[str] = field(default_factory=list)

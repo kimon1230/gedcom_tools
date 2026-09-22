@@ -256,7 +256,9 @@ When no custom tag decides the matter, estimation falls back to dates:
 
 1. **Birth year more than max_age years ago** → not living, whether or not the
    record has a death date
-2. **Has death year or burial date** → not living
+2. **Has death year or burial year** → not living. Burial is read the same
+   strict way as the others: `2 DATE (pre-need plot)` is a note about a plot
+   someone bought while alive, not evidence that they have died
 3. **Everything else, including an absent or unreadable birth date** →
    estimated living, so **redacted**
 
@@ -311,7 +313,8 @@ than 6789.
 
 **Non-Gregorian calendars are converted before they decide anything.** GEDCOM
 5.5.1 also allows Hebrew and French Republican dates, whose years count from a
-different epoch — `5786` is a date in 2026 and `230` one in 2021. Taken at face
+different epoch — Hebrew `5786` runs from late 2025 into 2026, and French
+Republican `230` falls in 2021. Taken at face
 value `230` reads as an age of roughly 1796, so liveness converts these to the
 Gregorian scale first. `birth_year` and `death_year` still report the year as
 the file writes it; only the decision uses the converted one. A year that falls

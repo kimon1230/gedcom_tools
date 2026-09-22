@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Literal
 from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.progress import Colors
 from gedcom_tools.utils import validate_input_file
-from gedcom_tools.validation import FileTooLargeError, validate_file
+from gedcom_tools.validation import (
+    ContinuationChainTooLongError,
+    FileTooLargeError,
+    validate_file,
+)
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -85,7 +89,7 @@ def run(args: Namespace) -> int:
         # cli._run_command turns this into a clean exit; catching it in the
         # generic handler below would report a closed pipe as a failure.
         raise
-    except FileTooLargeError as e:
+    except (FileTooLargeError, ContinuationChainTooLongError) as e:
         # An anticipated limit, not a crash. Must sit ahead of the blanket
         # handler, which would name the exception type and offer a traceback
         # for what is a deliberate policy rejection. Same wording as filter

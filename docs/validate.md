@@ -121,7 +121,7 @@ A record counts as referenced if a pointer to it appears anywhere inside another
 
 These checks detect broken bidirectional links between INDI and FAM records. In valid GEDCOM, every FAM.CHIL should have a corresponding INDI.FAMC and vice versa. The same applies to HUSB/WIFE and FAMS. Only flagged when both the INDI and FAM records exist — if either is missing, E001 (unresolved cross-reference) covers it instead.
 
-### Semantic Warnings (W020-W029)
+### Semantic Warnings (W020-W029, W036)
 
 | Code | Description | Threshold |
 |------|-------------|-----------|
@@ -135,8 +135,14 @@ These checks detect broken bidirectional links between INDI and FAM records. In 
 | W027 | **Multiple SEX records** | Individual has more than one SEX sub-record |
 | W028 | **Invalid SEX value** | SEX value is not M, F, U, or X |
 | W029 | **Sex-role mismatch** | Individual recorded as HUSB but has SEX F, or recorded as WIFE but has SEX M |
+| W036 | **Burial before death or birth** | Burial date earlier than the death it follows, or than the birth when the record has no death date |
 
 Age and date thresholds are defined in `src/gedcom_tools/constants.py`.
+
+W036 compares the burial's **latest** possible date against the other event's
+**earliest**, so only a definite contradiction is reported. `2 DATE AFT 1950`
+states a lower bound and no upper one, so a burial written that way beside a
+death in 1960 is not flagged — the file never said the burial came first.
 
 **W026 known limitations:**
 - Requires month-level precision on both birth dates — year-only dates are skipped

@@ -331,10 +331,11 @@ class TestPhraseDatesReachMatching:
         assert ind.birth_year == 1989
         assert ind.birth_decade == "1980s"
 
-    def test_citation_year_also_reaches_matching(self, tmp_path: Path) -> None:
-        # Known and accepted: "Reg. 1823 vol II" is an archive reference, and
-        # the recovery cannot tell it from a date. It is now a matching year.
-        # Documented in docs/export.md; noted here because compare scores on it.
+    def test_citation_year_still_reaches_blocking(self, tmp_path: Path) -> None:
+        # "Reg. 1823 vol II" is an archive reference and the recovery cannot
+        # tell it from a date, so it still groups this record into the 1820s
+        # block and is still what birth_year reports. It is NOT scored - see
+        # TestCitationYearDoesNotDemoteATrueMatch below.
         ged = "0 @I1@ INDI\n1 NAME Bob /Jones/\n1 BIRT\n2 DATE Reg. 1823 vol II\n"
         ind = collect_individuals(_write_ged(tmp_path, ged), "A")[0]
         assert ind.birth_year == 1823

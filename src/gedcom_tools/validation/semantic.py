@@ -136,6 +136,37 @@ class SemanticValidator:
                     )
                 )
 
+            # Burial cannot precede the death it follows, nor the birth.
+            # Both use the burial's LATEST bound against the other event's
+            # EARLIEST, so "BURI AFT 1950" beside "DEAT 1960" - which states
+            # no upper bound at all - is not reported as a contradiction the
+            # file never made. Burial is checked against death first because
+            # that is the pair a transcription slip usually swaps; when the
+            # record has no death date at all, birth is the only anchor left.
+            burial = indi.burial_year_latest
+            if burial is not None:
+                anchor_year, anchor_name = None, ""
+                if indi.death_year is not None:
+                    anchor_year, anchor_name = indi.death_year, "death"
+                elif indi.birth_year is not None:
+                    # Read from indi rather than reusing the local the E011
+                    # block above set: same value today, but "which bound"
+                    # is exactly the thing that must not depend on what a
+                    # neighbouring check happened to leave in scope.
+                    anchor_year, anchor_name = indi.birth_year, "birth"
+                if anchor_year is not None and burial < anchor_year:
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH,
+                            message=(
+                                f"Burial ({burial}) before "
+                                f"{anchor_name} ({anchor_year})"
+                            ),
+                            line=indi.line,
+                            xref=xref,
+                        )
+                    )
+
             # Birth before parent's birth
             if indi.birth_year is not None:
                 for fam_xref in indi.famc_xrefs:

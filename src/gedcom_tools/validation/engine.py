@@ -50,6 +50,22 @@ class StopValidation(Exception):
     pass
 
 
+class ContinuationChainTooLongError(ValueError):
+    """Raised when one value is continued across more lines than we will parse.
+
+    A ``ValueError`` subclass for the same reason as ``FileTooLargeError``
+    below: it is an anticipated refusal, not a crash, so the command reports
+    it as one line rather than through the unexpected-exception handler.
+
+    Checked in ``_build_line_map``, which already walks every line and runs
+    before ``GedcomReader`` opens the file. A shared check in
+    ``validate_input_file`` would cover every command instead of just this
+    one, but it measured ~22.6 s of pure scanning at the 500 MB cap on files
+    that would have processed fine - paid by every run to catch a shape that
+    is essentially only reachable on purpose.
+    """
+
+
 class FileTooLargeError(ValueError):
     """Raised when the input exceeds the supported file size.
 
@@ -63,6 +79,17 @@ class FileTooLargeError(ValueError):
 
 # Maximum recommended line length per GEDCOM spec
 MAX_LINE_LENGTH = 255
+
+# Longest run of consecutive CONC/CONT lines validate will parse. ged4py joins
+# continuations in a way that costs roughly four times as long for each
+# doubling of the chain once it is long enough to matter - measured 2.2 s at
+# 16,000 lines, 8.2 s at 32,000 and 31.3 s at 64,000, so a single chain at the
+# 500 MB cap never finishes and the run reports nothing at all.
+#
+# 4,096 sits well clear of real files: royal92's longest run is 27, and a note
+# needing more than this holds a quarter of a megabyte of text in one value,
+# which GEDCOM practice splits across separate NOTE records anyway.
+MAX_CONTINUATION_RUN = 4096
 
 # Maximum nesting depth per GEDCOM spec (level numbers 0-99)
 MAX_NESTING_DEPTH = 99
@@ -214,6 +241,7 @@ class ValidationEngine:
         self._line_offsets = array("Q", [0])
         self._paren_date_lines = array("Q")
         seen: dict[ErrorCode, int] = {}
+        continuation_run = 0
         with open(self.file_path, "rb") as f:
             offset = 0
             line_num = 0
@@ -261,6 +289,23 @@ class ValidationEngine:
                     # line_num only increases, so the array stays sorted and
                     # _is_paren_date_line can bisect it.
                     self._paren_date_lines.append(line_num)
+
+                # Tracked here because this loop already has the bytes and
+                # runs before GedcomReader; see MAX_CONTINUATION_RUN.
+                tag = line_content.split(maxsplit=2)[1:2]
+                if tag and tag[0] in (b"CONC", b"CONT"):
+                    continuation_run += 1
+                    if continuation_run > MAX_CONTINUATION_RUN:
+                        msg = (
+                            f"Line {line_num}: a single value is continued "
+                            f"across more than {MAX_CONTINUATION_RUN:,} "
+                            "CONC/CONT lines. Split the text across separate "
+                            "NOTE records - a chain this long takes hours to "
+                            "parse."
+                        )
+                        raise ContinuationChainTooLongError(msg)
+                else:
+                    continuation_run = 0
 
                 offset += len(line)
                 self._line_offsets.append(offset)
@@ -541,6 +586,8 @@ class ValidationEngine:
 
         death_year = self._extract_year(record, "DEAT/DATE")
         death_year_latest = self._extract_year_latest(record, "DEAT/DATE")
+        burial_year = self._extract_year(record, "BURI/DATE")
+        burial_year_latest = self._extract_year_latest(record, "BURI/DATE")
 
         # Extract sex and family links via single-pass sub_records iteration
         sex_value: str | None = None
@@ -617,6 +664,8 @@ class ValidationEngine:
                 birth_month=birth_month,
                 death_year=death_year,
                 death_year_latest=death_year_latest,
+                burial_year=burial_year,
+                burial_year_latest=burial_year_latest,
                 sex=sex_value,
                 famc_xrefs=famc_xrefs,
                 fams_xrefs=fams_xrefs,

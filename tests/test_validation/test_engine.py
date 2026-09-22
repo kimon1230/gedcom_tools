@@ -7,9 +7,11 @@ import pytest
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES
 from gedcom_tools.progress import Colors
+from gedcom_tools.validation import engine as engine_module
 from gedcom_tools.validation import validate_file
 from gedcom_tools.validation.engine import (
     MAX_ISSUES_PER_CODE,
+    ContinuationChainTooLongError,
     FileTooLargeError,
     ValidationEngine,
 )
@@ -1869,3 +1871,61 @@ class TestIssueTextIsScrubbed:
         ged = _write_ged(tmp_path / "plain.ged", ["0 @I1@ INDI", "1 NAME A /B/"])
         result = ValidationEngine(ged, mode="full", quiet=True).validate()
         assert any("family connections" in i.message for i in result.warnings)
+
+
+class TestContinuationChainGuard:
+    """ged4py's continuation join goes quadratic once a chain is long enough.
+
+    Measured on this machine: 16,000 CONC lines parse in 2.2 s, 32,000 in
+    8.2 s and 64,000 in 31.3 s - about 4x per doubling - so a single chain at
+    the 500 MB cap never returns and the user sees nothing at all. The guard
+    runs in _build_line_map, which is ahead of GedcomReader, so the refusal
+    costs one pass over the bytes the loop was reading anyway.
+    """
+
+    def _chain(self, path, count):
+        return _write_ged(
+            path,
+            ["0 @I1@ INDI", "1 NAME A /B/", "1 NOTE start"]
+            + [f"2 CONC {'x' * 20}" for _ in range(count)],
+        )
+
+    def test_a_chain_past_the_limit_is_refused_by_line_number(self, tmp_path):
+        ged = self._chain(tmp_path / "long.ged", 5000)
+        with pytest.raises(ContinuationChainTooLongError) as exc:
+            ValidationEngine(ged, mode="full", quiet=True).validate()
+
+        # Derived, not hardcoded: the offending line is the one past the limit,
+        # and the header length is the helper's business rather than this test's
+        lines = ged.read_text(encoding="utf-8").splitlines()
+        conc = [n for n, ln in enumerate(lines, 1) if ln.startswith("2 CONC")]
+        expected = conc[engine_module.MAX_CONTINUATION_RUN]
+
+        # Actionable: which line, what the limit is, and what to do instead
+        assert f"Line {expected}:" in str(exc.value)
+        assert "4,096" in str(exc.value)
+        assert "NOTE records" in str(exc.value)
+
+    def test_the_boundary_itself_is_allowed(self, tmp_path, monkeypatch):
+        # Patched rather than written out: the real limit needs a 4,097-line
+        # fixture parsed by ged4py on every run to prove an off-by-one.
+        monkeypatch.setattr(engine_module, "MAX_CONTINUATION_RUN", 3)
+        ged = self._chain(tmp_path / "exact.ged", 3)
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        assert result is not None
+
+        over = self._chain(tmp_path / "over.ged", 4)
+        with pytest.raises(ContinuationChainTooLongError):
+            ValidationEngine(over, mode="full", quiet=True).validate()
+
+    def test_an_interrupted_chain_resets_the_count(self, tmp_path, monkeypatch):
+        # Two short notes are not one long one; the run counts consecutive
+        # lines, so a real record with many separate notes must still pass.
+        monkeypatch.setattr(engine_module, "MAX_CONTINUATION_RUN", 3)
+        ged = _write_ged(
+            tmp_path / "split.ged",
+            ["0 @I1@ INDI", "1 NAME A /B/"]
+            + ["1 NOTE start", "2 CONC a", "2 CONC b"] * 6,
+        )
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        assert result is not None

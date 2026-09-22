@@ -670,3 +670,70 @@ class TestSexRoleMismatch:
         issues = validator.validate()
         w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
         assert len(w029) == 0
+
+
+class TestBurialChronology:
+    """A burial cannot precede the death it follows, nor the birth.
+
+    Split out of the redaction ruling that burial IS conclusive death
+    evidence: that settles what --redact-living does with a burial, and
+    leaves "BURI 1950 on a person born 1960" as a transcription error
+    nothing was naming.
+    """
+
+    def _one(self, **kwargs):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, **kwargs))
+        return [
+            i
+            for i in validator.validate()
+            if i.code == ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH
+        ]
+
+    def test_burial_before_death(self):
+        issues = self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=1950,
+        )
+        assert len(issues) == 1
+        assert "death (1960)" in issues[0].message
+
+    def test_burial_before_birth_when_there_is_no_death_date(self):
+        # Birth is the only anchor left, and it is still a contradiction
+        issues = self._one(
+            birth_year=1960,
+            birth_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=1950,
+        )
+        assert len(issues) == 1
+        assert "birth (1960)" in issues[0].message
+
+    def test_burial_after_death_is_silent(self):
+        assert not self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1960,
+            burial_year_latest=1960,
+        )
+
+    def test_an_open_upper_bound_is_not_a_contradiction(self):
+        # "BURI AFT 1950" states no upper bound, so its latest is unknown.
+        # Reading the stated year as the missing bound would invent one.
+        assert not self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=None,
+        )
+
+    def test_no_burial_date_says_nothing(self):
+        assert not self._one(birth_year=1900, birth_year_latest=1900, death_year=1960)

@@ -58,7 +58,19 @@ Each individual is compared across 7 weighted fields:
 | Sex | 0.05 |
 
 Weights sum to 1.0. The total score is a weighted average of per-field
-similarities.
+similarities. A field is only scored when both records have it; a field neither
+record has does not count against the pair.
+
+**Birth Year and Death Year are scored on the strict reading of the date.** A
+year lifted out of prose — `Reg. 1823 vol II`, `Census 1900 record` — still
+groups records into candidate blocks and is still what `--format json` reports
+as `birth_year`, but it is not scored. Scoring it would assert a disagreement
+the file never made: one John Smith of London dated `Reg. 1823 vol II` and
+another dated `12 MAR 1850` would take a flat zero on Birth Year and drop out
+of `certain_matches` altogether. A date the parser merely fails to read —
+`12/2/1882`, `30 November 1989` — is a date a person reads without difficulty
+and is scored normally. A citation shaped exactly like a date, `12.1823.4`, has
+no token that separates it from `12/2/1882` and is scored.
 
 ### String Similarity
 
