@@ -14,6 +14,8 @@ def _ind(
     given_name_normalized: str = "",
     birth_year: int | None = None,
     death_year: int | None = None,
+    birth_year_scored: int | None = None,
+    death_year_scored: int | None = None,
     birth_place_normalized: str = "",
     death_place_normalized: str = "",
     sex: str = "",
@@ -25,6 +27,13 @@ def _ind(
     alt_given_names_normalized: list[str] | None = None,
     **kwargs: object,
 ) -> CompareIndividual:
+    # Most cases here describe a record whose date parsed normally, so the
+    # scored year mirrors the displayed one unless a case says otherwise -
+    # passing it explicitly is how a test models a citation-shaped date.
+    if birth_year_scored is None:
+        birth_year_scored = birth_year
+    if death_year_scored is None:
+        death_year_scored = death_year
     return CompareIndividual(
         xref=xref,
         source_file=source,
@@ -32,6 +41,8 @@ def _ind(
         given_name_normalized=given_name_normalized,
         birth_year=birth_year,
         death_year=death_year,
+        birth_year_scored=birth_year_scored,
+        death_year_scored=death_year_scored,
         birth_place_normalized=birth_place_normalized,
         death_place_normalized=death_place_normalized,
         sex=sex,

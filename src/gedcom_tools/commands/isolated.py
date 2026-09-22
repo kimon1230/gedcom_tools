@@ -15,7 +15,7 @@ from gedcom_tools.constants import EXIT_ERROR, EXIT_SUCCESS
 from gedcom_tools.dates import extract_year_from_date
 from gedcom_tools.graph import find_connected_components
 from gedcom_tools.progress import Colors, PhaseTracker
-from gedcom_tools.utils import extract_xref, validate_input_file
+from gedcom_tools.utils import extract_xref, scrub_line, validate_input_file
 
 if TYPE_CHECKING:
     from argparse import Namespace, _SubParsersAction
@@ -54,7 +54,7 @@ class IsolatedResult:
                 f"{len(self.pairs)} {p_label})"
             )
 
-        lines: list[str] = [f"File: {self.file_path}", ""]
+        lines: list[str] = [f"File: {scrub_line(self.file_path)}", ""]
 
         lines.append(_header(colors, "Isolated Analysis"))
         lines.append(f"  Total individuals:    {self.total_individuals:>5}")
@@ -101,8 +101,8 @@ class IsolatedResult:
         from pathlib import Path as _Path
 
         data = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "summary": {
                 "total_individuals": self.total_individuals,
                 "isolated_count": self.isolated_count,

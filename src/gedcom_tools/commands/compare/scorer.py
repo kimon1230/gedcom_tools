@@ -144,13 +144,17 @@ def score_pair(
         applicable_weights["Given Name"] = _WEIGHTS["Given Name"]
 
     # Birth Year
-    if a.birth_year is not None and b.birth_year is not None:
-        field_scores["Birth Year"] = _year_proximity(a.birth_year, b.birth_year)
+    if a.birth_year_scored is not None and b.birth_year_scored is not None:
+        field_scores["Birth Year"] = _year_proximity(
+            a.birth_year_scored, b.birth_year_scored
+        )
         applicable_weights["Birth Year"] = _WEIGHTS["Birth Year"]
 
     # Death Year
-    if a.death_year is not None and b.death_year is not None:
-        field_scores["Death Year"] = _year_proximity(a.death_year, b.death_year)
+    if a.death_year_scored is not None and b.death_year_scored is not None:
+        field_scores["Death Year"] = _year_proximity(
+            a.death_year_scored, b.death_year_scored
+        )
         applicable_weights["Death Year"] = _WEIGHTS["Death Year"]
 
     # Birth Place

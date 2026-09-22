@@ -30,6 +30,7 @@ from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
     sanitize_error,
+    scrub_line,
     validate_input_file,
     xref_sort_key,
 )
@@ -113,7 +114,7 @@ class LanguagesResult:
                 f"across {self.total_texts} text(s)"
             )
 
-        lines: list[str] = [f"File: {self.file_path}"]
+        lines: list[str] = [f"File: {scrub_line(self.file_path)}"]
         if self.encoding_info:
             lines.append(f"Encoding: {self.encoding_info}")
         lines.append("")
@@ -210,7 +211,7 @@ class LanguagesResult:
             parts.append(f"{'1 event' if n_events == 1 else f'{n_events} events'}")
             return f"{self.language_filter_name}: {', '.join(parts)}"
 
-        lines: list[str] = [f"File: {self.file_path}"]
+        lines: list[str] = [f"File: {scrub_line(self.file_path)}"]
         if self.encoding_info:
             lines.append(f"Encoding: {self.encoding_info}")
         lines.append("")
@@ -297,8 +298,8 @@ class LanguagesResult:
         from pathlib import Path as _Path
 
         data: dict[str, Any] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "mode": "aggregate",
             "encoding": None,
             "languages": [
@@ -373,8 +374,8 @@ class LanguagesResult:
         from pathlib import Path as _Path
 
         data: dict[str, Any] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "mode": "filter",
             "encoding": None,
             "language": self.language_filter_name,

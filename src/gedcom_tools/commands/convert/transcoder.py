@@ -16,6 +16,7 @@ from gedcom_tools.progress import Colors, glyphs
 from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
+    scrub_line,
     strip_bom,
     write_output_securely,
 )
@@ -66,7 +67,7 @@ class ConvertResult:
             bom_label = "stripped"
 
         lines: list[str] = [
-            f"File: {self.source_file.name}",
+            f"File: {scrub_line(self.source_file.name)}",
             "",
             f"{colors.cyan}=== Conversion ==={colors.reset}",
             f"  Source encoding: {self.source_encoding}",
@@ -90,9 +91,9 @@ class ConvertResult:
 
     def format_json(self) -> str:
         data = {
-            "source_file": str(self.source_file),
+            "source_file": scrub_line(str(self.source_file)),
             "source_filename": self.source_file.name,
-            "output_file": str(self.output_file),
+            "output_file": scrub_line(str(self.output_file)),
             "output_filename": self.output_file.name,
             "source_encoding": self.source_encoding,
             "target_encoding": self.target_encoding,

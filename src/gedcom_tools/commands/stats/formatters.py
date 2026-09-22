@@ -18,6 +18,7 @@ from gedcom_tools.commands.stats.models import (
     RankedItem,
     TimelineEntry,
 )
+from gedcom_tools.utils import scrub_line
 
 if TYPE_CHECKING:
     from gedcom_tools.progress import Colors
@@ -103,7 +104,7 @@ class StatsResult:
         lines: list[str] = []
 
         # Header
-        lines.append(f"File: {self.file_path}")
+        lines.append(f"File: {scrub_line(self.file_path)}")
         if self.encoding_info:
             lines.append(f"Encoding: {self.encoding_info}")
         lines.append("")
@@ -477,8 +478,8 @@ class StatsResult:
         from pathlib import Path as _Path
 
         data: dict[str, Any] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "encoding": None,
             "records": {
                 "individuals": self.individuals,

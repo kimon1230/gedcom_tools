@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from gedcom_tools import __version__
 from gedcom_tools.commands.export.models import estimate_living
+from gedcom_tools.utils import scrub_line
 
 if TYPE_CHECKING:
     from gedcom_tools.commands.export.models import (
@@ -342,8 +343,8 @@ def format_json(
 
     data: dict[str, Any] = {
         "meta": {
-            "file": result.file_path,
-            "filename": Path(result.file_path).name,
+            "file": scrub_line(result.file_path),
+            "filename": scrub_line(Path(result.file_path).name),
             "encoding": result.encoding,
             "gedcom_tools_version": __version__,
             "individual_count": result.individual_count,

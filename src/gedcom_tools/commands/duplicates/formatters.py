@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gedcom_tools.progress import glyphs
+from gedcom_tools.utils import scrub_line
 
 if TYPE_CHECKING:
     from gedcom_tools.commands.compare.models import (
@@ -93,7 +94,7 @@ def format_text(
             f"{len(result.probable_matches)} probable"
         )
 
-    lines: list[str] = [f"File: {result.file}"]
+    lines: list[str] = [f"File: {scrub_line(result.file)}"]
     lines.append("")
     lines.append(f"{colors.cyan}=== Duplicate Scan Summary ==={colors.reset}")
     lines.append(f"  Individuals scanned: {result.total_individuals:>5}")
@@ -169,8 +170,8 @@ def format_json(
     probable_display = probable[:limit] if limit > 0 else probable
 
     output: dict[str, Any] = {
-        "file": result.file,
-        "filename": Path(result.file).name,
+        "file": scrub_line(result.file),
+        "filename": scrub_line(Path(result.file).name),
         "encoding": {
             "detected": result.encoding.encoding,
             "has_bom": result.encoding.has_bom,

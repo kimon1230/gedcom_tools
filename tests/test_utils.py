@@ -750,8 +750,8 @@ class TestWriteOutputSecurely:
             write_output_securely(out, b"data", force=False)
 
     def test_non_regular_target_is_written_through(self, tmp_path: Path) -> None:
-        # /dev/null cannot be created, truncated or chmod-ed; the atomic path
-        # would refuse it, so it takes the plain one.
+        # /dev/null cannot be created, truncated or chmod-ed, so it takes the
+        # branch that does none of those - which still opens O_NOFOLLOW.
         devnull = Path(os.devnull)
         assert write_output_securely(devnull, b"data", force=False) is None
 
@@ -763,6 +763,22 @@ class TestWriteOutputSecurely:
         try:
             assert write_output_securely(fifo, "hello", force=False) is None
             assert os.read(reader, 16) == b"hello"
+        finally:
+            os.close(reader)
+
+    @posix_only
+    def test_non_regular_target_does_not_translate_line_endings(
+        self, tmp_path: Path
+    ) -> None:
+        # The regular path passes newline="" so csv.writer's own \r\n is not
+        # rewritten to \r\r\n on Windows. This branch encodes to bytes
+        # instead, which has to mean the same thing.
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            assert write_output_securely(fifo, "a\r\nb", force=False) is None
+            assert os.read(reader, 16) == b"a\r\nb"
         finally:
             os.close(reader)
 

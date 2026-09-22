@@ -47,6 +47,22 @@ jobs:
       - name: Audit dependencies
         run: pip-audit
 
+      # .gitignore is the only thing standing between a real family tree and
+      # the public remote, and `git add -f` walks straight past it. The
+      # fixture trees are tracked on purpose; anything else carrying tree data
+      # is somebody's relatives. A pre-commit hook would cover this too, but
+      # only for people who installed it and did not pass --no-verify.
+      - name: Check no tree data is tracked
+        run: |
+          stray=$(git ls-files \
+            | grep -iE '\.(ged|gedcom|csv)$|^[^/]*\.json$' \
+            | grep -v '^tests/fixtures/' || true)
+          if [ -n "$stray" ]; then
+            echo "Tracked files carrying family tree data:"
+            echo "$stray"
+            exit 1
+          fi
+
   test:
     strategy:
       fail-fast: false

@@ -298,7 +298,7 @@ def write_output_securely(
     force: bool,
     encoding: str = "utf-8",
 ) -> str | None:
-    """Write `data` to `path` through a single create-or-fail open.
+    """Write `data` to `path` through a single symlink-refusing open.
 
     Returns an error message for the caller to print, or None on success.
     `encoding` applies to str data only; bytes go out untouched.
@@ -326,16 +326,23 @@ def write_output_securely(
         stat.S_ISCHR(target_mode) or stat.S_ISFIFO(target_mode)
     ):
         # /dev/null and named pipes: nothing to create, nothing to truncate,
-        # and no mode worth setting. Write them the plain way.
+        # and no mode worth setting - but still opened through the same
+        # O_NOFOLLOW gate as everything else. write_text() resolves the path a
+        # second time, so a symlink swapped in after the lstat would be
+        # followed, which is the window this function exists to close.
         #
         # lstat, not stat: stat() follows symlinks, so a link aimed at a FIFO
         # or a device would look identical to the real thing and get written
-        # through — exactly what the symlink guard below exists to stop.
-        # Anything else, links included, falls through to O_NOFOLLOW.
-        if isinstance(data, str):
-            path.write_text(data, encoding=encoding, newline="")
-        else:
-            path.write_bytes(data)
+        # through. Anything else, links included, falls through below.
+        payload = data.encode(encoding) if isinstance(data, str) else data
+        try:
+            special_fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as e:
+            if e.errno == errno.ELOOP or path.is_symlink():
+                return f"Error: {SYMLINK_OUTPUT_ERROR}"
+            raise
+        with os.fdopen(special_fd, "wb") as special_out:
+            special_out.write(payload)
         return None
 
     flags = (

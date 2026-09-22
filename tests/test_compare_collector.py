@@ -345,3 +345,70 @@ class TestPhraseDatesReachMatching:
         ind = collect_individuals(_write_ged(tmp_path, ged), "A")[0]
         assert ind.birth_year is None
         assert ind.birth_decade == ""
+
+
+_LONDON_SMITH = (
+    "0 @I1@ INDI\n1 NAME John /Smith/\n1 SEX M\n1 BIRT\n2 DATE {date}\n"
+    "2 PLAC London, England\n"
+)
+
+
+class TestScoredYearIsSeparateFromDisplayedYear:
+    def test_citation_year_is_shown_but_not_scored(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, _LONDON_SMITH.format(date="Reg. 1823 vol II"))
+        (ind,) = collect_individuals(ged, "A")
+        # The report still says what the file says; the scorer is not told
+        assert ind.birth_year == 1823
+        assert ind.birth_year_scored is None
+
+    def test_a_clean_phrase_still_scores(self, tmp_path: Path) -> None:
+        ged = _write_ged(tmp_path, _LONDON_SMITH.format(date="12/2/1882"))
+        (ind,) = collect_individuals(ged, "A")
+        assert ind.birth_year == 1882
+        assert ind.birth_year_scored == 1882
+
+    def test_citation_in_birt_does_not_mask_a_real_chr(self, tmp_path: Path) -> None:
+        # The strict read resolves its own tag order, so a citation typed into
+        # BIRT must not hide the christening date sitting beside it
+        ged = _write_ged(
+            tmp_path,
+            "0 @I1@ INDI\n1 NAME John /Smith/\n1 BIRT\n2 DATE Reg. 1823 vol II\n"
+            "1 CHR\n2 DATE 4 APR 1850\n",
+        )
+        (ind,) = collect_individuals(ged, "A")
+        assert ind.birth_year == 1823
+        assert ind.birth_year_scored == 1850
+
+
+class TestCitationYearDoesNotDemoteATrueMatch:
+    def _score(self, tmp_path: Path, date_a: str, date_b: str) -> object:
+        from gedcom_tools.commands.compare.scorer import score_pair
+
+        a = collect_individuals(
+            _write_ged(tmp_path, _LONDON_SMITH.format(date=date_a), "a.ged"), "A"
+        )[0]
+        b = collect_individuals(
+            _write_ged(tmp_path, _LONDON_SMITH.format(date=date_b), "b.ged"), "B"
+        )[0]
+        return score_pair(a, b)
+
+    def test_citation_year_no_longer_invents_a_disagreement(
+        self, tmp_path: Path
+    ) -> None:
+        # Scoring a citation year against a real one asserted a contradiction
+        # the file never stated, and demoted this pair out of the certain set
+        result = self._score(tmp_path, "Reg. 1823 vol II", "12 MAR 1850")
+        assert "Birth Year" not in result.field_scores  # type: ignore[attr-defined]
+        assert result.classification == "certain"  # type: ignore[attr-defined]
+
+    def test_a_clean_phrase_reaches_the_scorer(self, tmp_path: Path) -> None:
+        # The collector filling birth_year_scored is only half of it - a scorer
+        # that never read the field would pass every other test in this class
+        result = self._score(tmp_path, "12/2/1850", "12 MAR 1850")
+        assert result.field_scores["Birth Year"] == 1.0  # type: ignore[attr-defined]
+        assert result.classification == "certain"  # type: ignore[attr-defined]
+
+    def test_two_real_dates_far_apart_are_still_penalised(self, tmp_path: Path) -> None:
+        result = self._score(tmp_path, "12 MAR 1723", "12 MAR 1850")
+        assert result.field_scores["Birth Year"] == 0.0  # type: ignore[attr-defined]
+        assert result.classification != "certain"  # type: ignore[attr-defined]

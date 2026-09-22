@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gedcom_tools.progress import glyphs
+from gedcom_tools.utils import scrub_line
 
 if TYPE_CHECKING:
     from gedcom_tools.commands.compare.models import (
@@ -246,10 +247,10 @@ def format_json(
         unique_b = unique_b[:limit]
 
     data: dict[str, Any] = {
-        "file_a": result.file_a,
-        "filename_a": Path(result.file_a).name,
-        "file_b": result.file_b,
-        "filename_b": Path(result.file_b).name,
+        "file_a": scrub_line(result.file_a),
+        "filename_a": scrub_line(Path(result.file_a).name),
+        "file_b": scrub_line(result.file_b),
+        "filename_b": scrub_line(Path(result.file_b).name),
         "encoding_a": {
             "detected": result.encoding_a.encoding,
             "has_bom": result.encoding_a.has_bom,

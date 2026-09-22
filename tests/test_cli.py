@@ -531,3 +531,62 @@ def test_handler_and_cli_render_an_error_identically(
 
     assert handler_err == cli_err
     assert "KeyError: 'indi_count'" in handler_err
+
+
+# A newline is legal in a POSIX filename and every command prints the path it
+# was given. validate flattened it; the other eight printed it as the file
+# wrote it, so the name decided what appeared at column 0 of the report.
+#
+# Two lists, not one: export emits CSV or JSON and has no "File:" line to
+# forge, and stats/isolated encode JSON with ensure_ascii=True, which turns a
+# C1 byte into the seven ASCII characters "\u009b" before the scrub is even
+# reached. Parametrising every command over both checks would look thorough
+# and assert nothing.
+_TEXT_PATH_EMITTERS = [
+    ("stats", []),
+    ("isolated", []),
+    ("search", ["surname=Smith"]),
+    ("duplicates", []),
+]
+
+_RAW_JSON_PATH_EMITTERS = [
+    ("export", ["--table", "individuals", "--to", "json"]),
+    ("search", ["surname=Smith"]),
+    ("duplicates", []),
+]
+
+_SPOOF_GED = (
+    "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
+    "0 @I1@ INDI\n1 NAME John /Smith/\n0 TRLR\n"
+)
+
+
+@pytest.mark.parametrize("command,extra", _TEXT_PATH_EMITTERS)
+def test_a_filename_cannot_forge_a_line_of_the_report(
+    command, extra, tmp_path, capsys, monkeypatch
+):
+    spoofed = tmp_path / "tree\n\u2713 No errors found\nx.ged"
+    spoofed.write_text(_SPOOF_GED, encoding="utf-8")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main([command, str(spoofed), *extra])
+    out = capsys.readouterr().out
+
+    assert "File:" in out  # the line under test is actually being emitted
+    assert not any(ln.startswith("\u2713 No errors") for ln in out.splitlines())
+
+
+@pytest.mark.parametrize("command,extra", _RAW_JSON_PATH_EMITTERS)
+def test_a_filename_cannot_carry_c1_into_json(
+    command, extra, tmp_path, capsys, monkeypatch
+):
+    # These formatters pass ensure_ascii=False, so json.dumps is not the
+    # control here - it escapes C0 and leaves C1 alone, and U+009B is the
+    # 8-bit form of "ESC[".
+    spoofed = tmp_path / "t\x9b31mred.ged"
+    spoofed.write_text(_SPOOF_GED, encoding="utf-8")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main(["--format", "json", command, str(spoofed), *extra])
+    out = capsys.readouterr().out
+
+    assert "\\u009b" not in out  # not merely ascii-escaped by the encoder
+    assert "\x9b" not in out
