@@ -49,6 +49,8 @@ def _extract_year(record: Record, path: str) -> int | None:
     return extract_year_from_date(date_rec.value)
 
 
+_RESN_PRIVATE = frozenset({"PRIVACY", "CONFIDENTIAL", "LOCKED"})
+
 _BIRTH_EVENT_TAGS = ("BIRT", "CHR", "BAPM")
 
 
@@ -146,6 +148,15 @@ def _detect_living_marker(record: Record) -> str:
     not_living = ""
     for sub in record.sub_records:
         tag = str(sub.tag).upper()
+        # RESN is the only restriction notice GEDCOM 5.5.1 itself defines, and
+        # it was ignored in favour of five vendor tags - so someone who marked
+        # relatives "private" in their software and then ran --redact-living
+        # had that intent silently discarded. Unlike the vendor tags its VALUE
+        # decides, so it is tested before the plain tag-membership check.
+        if tag == "RESN":
+            if str(sub.value or "").strip().upper() in _RESN_PRIVATE:
+                return tag
+            continue
         if tag in _LIVING_TAGS:
             return tag
         if tag in _NOT_LIVING_TAGS and not not_living:

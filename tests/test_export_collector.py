@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_json
 from gedcom_tools.commands.export.models import estimate_living
@@ -669,6 +671,30 @@ class TestRedactLivingPhraseDates:
         # leak guard: the CHR fallback must be gated too
         ged = "0 @I1@ INDI\n1 NAME Eve /Alive/\n1 CHR\n2 DATE Census 1900 record\n"
         assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    @pytest.mark.parametrize("value", ["privacy", "confidential", "locked", "PRIVACY"])
+    def test_restriction_notice_withholds(self, tmp_path: Path, value: str) -> None:
+        # RESN is the only restriction notice GEDCOM 5.5.1 defines. Someone who
+        # marked relatives private in their software and then ran
+        # --redact-living had that ignored in favour of five vendor tags.
+        # The 1850 birth would otherwise publish them.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ann /Private/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    @pytest.mark.parametrize("value", ["none", ""])
+    def test_other_restriction_values_do_not_withhold(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        # Unlike the vendor tags, RESN's VALUE decides - the tag alone is not
+        # a do-not-publish signal.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ada /Gone/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
 
     def test_second_birth_event_is_not_ignored(self, tmp_path: Path) -> None:
         # A tree merged from two sources routinely carries two BIRT events.

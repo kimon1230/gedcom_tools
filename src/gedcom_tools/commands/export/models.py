@@ -66,7 +66,8 @@ class ExportResult:
 # Living: Legacy Family Tree / Family Tree Maker (_LVG, _LVNG),
 #         RootsMagic (_LIVING), PAF (_CONF_FLAG).
 # Not living: Brother's Keeper (_NLIV).
-_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG"})
+# RESN is GEDCOM 5.5.1's own restriction notice; the rest are vendor tags.
+_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG", "RESN"})
 _NOT_LIVING_TAGS = frozenset({"_NLIV"})
 
 
