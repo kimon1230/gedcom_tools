@@ -881,6 +881,35 @@ class TestCsvSafe:
     def test_every_trigger_is_prefixed(self, trigger: str) -> None:
         assert _csv_safe(f"{trigger}cmd") == f"'{trigger}cmd"
 
+    @pytest.mark.parametrize(
+        "hider,name",
+        [
+            (" ", "space"),
+            ("\u00a0", "non-breaking space"),
+            ("\x00", "NUL"),
+            ("\u200b", "zero-width space"),
+            ("\ufeff", "byte-order mark"),
+            ("  \u200b ", "several"),
+        ],
+    )
+    def test_invisible_prefix_does_not_hide_a_trigger(
+        self, hider: str, name: str
+    ) -> None:
+        # A spreadsheet trims leading whitespace on an unquoted field, so
+        # " =cmd" arrives as a live formula. Invisible characters do the same
+        # job without even being whitespace.
+        assert _csv_safe(f"{hider}=cmd|' /C calc'!A0").startswith("'")
+
+    def test_the_cell_contents_are_not_edited(self) -> None:
+        # The apostrophe is enough to make the cell text. Stripping characters
+        # out of a name or a place would be rewriting someone's record.
+        value = "\u200b=Smith"
+        assert _csv_safe(value) == "'" + value
+
+    def test_an_ordinary_name_is_untouched(self) -> None:
+        assert _csv_safe("Mary Jones") == "Mary Jones"
+        assert _csv_safe("St Giles, Camberwell") == "St Giles, Camberwell"
+
     def test_empty_string_survives(self) -> None:
         # Redacted rows are mostly empty cells; value[0] would raise on them.
         assert _csv_safe("") == ""
