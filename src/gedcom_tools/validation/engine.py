@@ -28,6 +28,8 @@ from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
     extract_xref,
+    file_too_large_message,
+    resolve_source_codec,
     sanitize_error,
 )
 from gedcom_tools.validation.issues import (
@@ -178,12 +180,7 @@ class ValidationEngine:
         """
         file_size = self.file_path.stat().st_size
         if file_size > MAX_FILE_SIZE_BYTES:
-            limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
-            actual_mb = file_size / (1024 * 1024)
-            msg = (
-                f"File is too large ({actual_mb:.1f} MB). "
-                f"Maximum supported size is {limit_mb} MB."
-            )
+            msg = file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)
             raise FileTooLargeError(msg)
 
         tracker = PhaseTracker(
@@ -356,14 +353,35 @@ class ValidationEngine:
         except OSError:
             return ""
 
-        encoding = "utf-8"
-        if self.encoding_info is not None and self.encoding_info.encoding:
-            encoding = self.encoding_info.encoding
-        text = raw.decode(encoding, errors="replace").rstrip("\r\n")
+        text = raw.decode(self._source_codec(), errors="replace").rstrip("\r\n")
 
         # Strip the "N DATE " prefix; keep everything after it verbatim.
         parts = text.strip().split(None, 2)
         return parts[2] if len(parts) > 2 else ""
+
+    def _source_codec(self) -> str:
+        """A Python codec name for re-reading source bytes.
+
+        EncodingInfo.encoding holds the file's own "1 CHAR" text when there is
+        no BOM - a GEDCOM charset name, not a codec. Handing it to bytes.decode
+        raises LookupError on values real files carry: "IBMPC", "ANSI",
+        "UNICODE". That killed the whole run, because the caller decodes
+        outside its own try block.
+
+        resolve_source_codec applies the same allowlist the file-reading
+        commands use, so a header cannot select a codec the rest of the tool
+        refuses. Anything it will not resolve falls back to UTF-8 with
+        replacement, which renders U+FFFD visibly rather than deleting the
+        character - latin-1 would turn a UTF-8 continuation byte into a C1
+        control that the report scrub then removes, leaving an echo the user
+        cannot find in their file.
+        """
+        if self.encoding_info is None or not self.encoding_info.encoding:
+            return "utf-8"
+        try:
+            return resolve_source_codec(self.encoding_info, None)
+        except ValueError:
+            return "utf-8"
 
     def _is_paren_date_line(self, line: int) -> bool:
         """Whether this line is a conformant parenthesised DATE_PHRASE.
@@ -896,14 +914,20 @@ class ValidationEngine:
         if self._is_paren_date_line(line):
             return
 
-        if structural:
-            text = self._raw_date_value(line)
-            if not text:
-                return
-
+        # Counted before the echo is built. Returning early on an unreadable
+        # re-read discarded a warning the tool had already positively
+        # detected, and left it out of the suppression tally too, so
+        # total_warnings under-reported with nothing to show for it.
         count = self._nonstandard_date_count
         self._nonstandard_date_count += 1
         if count < MAX_ISSUES_PER_CODE:
+            if structural:
+                # Below the cap, not above it: the re-read is one open() per
+                # call, and this fires once per mis-parsed date. A file whose
+                # exporter writes every date as "3/1990" made that millions of
+                # opens for output discarded after the tenth. The docstring
+                # claimed the cap already applied; it did not.
+                text = self._raw_date_value(line)
             # Echo the DATE line's own value and nothing else. ged4py joins
             # CONT sub-lines into the value with newlines, so a record whose
             # date carries continuations would otherwise spill arbitrary prose
@@ -936,9 +960,21 @@ class ValidationEngine:
                 hint = f' - use the 3-letter form "{month.group(1).upper()[:3]}"'
             else:
                 hint = " - use the DD MMM YYYY form"
+            if shown:
+                message = f'Date not in GEDCOM format: "{shown}"{hint}'
+            else:
+                # _raw_date_value returns "" for three different conditions -
+                # line out of range, an OSError, or a DATE line with no value
+                # after its tag - and none of them can be told apart here.
+                # Quoting an empty string would name none of them; the
+                # detection still stands, so say what is known.
+                message = (
+                    "Date not in GEDCOM format "
+                    "(value could not be re-read from the file)"
+                )
             self._add_issue(
                 ErrorCode.W035_NONSTANDARD_DATE,
-                f'Date not in GEDCOM format: "{shown}"{hint}',
+                message,
                 line=line,
             )
         # No summary here. It needs the TOTAL, and at date 11 the rest of the

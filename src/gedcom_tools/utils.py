@@ -341,6 +341,27 @@ def write_output_securely(
             if e.errno == errno.ELOOP or path.is_symlink():
                 return f"Error: {SYMLINK_OUTPUT_ERROR}"
             raise
+        # O_NOFOLLOW closes the symlink swap but not a TYPE swap: replace the
+        # FIFO with an ordinary file between the lstat above and this open and
+        # the export lands in it - no --force, no truncation, at whatever mode
+        # that file already carries. Re-check on the DESCRIPTOR, which names
+        # the object actually opened rather than resolving the path again.
+        #
+        # Before fdopen, which takes ownership of the fd: closing it by hand
+        # afterwards would be a double close. S_IFMT compares the type bits, so
+        # a character device swapped for a FIFO is refused too.
+        try:
+            opened_mode = os.fstat(special_fd).st_mode
+        except OSError:
+            os.close(special_fd)
+            return f"Error: Cannot inspect {path} after opening it."
+        if stat.S_IFMT(opened_mode) != stat.S_IFMT(target_mode):
+            os.close(special_fd)
+            return (
+                f"Error: {path} changed type while it was being opened; "
+                "refusing to write."
+            )
+
         with os.fdopen(special_fd, "wb") as special_out:
             special_out.write(payload)
         return None
@@ -407,21 +428,48 @@ def normalize_compare(text: str) -> str:
 
 @dataclass
 class EncodingInfo:
-    """BOM + CHAR header detection result."""
+    """BOM + CHAR header detection result.
+
+    Both string fields carry the file's own "1 CHAR" text: `declared_charset`
+    verbatim, and `encoding` as its upper-cased form whenever there is no BOM
+    to decide instead. So both are attacker-controlled, and both reach reports.
+
+    They are NOT scrubbed in place. `encoding` selects the codec in
+    `resolve_source_codec`, so cleaning it at construction would quietly turn a
+    malformed "ANS\x01EL" into a valid ANSEL selection - repairing a header
+    the tool should refuse. Display goes through the properties below instead;
+    control flow keeps the raw value.
+    """
 
     encoding: str
     has_bom: bool = False
     declared_charset: str | None = None
 
+    @property
+    def display_encoding(self) -> str:
+        """`encoding` as it may be printed or serialised."""
+        return scrub_line(self.encoding)
+
+    @property
+    def display_declared(self) -> str | None:
+        """`declared_charset` as it may be printed or serialised."""
+        if self.declared_charset is None:
+            return None
+        return scrub_line(self.declared_charset)
+
     def __str__(self) -> str:
-        parts = [self.encoding]
+        # Scrubbed, because this is the default text output's encoding line.
+        # json.dumps at least escapes a control byte; this surface hands it to
+        # the terminal untouched, and the TTY filter deliberately does not
+        # cover redirected output.
+        parts = [self.display_encoding]
         if self.has_bom:
             parts.append("(with BOM)")
         if (
             self.declared_charset
             and self.declared_charset.lower() != self.encoding.lower()
         ):
-            parts.append(f"(declared: {self.declared_charset})")
+            parts.append(f"(declared: {self.display_declared})")
         return " ".join(parts)
 
 
@@ -563,6 +611,24 @@ def xref_sort_key(xref: str) -> tuple[str, int, str]:
     return ("", 0, xref)
 
 
+def file_too_large_message(file_size: int, limit: int) -> str:
+    """The one wording for "this file is past the cap", without a prefix.
+
+    Four call sites enforce the limit - three commands decode the file
+    themselves and bypass validate_input_file - and all four printed their own
+    copy of this sentence, so a rewording would have reached three of them.
+
+    `limit` is a parameter rather than a read of MAX_FILE_SIZE_BYTES: every
+    module imports its own binding of that constant and the tests patch them
+    one at a time, so a helper that resolved it would report a limit other
+    than the one that actually fired.
+    """
+    return (
+        f"File is too large ({file_size / (1024 * 1024):.1f} MB). "
+        f"Maximum supported size is {limit // (1024 * 1024)} MB."
+    )
+
+
 def validate_input_file(file_path: Path) -> int | None:
     """Validate input file exists and is readable. Returns error code or None."""
     if not file_path.exists():
@@ -587,11 +653,8 @@ def validate_input_file(file_path: Path) -> int | None:
     # stay: they guard the same limit for callers using the API directly.
     file_size = file_path.stat().st_size
     if file_size > MAX_FILE_SIZE_BYTES:
-        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
-        actual_mb = file_size / (1024 * 1024)
         print(
-            f"Error: File is too large ({actual_mb:.1f} MB). "
-            f"Maximum supported size is {limit_mb} MB.",
+            f"Error: {file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)}",
             file=sys.stderr,
         )
         return EXIT_ERROR

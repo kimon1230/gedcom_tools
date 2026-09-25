@@ -65,6 +65,12 @@ def _liveness_birth_year(record: Record) -> int | None:
     1750 proves someone is dead whatever an unreadable birth line says beside
     it. The phrase gate already keeps untrusted text out, so what reaches here
     is a real year or nothing.
+
+    Stricter than _extract_year on purpose: a year recovered from free text is
+    reported as birth_year, but feeding it to estimate_living would let
+    "Reg. 1823 vol II" publish someone who is alive. And the UPPER bound,
+    because estimate_living asks "were they born long enough ago to be dead" -
+    an upper bound can only make someone younger, which can only withhold more.
     """
     years = [
         year
@@ -76,24 +82,6 @@ def _liveness_birth_year(record: Record) -> int | None:
         if year is not None
     ]
     return max(years, default=None)
-
-
-def _liveness_year(record: Record, path: str) -> int | None:
-    """Upper bound of a birth-ish year, for the liveness decision only.
-
-    Stricter than _extract_year on purpose: a year recovered from a free-text
-    phrase is reported as birth_year/death_year, but feeding it to
-    estimate_living would let "Reg. 1823 vol II" publish someone who is alive.
-
-    The UPPER bound, because estimate_living asks "were they born long enough
-    ago to be dead" - and an upper bound can only make someone younger, which
-    can only withhold more.
-    """
-    date_rec = record.sub_tag(path)
-    if date_rec is None or date_rec.value is None:
-        return None
-
-    return extract_year_latest_for_liveness(date_rec.value)
 
 
 def _death_evidence_year(record: Record, path: str) -> int | None:
@@ -129,10 +117,17 @@ def _extract_date_str(record: Record, path: str) -> str:
 
 
 def _detect_living_marker(record: Record) -> str:
-    """Check for custom living/not-living tags from genealogy software.
+    """Check for living/not-living markers on a record.
 
-    Recognized tags: _LVG (Legacy/FTM), _LIVING (RootsMagic),
-    _LVNG (FTM variant), _CONF_FLAG (PAF), _NLIV (Brother's Keeper).
+    Five are vendor tags whose NAME carries the whole meaning: _LVG
+    (Legacy/FTM), _LIVING (RootsMagic), _LVNG (FTM variant), _CONF_FLAG (PAF)
+    and _NLIV (Brother's Keeper).
+
+    RESN is different in two ways: it is standard GEDCOM 5.5.1 rather than a
+    vendor extension, and its VALUE decides - only "privacy", "confidential"
+    and "locked" mean withhold, so "RESN none" publishes. That gate is applied
+    here, and "RESN" is returned only once it has passed; estimate_living
+    matches on the tag name alone and would withhold for any value.
     """
     from gedcom_tools.commands.export.models import _LIVING_TAGS, _NOT_LIVING_TAGS
 
@@ -354,7 +349,9 @@ def collect_export_data(file_path: Path) -> ExportResult:
 
     return ExportResult(
         file_path=str(file_path),
-        encoding=encoding_info.encoding,
+        # display_encoding, not encoding: this field is only ever printed,
+        # and the raw one carries the file's own "1 CHAR" text.
+        encoding=encoding_info.display_encoding,
         individual_count=len(individuals),
         family_count=len(families),
         individuals=individuals,

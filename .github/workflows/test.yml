@@ -61,7 +61,7 @@ jobs:
       - name: Check no tree data is tracked
         run: |
           stray=$(git ls-files \
-            | grep -iE '\.(ged|gedcom|csv)$|^[^/]*\.json$' \
+            | grep -iE '\.(ged|gedcom)(\..*)?$|\.csv$|^[^/]*\.json$' \
             | grep -v '^tests/fixtures/' || true)
           if [ -n "$stray" ]; then
             echo "Tracked files carrying family tree data:"

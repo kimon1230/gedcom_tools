@@ -737,3 +737,52 @@ class TestBurialChronology:
 
     def test_no_burial_date_says_nothing(self):
         assert not self._one(birth_year=1900, birth_year_latest=1900, death_year=1960)
+
+
+def test_a_dual_date_death_is_not_before_a_next_year_birth() -> None:
+    """Reading .year instead of .dual_year invented a reversed lifespan.
+
+    "1 MAR 1665/6" is March 1666, so a birth in January 1666 precedes it. The
+    old reading made it 1665 and reported E011 on a consistent record.
+    """
+    validator = SemanticValidator()
+    validator.collect_individual(
+        IndividualInfo(
+            xref="@I1@",
+            line=1,
+            birth_year=1666,
+            birth_year_latest=1666,
+            death_year=1666,
+            death_year_latest=1666,
+        )
+    )
+    codes = {i.code for i in validator.validate()}
+    assert ErrorCode.E011_DEATH_BEFORE_BIRTH not in codes
+
+
+def test_a_parent_born_after_the_child_is_not_reported_as_too_young() -> None:
+    """E012 owns that case and words it correctly.
+
+    The too-young test compared a signed gap against MIN_PARENT_AGE, so every
+    negative value passed it and the record drew both an E012 and a W020
+    reading "was -49 at birth" - a nonsense figure beside a correct one.
+    """
+    validator = SemanticValidator()
+    validator.collect_individual(
+        IndividualInfo(
+            xref="@C@",
+            line=1,
+            birth_year=1900,
+            birth_year_latest=1900,
+            famc_xrefs=["@F@"],
+        )
+    )
+    validator.collect_individual(
+        IndividualInfo(xref="@P@", line=2, birth_year=1950, birth_year_latest=1950)
+    )
+    validator.collect_family(
+        FamilyInfo(xref="@F@", line=3, husb_xref="@P@", chil_xrefs=["@C@"])
+    )
+    codes = {i.code for i in validator.validate()}
+    assert ErrorCode.E012_BIRTH_BEFORE_PARENT in codes
+    assert ErrorCode.W020_PARENT_TOO_YOUNG not in codes

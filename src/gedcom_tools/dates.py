@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import re
+from functools import lru_cache
 
 from convertdate import (  # type: ignore[import-untyped]
     french_republican,
@@ -222,6 +223,7 @@ _FRENCH_MONTH_TO_CONVERTDATE = {
 }
 
 
+@lru_cache(maxsize=4096)
 def _hebrew_gregorian_year(
     year: int, month: int | None, day: int | None, latest: bool
 ) -> int | None:
@@ -242,6 +244,7 @@ def _hebrew_gregorian_year(
     return int(hebrew.to_gregorian(year, month, day)[0])
 
 
+@lru_cache(maxsize=4096)
 def _french_gregorian_year(
     year: int, month: int | None, day: int | None, latest: bool
 ) -> int | None:
@@ -276,6 +279,20 @@ def _gregorian_year(cal_date: object, *, latest: bool = False) -> int | None:
         year = int(year)
     except (TypeError, ValueError):
         return None
+
+    # A dual date names ONE day under two year conventions, and the second
+    # number is the Gregorian one: under Old Style the year turned on 25
+    # March, so "1 MAR 1665/6" is March 1666 on this scale. Reading .year
+    # put every such date a year early, which reported "Death (1665) before
+    # birth (1666)" on a file stating no contradiction. Safe to trust here
+    # because _cal_date_is_misparsed has already rejected any pair whose gap
+    # is not exactly one year.
+    dual = getattr(cal_date, "dual_year", None)
+    if dual is not None:
+        try:
+            year = int(dual)
+        except (TypeError, ValueError):
+            return None
 
     # BC applies to every calendar, not just the converted ones. Negating it
     # here lets the policy bound reject it rather than reading 100 B.C. as AD.
@@ -377,7 +394,9 @@ def _is_trustworthy(
     # month token nor the year, so "Reg 1823" parses as a SIMPLE date whose
     # month is "REG", and "3/1990" is read as the dual year 3 - which ages the
     # person past any lifespan and silently un-redacts them.
-    # date2 is included because it is the bound the liveness reader consumes.
+    # date2 is included because it is a half of the value like any other.
+    # The gate does not know which reader called it and checks every half
+    # against both bounds, so this is not about what one reader returns.
     checked = False
     for attr in ("date", "date1", "date2"):
         cal_date = getattr(date_val, attr, None)
@@ -392,14 +411,23 @@ def _is_trustworthy(
         # Skipping it for Hebrew and French Republican let "@#DFRENCH R@ 1 VEND
         # 230" - a date in 2021 - reach estimate_living as the number 230 and
         # read as an age of ~1796, publishing a living person.
-        year = _gregorian_year(cal_date)
-        if year is None:
+        # BOTH bounds, and the gate does not know which reader called it.
+        # Checking only the earliest let the LATEST reader return a year the
+        # gate never saw: "@#DHEBREW@ 5788" spans 2027/2028, so the earliest
+        # cleared a 2027 ceiling while 2028 went out to the caller. Threading
+        # the caller's flag instead would have been worse - it REPLACES the
+        # floor check, and "@#DHEBREW@ 4760" spans 999/1000, so the latest
+        # reader would have cleared a 1000 floor the earliest fails and
+        # published a living person.
+        earliest = _gregorian_year(cal_date, latest=False)
+        latest = _gregorian_year(cal_date, latest=True)
+        if earliest is None or latest is None:
             # A Gregorian date with no year is as unreadable as a Hebrew one
             # that would not convert; neither is safe to decide on.
             return False
         # year_floor, not MIN_PLAUSIBLE_YEAR: validation drops the 1000 floor
         # so a spec-conformant "1 JAN 0950" still reaches the chronology checks.
-        if not year_floor <= year <= max_year:
+        if earliest < year_floor or latest > max_year:
             return False
     # Nothing was examined, so nothing was verified. A structured kind whose
     # date attributes are all absent reached the caller as trustworthy, which

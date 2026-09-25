@@ -3,6 +3,7 @@ from __future__ import annotations
 import codecs
 import errno
 import os
+import stat
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -767,20 +768,59 @@ class TestWriteOutputSecurely:
             os.close(reader)
 
     @posix_only
-    def test_non_regular_target_does_not_translate_line_endings(
-        self, tmp_path: Path
+    def test_non_regular_target_is_opened_in_binary_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The regular path passes newline="" so csv.writer's own \r\n is not
-        # rewritten to \r\r\n on Windows. This branch encodes to bytes
-        # instead, which has to mean the same thing.
+        # rewritten to \r\r\n on Windows; this branch encodes to bytes, which
+        # has to mean the same thing. A round-trip assertion CANNOT prove that:
+        # POSIX text mode maps "\n" to "\n", so the regression is Windows-only
+        # and invisible to the platform that runs this test - swapping "wb" for
+        # "w" kept the whole module green. Assert the mode instead, which fails
+        # on any OS the moment the binary guard goes.
         fifo = tmp_path / "pipe"
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        modes: list[str] = []
+        real_fdopen = os.fdopen
+
+        def spy(fd: int, mode: str, *args: object, **kwargs: object) -> object:
+            modes.append(mode)
+            return real_fdopen(fd, mode, *args, **kwargs)  # type: ignore[call-overload]
+
+        monkeypatch.setattr(os, "fdopen", spy)
         try:
             assert write_output_securely(fifo, "a\r\nb", force=False) is None
             assert os.read(reader, 16) == b"a\r\nb"
         finally:
             os.close(reader)
+
+        assert modes and "b" in modes[-1]
+
+    @posix_only
+    def test_a_type_swap_between_the_stat_and_the_open_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # O_NOFOLLOW stops a SYMLINK being substituted, not an ordinary file.
+        # Driven artificially because the real window is a race: fstat is made
+        # to report a regular file after lstat chose the special-file branch.
+        # Writing there would land the export in that file with no --force, no
+        # truncation, and at whatever mode it already had.
+        fifo = tmp_path / "pipe"
+        os.mkfifo(fifo)
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+
+        class _Swapped:
+            st_mode = stat.S_IFREG | 0o644
+
+        monkeypatch.setattr(os, "fstat", lambda fd: _Swapped())
+        try:
+            result = write_output_securely(fifo, "data", force=False)
+        finally:
+            os.close(reader)
+
+        assert result is not None
+        assert "changed type" in result
 
     @posix_only
     def test_dangling_symlink_is_refused(self, tmp_path: Path) -> None:

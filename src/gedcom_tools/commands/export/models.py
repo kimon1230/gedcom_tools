@@ -87,6 +87,11 @@ def estimate_living(
     over-redacts one row, a wrong "not living" publishes a real person's
     details. Priority order:
 
+    `living_marker` is matched on the tag name alone. "RESN" reaches here only
+    when _detect_living_marker has already checked its value against the three
+    that mean withhold - it is the one marker whose value decides, and this
+    function cannot see values.
+
     1. _LVG/_LIVING/_LVNG/_CONF_FLAG → living. A file claiming someone IS
        living fails safe, so it is taken at face value.
     2. _NLIV → not living, but only when the same record carries independent

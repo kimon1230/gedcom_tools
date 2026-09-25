@@ -1,5 +1,6 @@
 import json
 import sys
+import unicodedata
 from array import array
 from pathlib import Path
 
@@ -1929,3 +1930,247 @@ class TestContinuationChainGuard:
         )
         result = ValidationEngine(ged, mode="full", quiet=True).validate()
         assert result is not None
+
+
+class TestSourceCodecForTheRawReread:
+    """W035's structural route re-reads the source line to echo it verbatim.
+
+    It decoded with EncodingInfo.encoding, which holds the file's own "1 CHAR"
+    text when there is no BOM - a GEDCOM charset name, not a Python codec. The
+    decode sits outside the function's own try block, so "1 CHAR IBMPC" beside
+    a mis-parsed date ended the whole run with LookupError and no report.
+    """
+
+    def _write(self, path, charset, date_line):
+        # write_bytes, not write_text: the ANSEL case carries real ANSEL bytes.
+        path.write_bytes(
+            b"0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            + b"1 CHAR "
+            + charset
+            + b"\n"
+            + b"0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE "
+            + date_line
+            + b"\n"
+            + b"0 TRLR\n"
+        )
+        return path
+
+    def test_a_gedcom_charset_name_no_longer_ends_the_run(self, tmp_path):
+        # IBMPC is a charset every DOS-era exporter writes and no Python codec
+        # answers to. ged4py copes with it; this call site did not.
+        ged = self._write(tmp_path / "ibmpc.ged", b"IBMPC", b"Reg 1823")
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "W035" in rendered
+        # The echo must still be the file's own text, not a normalised or
+        # mangled rendering - that is the only reason the re-read exists.
+        assert '"Reg 1823"' in rendered
+
+    def test_the_resolved_codec_is_used_not_merely_a_working_one(self, tmp_path):
+        # A bare DATE cannot carry the proof: ged4py's date grammar is
+        # ASCII-only, so any non-ASCII byte demotes the value to a phrase and
+        # the structural route never runs. INT keeps the kind and the byte.
+        # 0xE2 is ANSEL's combining acute, which PRECEDES its base letter.
+        ged = self._write(tmp_path / "ansel.ged", b"ANSEL", b"INT Reg 1823 (\xe2e)")
+        result = ValidationEngine(ged, mode="full", quiet=True).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        # The ANSEL codec emits NFD, so the composed character never appears.
+        # Asserting the literal would fail against a correct decode.
+        assert unicodedata.normalize("NFD", "é") in rendered
+        assert "�" not in rendered
+
+
+class TestChecksSeeOneSidedDates:
+    """The bound a check GATES on must be the bound its body READS.
+
+    Three checks gated on the earliest bound while consuming the latest, so a
+    one-sided date - the only shape where the two differ - skipped them
+    entirely. Exact dates hid it, because there both bounds are the same
+    number, which is why the whole class survived the original test suite.
+    Each case below is driven through the engine: the gate is only half the
+    path, and the collector has to populate the second bound at all.
+    """
+
+    def test_e012_sees_a_child_whose_latest_birth_precedes_the_parent(self, tmp_path):
+        # Latest the child can be born is 1700; earliest the parent can be is
+        # 1750. Definite, whatever the missing lower bound turns out to be.
+        ged = _write_ged(
+            tmp_path / "e012.ged",
+            [
+                "0 @I1@ INDI",
+                "1 NAME C /X/",
+                "1 BIRT",
+                "2 DATE BEF 1700",
+                "1 FAMC @F1@",
+                "0 @I2@ INDI",
+                "1 NAME P /X/",
+                "1 BIRT",
+                "2 DATE 1750",
+                "1 FAMS @F1@",
+                "0 @F1@ FAM",
+                "1 HUSB @I2@",
+                "1 CHIL @I1@",
+            ],
+        )
+        codes = {
+            i.code
+            for i in ValidationEngine(ged, mode="full", quiet=True).validate().issues
+        }
+        assert ErrorCode.E012_BIRTH_BEFORE_PARENT in codes
+
+    def test_w020_sees_a_child_whose_latest_birth_precedes_the_mother(self, tmp_path):
+        ged = _write_ged(
+            tmp_path / "w020.ged",
+            [
+                "0 @I1@ INDI",
+                "1 NAME C /X/",
+                "1 BIRT",
+                "2 DATE BEF 1900",
+                "1 FAMC @F1@",
+                "0 @I2@ INDI",
+                "1 NAME M /X/",
+                "1 SEX F",
+                "1 BIRT",
+                "2 DATE 1899",
+                "1 FAMS @F1@",
+                "0 @F1@ FAM",
+                "1 WIFE @I2@",
+                "1 CHIL @I1@",
+            ],
+        )
+        codes = {
+            i.code
+            for i in ValidationEngine(ged, mode="full", quiet=True).validate().issues
+        }
+        assert ErrorCode.W020_PARENT_TOO_YOUNG in codes
+
+    def test_an_open_lower_bound_is_not_a_contradiction(self, tmp_path):
+        # "AFT 1700" states no upper bound, so the child may well be born
+        # after the parent. Reporting E012 here would invent a claim.
+        ged = _write_ged(
+            tmp_path / "aft.ged",
+            [
+                "0 @I1@ INDI",
+                "1 NAME C /X/",
+                "1 BIRT",
+                "2 DATE AFT 1700",
+                "1 FAMC @F1@",
+                "0 @I2@ INDI",
+                "1 NAME P /X/",
+                "1 BIRT",
+                "2 DATE 1750",
+                "1 FAMS @F1@",
+                "0 @F1@ FAM",
+                "1 HUSB @I2@",
+                "1 CHIL @I1@",
+            ],
+        )
+        codes = {
+            i.code
+            for i in ValidationEngine(ged, mode="full", quiet=True).validate().issues
+        }
+        assert ErrorCode.E012_BIRTH_BEFORE_PARENT not in codes
+
+    def test_w036_sees_a_burial_before_birth_even_with_a_death_year(self, tmp_path):
+        # The death arm passes (1850 >= 1800) and E011 passes (1950 >= 1900),
+        # so picking one anchor reported this record as clean - though the
+        # burial precedes the birth by fifty years.
+        ged = _write_ged(
+            tmp_path / "w036.ged",
+            [
+                "0 @I1@ INDI",
+                "1 NAME A /B/",
+                "1 BIRT",
+                "2 DATE 1900",
+                "1 DEAT",
+                "2 DATE BET 1800 AND 1950",
+                "1 BURI",
+                "2 DATE 1850",
+            ],
+        )
+        issues = [
+            i
+            for i in ValidationEngine(ged, mode="full", quiet=True).validate().issues
+            if i.code == ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH
+        ]
+        assert len(issues) == 1
+        # Birth is the stronger claim, so it is the one named.
+        assert "birth" in issues[0].message
+
+    def test_a_burial_with_no_upper_bound_is_not_a_contradiction(self, tmp_path):
+        ged = _write_ged(
+            tmp_path / "buri_aft.ged",
+            [
+                "0 @I1@ INDI",
+                "1 NAME A /B/",
+                "1 BIRT",
+                "2 DATE 1900",
+                "1 DEAT",
+                "2 DATE 1960",
+                "1 BURI",
+                "2 DATE AFT 1950",
+            ],
+        )
+        codes = {
+            i.code
+            for i in ValidationEngine(ged, mode="full", quiet=True).validate().issues
+        }
+        assert ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH not in codes
+
+
+class TestNonstandardDateReread:
+    """The W035 echo re-reads the source line; that read must obey the cap.
+
+    _raw_date_value opens the file, seeks and reads. Its own docstring said it
+    ran at most MAX_ISSUES_PER_CODE times, but the call sat ABOVE the cap
+    check, so it ran once per mis-parsed date - and a tree whose exporter
+    writes every date as "3/1990" is a realistic shape, not a contrived one.
+    """
+
+    def _many(self, tmp_path, count):
+        body = "".join(
+            f"0 @I{i}@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 3/1990\n"
+            for i in range(count)
+        )
+        path = tmp_path / "many.ged"
+        path.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\n" + body + "0 TRLR\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_reread_stops_at_the_reporting_cap(self, tmp_path):
+        count = MAX_ISSUES_PER_CODE * 5
+        engine = ValidationEngine(self._many(tmp_path, count), mode="full", quiet=True)
+        calls = []
+        real = engine._raw_date_value
+        engine._raw_date_value = lambda line: (calls.append(line), real(line))[1]
+        engine.validate()
+
+        assert len(calls) == MAX_ISSUES_PER_CODE
+
+    def test_an_unreadable_reread_still_reports_and_counts(self, tmp_path, monkeypatch):
+        # Driven artificially: all three routes to an empty re-read are
+        # unreachable from a well-formed file, so there is no fixture for
+        # this. Before, the detection was discarded silently AND left out of
+        # the tally - the tool knew and said nothing.
+        #
+        # The tally assertion lives here rather than in a test of its own: on
+        # a well-formed file the pre-fix code counted every detection too, so
+        # a standalone version passed a full revert and proved nothing. Only
+        # the unreadable case separates "counted" from "not counted".
+        count = MAX_ISSUES_PER_CODE * 5
+        ged = self._many(tmp_path, count)
+        engine = ValidationEngine(ged, mode="full", quiet=True)
+        monkeypatch.setattr(engine, "_raw_date_value", lambda line: "")
+        result = engine.validate()
+
+        issues = [i for i in result.issues if i.code == ErrorCode.W035_NONSTANDARD_DATE]
+        assert issues
+        # Never an empty quoted echo - it would name none of the causes.
+        assert '""' not in issues[0].message
+        assert "could not be re-read" in issues[0].message
+        assert result.suppressed_counts["W035"] == count - MAX_ISSUES_PER_CODE

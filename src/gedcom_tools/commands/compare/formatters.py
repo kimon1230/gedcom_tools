@@ -252,14 +252,14 @@ def format_json(
         "file_b": scrub_line(result.file_b),
         "filename_b": scrub_line(Path(result.file_b).name),
         "encoding_a": {
-            "detected": result.encoding_a.encoding,
+            "detected": result.encoding_a.display_encoding,
             "has_bom": result.encoding_a.has_bom,
-            "declared": result.encoding_a.declared_charset,
+            "declared": result.encoding_a.display_declared,
         },
         "encoding_b": {
-            "detected": result.encoding_b.encoding,
+            "detected": result.encoding_b.display_encoding,
             "has_bom": result.encoding_b.has_bom,
-            "declared": result.encoding_b.declared_charset,
+            "declared": result.encoding_b.display_declared,
         },
         "total_a": result.total_a,
         "total_b": result.total_b,

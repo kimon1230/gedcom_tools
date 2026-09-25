@@ -545,9 +545,9 @@ class StatsResult:
         # Encoding
         if self.encoding_info:
             data["encoding"] = {
-                "detected": self.encoding_info.encoding,
+                "detected": self.encoding_info.display_encoding,
                 "has_bom": self.encoding_info.has_bom,
-                "declared": self.encoding_info.declared_charset,
+                "declared": self.encoding_info.display_declared,
             }
 
         # Timeline entries

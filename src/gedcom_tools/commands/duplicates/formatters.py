@@ -173,9 +173,9 @@ def format_json(
         "file": scrub_line(result.file),
         "filename": scrub_line(Path(result.file).name),
         "encoding": {
-            "detected": result.encoding.encoding,
+            "detected": result.encoding.display_encoding,
             "has_bom": result.encoding.has_bom,
-            "declared": result.encoding.declared_charset,
+            "declared": result.encoding.display_declared,
         },
         "total_individuals": result.total_individuals,
         "certain_duplicates": [_pair_to_dict(p) for p in certain_display],

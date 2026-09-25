@@ -17,6 +17,7 @@ from gedcom_tools.dates import (
     extract_year_for_validation,
     extract_year_from_date,
     extract_year_latest_for_liveness,
+    extract_year_latest_for_validation,
     extract_year_latest_from_date,
     get_century,
     is_clean_date_phrase,
@@ -746,7 +747,7 @@ def test_validation_year_keeps_a_clean_phrase_year() -> None:
     assert extract_year_for_validation(clean) == 1989
 
 
-def test_liveness_year_rejects_even_a_clean_phrase() -> None:
+def test_liveness_reader_rejects_even_a_clean_phrase() -> None:
     # The liveness twin of the test above. A clean phrase cannot be told apart
     # from a citation shaped like a date, and acting on a wrong one publishes
     # a living person - so redaction refuses the whole class.
@@ -824,7 +825,12 @@ def test_pre_floor_year_is_validated_but_not_acted_on(text: str, expected: int) 
     "text,expected",
     [
         ("1 JAN 1900", 1900),
-        ("1750/51", 1750),  # dual date, the older year is real
+        # Dual date: the SECOND number is the Gregorian one. Under Old
+        # Style the year turned on 25 March, so a dual date names one day
+        # under two conventions and 1751 is the one on this scale. This
+        # row asserted 1750 and encoded an off-by-one that reported
+        # "Death (1665) before birth (1666)" on consistent files.
+        ("1750/51", 1751),
     ],
 )
 def test_plausible_structured_year_survives(text: str, expected: int) -> None:
@@ -973,3 +979,72 @@ def test_hebrew_dispatch_survives_a_ged4py_class_rename() -> None:
     cal = date_val.date
     cal.__class__ = renamed
     assert extract_year_for_liveness(date_val) == 2025
+
+
+class TestTheTrustGateChecksBothBounds:
+    """The gate is two-sided and does not know which reader called it.
+
+    A non-Gregorian year spans two Gregorian ones, so "the year" is two
+    numbers. Checking one and returning the other is how a date outside the
+    ceiling reached a caller; threading the caller's choice instead would
+    swap which check runs, and that is worse - it drops the floor for the
+    latest reader, which is the direction that publishes a living person.
+    """
+
+    def test_a_year_past_the_ceiling_is_refused_by_both_readers(self) -> None:
+        # 5788 spans 2027/2028. The earliest cleared a 2027 cap; the latest
+        # did not, and the latest is what extract_year_latest_* returns.
+        date_val = DateValue.parse("@#DHEBREW@ 5788")
+        assert extract_year_for_liveness(date_val, 2026) is None
+        assert extract_year_latest_for_liveness(date_val, 2026) is None
+
+    def test_a_year_below_the_floor_is_refused_by_the_latest_reader_too(
+        self,
+    ) -> None:
+        # 4760 spans 999/1000. Had the gate been made caller-dependent, the
+        # latest reader would have bounds-checked 1000, cleared the liveness
+        # floor of 1000, and returned a year for a date whose earliest bound
+        # the same policy rejects - publishing someone the file never dated.
+        date_val = DateValue.parse("@#DHEBREW@ 4760")
+        assert extract_year_for_liveness(date_val, 2026) is None
+        assert extract_year_latest_for_liveness(date_val, 2026) is None
+
+    def test_the_floor_is_the_liveness_policy_not_the_gate(self) -> None:
+        # The same date under validation, which carries no 1000 floor. The
+        # gate itself is reader-agnostic; the POLICY differs.
+        date_val = DateValue.parse("@#DHEBREW@ 4760")
+        assert extract_year_for_validation(date_val, 2026) == 999
+        assert extract_year_latest_for_validation(date_val, 2026) == 1000
+
+    def test_a_current_year_hebrew_date_is_still_trusted(self) -> None:
+        # Over-rejection guard: 5787 spans 2026/2027 and sits one Hebrew year
+        # below the refused case, so it proves the ceiling rejects 5788
+        # without rejecting dates that are merely recent.
+        date_val = DateValue.parse("@#DHEBREW@ 5787")
+        assert extract_year_for_liveness(date_val, 2026) == 2026
+        assert extract_year_latest_for_liveness(date_val, 2026) == 2027
+
+    def test_ordinary_and_one_sided_dates_are_unaffected(self) -> None:
+        assert extract_year_for_liveness(DateValue.parse("1 JAN 1900")) == 1900
+        assert extract_year_latest_for_liveness(DateValue.parse("BEF 1900")) == 1900
+        # A mixed-calendar range still converts both halves.
+        mixed = DateValue.parse("BET 1800 AND @#DHEBREW@ 5700")
+        assert extract_year_for_liveness(mixed) == 1800
+        assert extract_year_latest_for_liveness(mixed) == 1940
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("1 MAR 1665/6", 1666),
+        ("12 MAR 1637/1638", 1638),
+        ("1750/51", 1751),
+    ],
+)
+def test_a_dual_date_reads_the_gregorian_year(text: str, expected: int) -> None:
+    # Old Style turned the year on 25 March, so a date written "1665/6" is one
+    # day under two conventions and the second number is the Gregorian one.
+    # Both bounds are that year - a dual date is not a range.
+    date_val = DateValue.parse(text)
+    assert extract_year_for_validation(date_val) == expected
+    assert extract_year_latest_for_validation(date_val) == expected

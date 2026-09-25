@@ -1,3 +1,7 @@
+import dataclasses
+
+import pytest
+
 from gedcom_tools.utils import EncodingInfo
 from gedcom_tools.validation.issues import (
     MAX_ISSUE_TEXT,
@@ -194,3 +198,17 @@ class TestIssueTextIsBounded:
         # anyway and the visible text is cut far shorter than intended.
         padded = "\x1b[31m" * 200 + "the real message"
         assert "the real message" in self._issue(padded).message
+
+
+def test_an_issue_cannot_be_rewritten_after_construction() -> None:
+    """The scrub is an invariant of the type, and freezing is what keeps it.
+
+    Without frozen=True a later assignment could put raw file text back into
+    a message that __post_init__ had already cleaned, and nothing would say
+    so - the CHANGELOG claims this guarantee, so something has to hold it.
+    """
+    issue = ValidationIssue(
+        code=ErrorCode.W002_TRAILING_WHITESPACE, message="clean", line=1
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        issue.message = "\x1b[31mraw"  # type: ignore[misc]

@@ -94,7 +94,7 @@ Errors (5):
     Line 1813: @I169@ Born (1931) before parent @I812@ (1980)
   ...
 
-✗ Invalid (5 error(s), 39 warning(s))
+✗ Invalid (5 error(s), 35 warning(s))
 ```
 
 Quick mode fails fast on the first error. Use `--full` to see everything.
@@ -127,7 +127,7 @@ Errors (5):
   [E011] Death date before birth date
     Line 22905: @I2948@ Death (1906) before birth (1941)
 
-Warnings (39):
+Warnings (35):
   [W005] Missing SUBM record
     Line 1: No SUBM (submitter) record referenced in HEAD
   [W035] Date not in GEDCOM format
@@ -144,12 +144,12 @@ Warnings (39):
     Line 24039: @F101@ Child @I315@ born (1964) before marriage (1967)
   ...
   [W020] Parent too young at child's birth
-    Line 1813: @I169@ Mother @I812@ was -49 at birth
+    Line 11298: @I1298@ Father @I1296@ was 2 at birth
   [W022] Father too old at child's birth
     Line 7294: @I812@ Father @I2946@ was 108 at birth
   ...
 
-✗ Invalid (5 error(s), 39 warning(s))
+✗ Invalid (5 error(s), 35 warning(s))
 ```
 
 Every issue includes a code, description, line number, and actionable message.

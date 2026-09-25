@@ -71,7 +71,7 @@ class ValidationResult:
         # errors="replace", which preserves every C0 byte.
         lines.append(f"File: {scrub_line(self.file_path)}")
         if self.encoding_info:
-            lines.append(f"Encoding: {scrub_line(str(self.encoding_info))}")
+            lines.append(f"Encoding: {self.encoding_info}")
 
         # Record counts summary
         if self.record_counts:
@@ -157,13 +157,11 @@ class ValidationResult:
         encoding_data: dict[str, object] | None = None
         if self.encoding_info:
             encoding_data = {
-                "detected": scrub_line(self.encoding_info.encoding),
+                # Scrubbed by EncodingInfo now, not here - one chokepoint so a
+                # new consumer cannot forget it the way eight others did.
+                "detected": self.encoding_info.display_encoding,
                 "has_bom": self.encoding_info.has_bom,
-                "declared": (
-                    scrub_line(self.encoding_info.declared_charset)
-                    if self.encoding_info.declared_charset
-                    else self.encoding_info.declared_charset
-                ),
+                "declared": self.encoding_info.display_declared,
             }
 
         issues_list: list[dict[str, object]] = []

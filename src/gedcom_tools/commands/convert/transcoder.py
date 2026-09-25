@@ -16,6 +16,7 @@ from gedcom_tools.progress import Colors, glyphs
 from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
+    file_too_large_message,
     scrub_line,
     strip_bom,
     write_output_securely,
@@ -191,12 +192,7 @@ def transcode(
 
     file_size = source_path.stat().st_size
     if file_size > MAX_FILE_SIZE_BYTES:
-        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
-        actual_mb = file_size / (1024 * 1024)
-        msg = (
-            f"File is too large ({actual_mb:.1f} MB). "
-            f"Maximum supported size is {limit_mb} MB."
-        )
+        msg = file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)
         raise ValueError(msg)
 
     raw = source_path.read_bytes()

@@ -244,6 +244,14 @@ individuals. When present, these tags override all date-based inference:
 | `_LVNG` | Family Tree Maker (variant) | Living |
 | `_CONF_FLAG` | Personal Ancestral File (PAF) | Living (confidential) |
 | `_NLIV` | Brother's Keeper | Not living |
+| `RESN` | GEDCOM 5.5.1 (standard) | Living, when the value is `privacy`, `confidential` or `locked` |
+
+`RESN` is the only one whose **value** decides. The five vendor tags
+mean what their name says wherever they appear; `RESN none` publishes,
+and a `RESN` carrying any other value is ignored. It is also the only
+standard tag in the set - the others are extensions, and the tool
+honoured all five of them while ignoring the one the specification
+actually defines.
 
 A living tag is taken at face value, since believing it can only over-redact.
 `_NLIV` is honoured only when the same record carries independent death
