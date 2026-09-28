@@ -587,6 +587,14 @@ _SPOOF_GED = (
 )
 
 
+# POSIX permits a newline in a filename; Windows rejects it with EINVAL at
+# creation, so the attack this guards against cannot exist there and the
+# fixture cannot even be written. The scrub itself is platform-independent and
+# is still covered on Windows by the C1 test below.
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="a newline in a filename is a POSIX-only possibility",
+)
 @pytest.mark.parametrize("command,extra", _TEXT_PATH_EMITTERS)
 def test_a_filename_cannot_forge_a_line_of_the_report(
     command, extra, tmp_path, capsys, monkeypatch
