@@ -387,6 +387,7 @@ mypy src/
 
 ```bash
 pip-audit
+bandit -c pyproject.toml -r src/
 ```
 
 This also runs in the `quality` CI job and fails the build, so it can go red
@@ -397,6 +398,23 @@ otherwise fail the build over the runner image. The job additionally refuses
 any tracked `.ged`/`.gedcom`/`.csv`/root-level `.json` outside
 `tests/fixtures/`: `.gitignore` is all that stands between a real family tree
 and the public remote, and `git add -f` walks straight past it.
+
+`bandit` is the SAST pass over this project's own code, added after a security
+review found a TOCTOU in the output writer that every other gate gave a clean
+bill — it flags exactly that shape, an `os.open` whose descriptor is never
+re-checked and a permission call wrapped in a bare `suppress`. The `-c
+pyproject.toml` is load-bearing: `[tool.bandit]` there skips `B101`, because
+the one `assert` in `src/` is a mypy narrowing guard that already carries a
+`# noqa: S101` for ruff's identical rule, and converting it to a `raise` would
+change runtime behaviour to satisfy a linter.
+
+`pip-audit` deliberately runs **without** `--strict`. That flag escalates any
+package it cannot resolve into an error, and this project is installed editable
+and is not on PyPI, so it can never be resolved; `--skip-editable` does not
+rescue it either, because `--strict` escalates the skip notice as well. Both
+combinations were tried against a clean checkout. A stale `src/*.egg-info` left
+in a working tree also registers as an installed distribution and will produce
+a phantom entry locally that CI never sees.
 
 ## Adding a New Command
 
@@ -487,7 +505,8 @@ and the public remote, and `git add -f` walks straight past it.
 - `ruff` - Linting
 - `black` - Code formatting
 - `mypy` - Type checking
-- `pip-audit` - Security vulnerability scanning
+- `pip-audit` - Dependency vulnerability scanning
+- `bandit` - Static analysis of this project's own code
 
 ## Versioning
 
@@ -507,3 +526,11 @@ When making changes:
 4. A change that alters output for input the tool already accepted is a minor, not a
    patch, even when it arrives as the fix for a security defect — the user upgrading
    sees different results either way
+
+Publishing is driven by a GitHub release, which triggers `publish.yml`. That
+workflow now **calls `test.yml` and waits for it** before building, so the full
+matrix — quality, both Linux legs, both Windows legs and both redirected-output
+legs — has to pass before anything reaches PyPI. It previously ran no tests at
+all, so a tag cut from a red commit shipped regardless. It calls the workflow
+rather than repeating its steps, which is what stops the release gate and the
+pull-request gate drifting apart.
