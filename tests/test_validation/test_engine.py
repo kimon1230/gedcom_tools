@@ -2174,3 +2174,52 @@ class TestNonstandardDateReread:
         assert '""' not in issues[0].message
         assert "could not be re-read" in issues[0].message
         assert result.suppressed_counts["W035"] == count - MAX_ISSUES_PER_CODE
+
+
+class TestCarriageReturnOnlyFiles:
+    """ged4py reads through BinaryFileCR, which stops at CR as well as LF.
+
+    A plain file handle splits on LF only, so a classic Mac export - all CR,
+    no LF - collapsed to a single line: every issue reported at line 1, a
+    spurious W003 for the whole file's length, and a W035 echo that seeked to
+    offset 0 and printed the HEAD block. HEAD commonly carries `1 FILE` with
+    the exporter's local path and username, and validation reports have no
+    --redact-living and are routinely pasted into bug trackers.
+    """
+
+    def _cr_only(self, tmp_path):
+        path = tmp_path / "cronly.ged"
+        path.write_bytes(
+            b"0 HEAD\r1 SOUR PAF\r1 FILE /home/someone/trees/family.ged\r"
+            b"1 GEDC\r2 VERS 5.5.1\r2 FORM LINEAGE-LINKED\r1 CHAR UTF-8\r"
+            b"0 @I1@ INDI\r1 NAME A /B/\r1 BIRT\r2 DATE Reg 1823\r0 TRLR\r"
+        )
+        return path
+
+    def test_the_head_block_does_not_leak_into_a_w035_echo(self, tmp_path):
+        result = ValidationEngine(
+            self._cr_only(tmp_path), mode="full", quiet=True
+        ).validate()
+        rendered = result.format_text(Colors(force_disable=True))
+
+        assert "W035" in rendered
+        assert '"Reg 1823"' in rendered
+        # The exporter's own path lives in HEAD and is nobody's business here.
+        assert "/home/someone" not in rendered
+
+    def test_line_numbers_are_not_all_one(self, tmp_path):
+        result = ValidationEngine(
+            self._cr_only(tmp_path), mode="full", quiet=True
+        ).validate()
+
+        lines = {i.line for i in result.issues if i.line is not None}
+        assert lines - {1}, "every issue collapsed to line 1"
+
+    def test_no_spurious_line_too_long_warning(self, tmp_path):
+        # The whole file read as one line trips the 255-byte check.
+        result = ValidationEngine(
+            self._cr_only(tmp_path), mode="full", quiet=True
+        ).validate()
+
+        codes = {i.code for i in result.issues}
+        assert ErrorCode.W003_LINE_TOO_LONG not in codes

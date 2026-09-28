@@ -161,10 +161,13 @@ def _family_csv_row(
     marriage_year = fam.marriage_year
     marriage_place = fam.marriage_place
     if living_xrefs:
-        if fam.husband_xref in living_xrefs:
+        # A RESN the user put on the FAM record withholds the couple, the same
+        # way a living spouse does. Their software was told to keep this
+        # family private; publishing it discards that instruction.
+        if fam.restricted or fam.husband_xref in living_xrefs:
             husband_xref = ""
             husband_name = "Living"
-        if fam.wife_xref in living_xrefs:
+        if fam.restricted or fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
@@ -174,7 +177,7 @@ def _family_csv_row(
         # entries rather than blanking them in place is what removes the
         # birth-order position.
         children_xrefs = [x for x in children_xrefs if x]
-        if _spouse_is_living(fam, living_xrefs):
+        if _spouse_is_living(fam, living_xrefs) or fam.restricted:
             marriage_date = ""
             marriage_year = None
             marriage_place = ""
@@ -250,7 +253,7 @@ def format_csv(
 
 
 def _individual_to_dict(
-    indi: ExportIndividual, redacted: bool = False
+    indi: ExportIndividual, redacted: bool = False, *, withhold_notes: bool = False
 ) -> dict[str, Any]:
     if redacted:
         return {
@@ -293,7 +296,19 @@ def _individual_to_dict(
         "famc_xref": indi.famc_xref,
         "fams_xrefs": list(indi.fams_xrefs),
         "alt_names": [{"given": g, "surname": s} for g, s in indi.alt_names],
-        "notes": list(indi.notes),
+        # Dropped from EVERY row while redacting, not just redacted ones. A
+        # note is free prose, and the prose genealogy software puts there is
+        # exactly "her daughter Carol Roe, born 3 March 1992 at 14 Acacia
+        # Avenue" - on the DECEASED mother's record. Blanking the daughter's
+        # own fields and then republishing that sentence hands back her name,
+        # birth date and address, so the control undoes itself.
+        #
+        # Name-matching cannot rescue it: real notes say "my daughter", or use
+        # a maiden name, or a nickname. The cost is losing genuine notes about
+        # the dead, which is the same trade --redact-living already makes on
+        # dates. Occupations stay: OCCU is a short fact about its own subject,
+        # not prose about third parties.
+        "notes": [] if withhold_notes else list(indi.notes),
     }
 
 
@@ -309,14 +324,17 @@ def _family_to_dict(
     marriage_year = fam.marriage_year
     marriage_place = fam.marriage_place
     if living_xrefs:
-        if fam.husband_xref in living_xrefs:
+        # A RESN the user put on the FAM record withholds the couple, the same
+        # way a living spouse does. Their software was told to keep this
+        # family private; publishing it discards that instruction.
+        if fam.restricted or fam.husband_xref in living_xrefs:
             husband_xref = ""
             husband_name = "Living"
-        if fam.wife_xref in living_xrefs:
+        if fam.restricted or fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = [x for x in children_xrefs if x not in living_xrefs]
-        if _spouse_is_living(fam, living_xrefs):
+        if _spouse_is_living(fam, living_xrefs) or fam.restricted:
             marriage_date = ""
             marriage_year = None
             marriage_place = ""
@@ -356,7 +374,9 @@ def format_json(
         },
         "individuals": [
             _individual_to_dict(
-                indi, redacted=living_xrefs is not None and indi.xref in living_xrefs
+                indi,
+                redacted=living_xrefs is not None and indi.xref in living_xrefs,
+                withhold_notes=redact_living,
             )
             for indi in result.individuals
         ],

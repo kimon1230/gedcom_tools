@@ -46,9 +46,24 @@ jobs:
 
       # Audits the resolved environment, so it can go red from a third-party
       # advisory rather than a code change - same trade as the uncapped dev
-      # tools. The editable install is skipped automatically (not on PyPI).
+      # tools.
+      #
+      # NOT --strict: this project is installed editable and is not on PyPI,
+      # so pip-audit cannot resolve it, and --strict escalates that to an
+      # error - including the "distribution marked as editable" notice that
+      # --skip-editable emits, so the two flags cannot be combined here.
+      # Verified both ways in a clean checkout. The gap --strict would close
+      # is a dependency that cannot be resolved; every real dependency here
+      # resolves, so the plain form fails on advisories as intended.
       - name: Audit dependencies
         run: pip-audit
+
+      # SAST for this project's own code. Added after a security review found
+      # a TOCTOU in the output writer that every other gate passed: bandit
+      # flags exactly that shape - an os.open whose descriptor is never
+      # re-checked, a permission call wrapped in a bare suppress.
+      - name: Static analysis
+        run: bandit -c pyproject.toml -r src/ -q
 
       # .gitignore is the only thing standing between a real family tree and
       # the public remote, and `git add -f` walks straight past it. The

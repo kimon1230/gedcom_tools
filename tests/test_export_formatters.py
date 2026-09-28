@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from gedcom_tools.commands.export import run
+from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import (
     _CSV_TRIGGERS,
     _FAM_CSV_COLUMNS,
@@ -1256,3 +1257,58 @@ class TestRedactionParity:
         _, _, data = _parity_export()
         for indi in data["individuals"]:
             assert set(indi) - set(_INDI_CSV_COLUMNS) == {"alt_names", "notes"}
+
+
+class TestRedactionCannotBeReversed:
+    """Blanking a living person's fields is undone by prose about them.
+
+    Both cases below publish a LIVING person through a record redaction was
+    never asked to touch: a deceased relative's note, and a family the user's
+    own software marked confidential.
+    """
+
+    def _ged(self, tmp_path):
+        path = tmp_path / "priv.ged"
+        path.write_text(
+            "0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+            "1 CHAR UTF-8\n"
+            "0 @I3@ INDI\n1 NAME Carol /Roe/\n1 BIRT\n2 DATE 3 MAR 1992\n"
+            "0 @I5@ INDI\n1 NAME Mum /Roe/\n1 BIRT\n2 DATE 1 JAN 1900\n"
+            "1 DEAT\n2 DATE 1 JAN 1980\n"
+            "1 NOTE Her daughter Carol Roe was born 3 March 1992 at 14 Acacia Avenue\n"
+            "0 @F1@ FAM\n1 RESN confidential\n1 HUSB @I5@\n1 MARR\n"
+            "2 DATE 12 JUN 1930\n2 PLAC 14 Acacia Avenue, Springfield\n"
+            "0 TRLR\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_a_note_on_a_published_row_cannot_republish_a_redacted_person(
+        self, tmp_path
+    ):
+        result = collect_export_data(self._ged(tmp_path))
+        data = json.loads(format_json(result, redact_living=True))
+
+        carol = [i for i in data["individuals"] if i["xref"] == "@I3@"][0]
+        assert carol["given_name"] == "Living"
+        # The mother is deceased and published; her note named her daughter.
+        blob = json.dumps(data)
+        assert "Carol" not in blob
+        assert "Acacia" not in blob
+
+    def test_notes_still_export_when_redaction_is_not_asked_for(self, tmp_path):
+        result = collect_export_data(self._ged(tmp_path))
+        data = json.loads(format_json(result, redact_living=False))
+
+        assert "Acacia" in json.dumps(data)
+
+    def test_a_family_marked_confidential_is_withheld(self, tmp_path):
+        result = collect_export_data(self._ged(tmp_path))
+        data = json.loads(format_json(result, redact_living=True))
+
+        fam = data["families"][0]
+        # GEDCOM 5.5.1 allows RESN on FAM; the user's software was told to
+        # keep this family private.
+        assert fam["marriage_date"] == ""
+        assert fam["marriage_place"] == ""
+        assert fam["husband_name"] == "Living"

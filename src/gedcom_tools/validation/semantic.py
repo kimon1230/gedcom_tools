@@ -125,8 +125,18 @@ class SemanticValidator:
         return issues
 
     def _check_date_logic(self) -> list[ValidationIssue]:
-        """Check for impossible date relationships."""
-        issues = []
+        """Check for impossible date relationships.
+
+        Split by the record type each check walks, which is how every
+        other method in this class is scoped. The two loops share nothing
+        but the issue list, and the bound pairing a check needs is easier
+        to hold in mind without four unrelated ones beside it.
+        """
+        return self._check_individual_date_logic() + (self._check_family_date_logic())
+
+    def _check_individual_date_logic(self) -> list[ValidationIssue]:
+        """E011 death-before-birth, W036 burial order, E012 birth-before-parent."""
+        issues: list[ValidationIssue] = []
 
         for xref, indi in self.individuals.items():
             # Death before birth
@@ -230,6 +240,12 @@ class SemanticValidator:
                                     xref=xref,
                                 )
                             )
+
+        return issues
+
+    def _check_family_date_logic(self) -> list[ValidationIssue]:
+        """W024 marriage-before-birth and W025 child-before-marriage."""
+        issues: list[ValidationIssue] = []
 
         # Marriage before birth
         for fam_xref, fam in self.families.items():

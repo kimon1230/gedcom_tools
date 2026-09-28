@@ -20,6 +20,7 @@ from gedcom_tools.dates import (
     extract_year_latest_for_validation,
     extract_year_latest_from_date,
     get_century,
+    has_unreadable_structure,
     is_clean_date_phrase,
     is_phrase_date,
     resolve_current_year,
@@ -1048,3 +1049,31 @@ def test_a_dual_date_reads_the_gregorian_year(text: str, expected: int) -> None:
     date_val = DateValue.parse(text)
     assert extract_year_for_validation(date_val) == expected
     assert extract_year_latest_for_validation(date_val) == expected
+
+
+# Only tokens ged4py parses as a structured date reach this predicate: its
+# month grammar is [A-Z]{3,4}, so "MARCHED 1700" and "DECEMB 1850" are
+# PHRASE values taking a different route with its own gate. These four
+# fit the grammar and were all trusted before.
+@pytest.mark.parametrize("text", ["JANE 1900", "DECD 1850", "JANU 1700", "OCTO 1800"])
+def test_a_token_that_merely_starts_like_a_month_is_not_one(text: str) -> None:
+    """The check matched a three-character prefix, so junk passed as a month.
+
+    "JANE 1900" parses as a structured date whose month is "JANE", and the
+    year beside it became trustworthy - enough to age someone past max_age and
+    publish them - while W035 stayed silent, because it shares this predicate
+    and saw nothing wrong.
+    """
+    date_val = DateValue.parse(text)
+    assert extract_year_latest_for_liveness(date_val) is None
+    assert has_unreadable_structure(date_val)
+
+
+@pytest.mark.parametrize("text", ["JUNE 1900", "JULY 1900", "SEPT 1900"])
+def test_the_long_spellings_ged4py_accepts_still_work(text: str) -> None:
+    # ged4py parses three of the twelve full names and leaves month_num unset
+    # for them, which is the whole reason the fallback exists. Rejecting these
+    # would break real dates.
+    date_val = DateValue.parse(text)
+    assert extract_year_latest_for_liveness(date_val) == 1900
+    assert not has_unreadable_structure(date_val)

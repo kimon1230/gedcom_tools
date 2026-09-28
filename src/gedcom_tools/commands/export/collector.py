@@ -116,6 +116,21 @@ def _extract_date_str(record: Record, path: str) -> str:
     return str(date_rec.value)
 
 
+def _is_restricted(record: Record) -> bool:
+    """Whether this record carries a RESN the user meant as "withhold".
+
+    Separate from _detect_living_marker because only RESN is meaningful on a
+    FAM record - the five vendor tags are all about an individual's liveness,
+    and _NLIV in particular means the OPPOSITE of withhold, so reusing that
+    function here would mark a family restricted for saying someone is dead.
+    """
+    for sub in record.sub_records:
+        if str(sub.tag).upper() == "RESN":
+            if str(sub.value or "").strip().upper() in _RESN_PRIVATE:
+                return True
+    return False
+
+
 def _detect_living_marker(record: Record) -> str:
     """Check for living/not-living markers on a record.
 
@@ -308,6 +323,7 @@ def _build_family(record: Record, xref: str, name_map: dict[str, str]) -> Export
 
     return ExportFamily(
         xref=xref,
+        restricted=_is_restricted(record),
         husband_xref=husband_xref,
         husband_name=name_map.get(husband_xref, ""),
         wife_xref=wife_xref,

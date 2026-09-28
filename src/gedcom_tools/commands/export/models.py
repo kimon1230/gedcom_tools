@@ -51,6 +51,10 @@ class ExportFamily:
     marriage_place: str = ""
     child_count: int = 0
     children_xrefs: list[str] = field(default_factory=list)
+    # GEDCOM 5.5.1 allows RESN on a FAM record, not only on INDI. A family the
+    # user's software marked confidential was published in full: marriage
+    # date, named venue and both spouse names.
+    restricted: bool = False
 
 
 @dataclass

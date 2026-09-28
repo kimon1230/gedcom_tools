@@ -8,7 +8,13 @@ from bisect import bisect_left
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, Literal
 
-from ged4py.parser import CodecError, GedcomReader, IntegrityError, ParserError
+from ged4py.parser import (  # type: ignore[attr-defined]
+    BinaryFileCR,
+    CodecError,
+    GedcomReader,
+    IntegrityError,
+    ParserError,
+)
 
 from gedcom_tools.constants import MAX_FILE_SIZE_BYTES, VALID_SEX_VALUES
 from gedcom_tools.dates import (
@@ -239,7 +245,14 @@ class ValidationEngine:
         self._paren_date_lines = array("Q")
         seen: dict[ErrorCode, int] = {}
         continuation_run = 0
-        with open(self.file_path, "rb") as f:
+        # BinaryFileCR, not a plain handle: ged4py reads through it, so it
+        # stops at CR as well as LF. A plain file splits on LF only, which on
+        # a classic Mac CR-only export makes the WHOLE FILE line 1 - every
+        # issue reported at line 1, a spurious W003 for the file's length, and
+        # a W035 echo that seeks offset 0 and prints the HEAD block, which
+        # commonly carries the exporter's local path and username. The line
+        # map has to agree with the parser it is indexing.
+        with BinaryFileCR(open(self.file_path, "rb")) as f:
             offset = 0
             line_num = 0
             for line in f:
@@ -347,7 +360,9 @@ class ValidationEngine:
         if not 1 <= line <= len(self._line_offsets):
             return ""
         try:
-            with open(self.file_path, "rb") as f:
+            # Same reader as the line map above, so the offsets it recorded
+            # mean the same thing here.
+            with BinaryFileCR(open(self.file_path, "rb")) as f:
                 f.seek(self._line_offsets[line - 1])
                 raw = f.readline()
         except OSError:

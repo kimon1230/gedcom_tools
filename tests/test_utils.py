@@ -754,7 +754,7 @@ class TestWriteOutputSecurely:
         # /dev/null cannot be created, truncated or chmod-ed, so it takes the
         # branch that does none of those - which still opens O_NOFOLLOW.
         devnull = Path(os.devnull)
-        assert write_output_securely(devnull, b"data", force=False) is None
+        assert write_output_securely(devnull, b"data", force=True) is None
 
     @posix_only
     def test_non_regular_target_accepts_text_too(self, tmp_path: Path) -> None:
@@ -762,7 +762,7 @@ class TestWriteOutputSecurely:
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            assert write_output_securely(fifo, "hello", force=False) is None
+            assert write_output_securely(fifo, "hello", force=True) is None
             assert os.read(reader, 16) == b"hello"
         finally:
             os.close(reader)
@@ -790,7 +790,7 @@ class TestWriteOutputSecurely:
 
         monkeypatch.setattr(os, "fdopen", spy)
         try:
-            assert write_output_securely(fifo, "a\r\nb", force=False) is None
+            assert write_output_securely(fifo, "a\r\nb", force=True) is None
             assert os.read(reader, 16) == b"a\r\nb"
         finally:
             os.close(reader)
@@ -798,7 +798,7 @@ class TestWriteOutputSecurely:
         assert modes and "b" in modes[-1]
 
     @posix_only
-    def test_a_type_swap_between_the_stat_and_the_open_is_refused(
+    def test_a_substituted_object_at_the_same_path_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # O_NOFOLLOW stops a SYMLINK being substituted, not an ordinary file.
@@ -810,17 +810,23 @@ class TestWriteOutputSecurely:
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
 
+        # A DIFFERENT object at the same path: same type, different inode.
+        # Comparing only the type bits would pass this, which is why the
+        # check compares identity - an attacker who wins the race supplies
+        # whatever type the guard is looking for.
         class _Swapped:
-            st_mode = stat.S_IFREG | 0o644
+            st_mode = stat.S_IFIFO | 0o600
+            st_dev = os.lstat(fifo).st_dev
+            st_ino = os.lstat(fifo).st_ino + 1
 
         monkeypatch.setattr(os, "fstat", lambda fd: _Swapped())
         try:
-            result = write_output_securely(fifo, "data", force=False)
+            result = write_output_securely(fifo, "data", force=True)
         finally:
             os.close(reader)
 
         assert result is not None
-        assert "changed type" in result
+        assert "was replaced" in result
 
     @posix_only
     def test_dangling_symlink_is_refused(self, tmp_path: Path) -> None:
@@ -934,7 +940,7 @@ class TestWriteOutputSecurely:
     def test_character_device_still_takes_the_fast_path(self) -> None:
         # /dev/null is the real thing, not a link to it, so the lstat gate has
         # to let it through.
-        assert write_output_securely(Path(os.devnull), "data", force=False) is None
+        assert write_output_securely(Path(os.devnull), "data", force=True) is None
 
     @posix_only
     def test_real_fifo_still_takes_the_fast_path(self, tmp_path: Path) -> None:
@@ -942,7 +948,7 @@ class TestWriteOutputSecurely:
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            assert write_output_securely(fifo, b"through", force=False) is None
+            assert write_output_securely(fifo, b"through", force=True) is None
             assert os.read(reader, 16) == b"through"
         finally:
             os.close(reader)
@@ -984,7 +990,7 @@ class TestWriteOutputSecurelyNewlines:
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            write_output_securely(fifo, self.ROWS, force=False)
+            write_output_securely(fifo, self.ROWS, force=True)
             assert os.read(reader, 64) == b"id,name\r\nI1,Smith\r\n"
         finally:
             os.close(reader)
@@ -995,7 +1001,7 @@ class TestWriteOutputSecurelyNewlines:
         os.mkfifo(fifo)
         reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
-            write_output_securely(fifo, "one\ntwo\n", force=False)
+            write_output_securely(fifo, "one\ntwo\n", force=True)
             assert os.read(reader, 64) == b"one\ntwo\n"
         finally:
             os.close(reader)
@@ -1126,3 +1132,87 @@ class TestAutoDeclaredCodecs:
     def test_iso8859_12_is_not_a_codec(self) -> None:
         with pytest.raises(LookupError):
             codecs.lookup("iso8859-12")
+
+
+@posix_only
+def test_a_planted_fifo_is_not_written_without_force(tmp_path: Path) -> None:
+    """The special-file branch used to write unconditionally.
+
+    Every other path in this function refuses an existing target without
+    --force. A FIFO planted at the output path during the parse phase
+    therefore received the entire export while the run reported success and
+    left a 0-byte pipe on disk - the reader on the other end got the PII.
+    """
+    fifo = tmp_path / "out.csv"
+    os.mkfifo(fifo)
+    # A reader must exist even though nothing should be written: with the
+    # guard removed the code reaches os.open(O_WRONLY) on the FIFO, which
+    # blocks forever without one - so the mutation that proves this test
+    # would HANG the suite instead of failing it.
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        result = write_output_securely(fifo, "secret,data\n", force=False)
+    finally:
+        os.close(reader)
+
+    assert result is not None
+    assert "already exists" in result
+
+
+@posix_only
+def test_a_failed_permission_tighten_refuses_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0600 is the promise; a silent failure would break it while reporting success.
+
+    On overwrite the file keeps its existing mode until fchmod succeeds, so
+    swallowing the error lands the export in a possibly world-readable file.
+    """
+    out = tmp_path / "out.csv"
+    out.write_text("old", encoding="utf-8")
+
+    def refuse(fd: int, mode: int) -> None:
+        raise PermissionError("not yours")
+
+    monkeypatch.setattr(os, "fchmod", refuse)
+    result = write_output_securely(out, "secret", force=True)
+
+    assert result is not None
+    assert "Cannot restrict permissions" in result
+
+
+@posix_only
+def test_a_regular_file_swapped_for_another_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The overwrite path needs the identity check too, not just the FIFO one.
+
+    O_NOFOLLOW refuses a symlink substituted during the lstat -> open window,
+    but not a different regular file, and not a hardlink to a file the user
+    can write but did not name. --force means O_TRUNC, so whatever is on the
+    other end gets the export written into it.
+
+    Driven artificially: the real window is a race.
+    """
+    out = tmp_path / "out.csv"
+    out.write_text("old", encoding="utf-8")
+    real = os.lstat(out)
+
+    class _Different:
+        st_mode = real.st_mode
+        st_dev = real.st_dev
+        st_ino = real.st_ino + 1
+
+    monkeypatch.setattr(os, "fstat", lambda fd: _Different())
+    result = write_output_securely(out, "secret", force=True)
+
+    assert result is not None
+    assert "was replaced" in result
+    # The export data does NOT reach the substituted object - which is the
+    # point. The file is empty rather than holding "old" because O_TRUNC acts
+    # at os.open, before any check can run: with --force the caller already
+    # asked for the previous contents to go, so truncating something and then
+    # refusing to write is a worse outcome than not truncating, but not a
+    # disclosure. Closing that too would need O_TMPFILE plus a linkat, which
+    # is a bigger change than this guard.
+    assert "secret" not in out.read_text(encoding="utf-8")

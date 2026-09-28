@@ -10,7 +10,6 @@ import stat
 import sys
 import traceback
 import unicodedata
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -291,6 +290,36 @@ def check_output_safety(
 SYMLINK_OUTPUT_ERROR = "Output path is a symlink; refusing to follow it."
 
 
+def _refuse_if_not_the_same_object(
+    fd: int, expected: os.stat_result, path: Path
+) -> str | None:
+    """Refuse unless `fd` is the very object `expected` was taken from.
+
+    The write path decides WHAT KIND of write to perform from a pre-open
+    lstat, so it has to prove the descriptor it got back is that object.
+    O_NOFOLLOW refuses a symlink swapped in during the window, but not a FIFO
+    put in place of a regular file, and not a different FIFO put in place of
+    the one that was inspected.
+
+    (st_dev, st_ino) answers identity; comparing only the type bits answers a
+    weaker question, and an attacker who wins the race supplies an object of
+    whatever type passes. Closes the fd on refusal, before any fdopen takes
+    ownership of it.
+    """
+    try:
+        opened = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        return f"Error: Cannot inspect {path} after opening it."
+    if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(fd)
+        return (
+            f"Error: {path} was replaced while it was being opened; "
+            "refusing to write."
+        )
+    return None
+
+
 def write_output_securely(
     path: Path,
     data: str | bytes,
@@ -313,17 +342,17 @@ def write_output_securely(
     create-or-fail but symlinks are followed and the mode is ignored — the
     same concession the `sys.platform != "win32"` chmod guard already made.
     """
-    target_mode: int | None
+    target_st: os.stat_result | None
     try:
-        target_mode = os.lstat(path).st_mode
+        target_st = os.lstat(path)
     except OSError:
         # Nothing there yet (or the parent is unreadable): let the atomic open
         # below decide. A propagating FileNotFoundError here would break every
         # ordinary "create a new file" write.
-        target_mode = None
+        target_st = None
 
-    if target_mode is not None and (
-        stat.S_ISCHR(target_mode) or stat.S_ISFIFO(target_mode)
+    if target_st is not None and (
+        stat.S_ISCHR(target_st.st_mode) or stat.S_ISFIFO(target_st.st_mode)
     ):
         # /dev/null and named pipes: nothing to create, nothing to truncate,
         # and no mode worth setting - but still opened through the same
@@ -334,6 +363,14 @@ def write_output_securely(
         # lstat, not stat: stat() follows symlinks, so a link aimed at a FIFO
         # or a device would look identical to the real thing and get written
         # through. Anything else, links included, falls through below.
+        # This branch used to write unconditionally. Everything else in this
+        # function refuses an existing path without --force, so a FIFO planted
+        # at the output path during the parse phase received the whole export
+        # while the run reported success and left a 0-byte pipe on disk. The
+        # user asked to create a file; honour that answer here too.
+        if not force:
+            return f"Error: {path} already exists. Use --force to overwrite."
+
         payload = data.encode(encoding) if isinstance(data, str) else data
         try:
             special_fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -348,19 +385,9 @@ def write_output_securely(
         # the object actually opened rather than resolving the path again.
         #
         # Before fdopen, which takes ownership of the fd: closing it by hand
-        # afterwards would be a double close. S_IFMT compares the type bits, so
-        # a character device swapped for a FIFO is refused too.
-        try:
-            opened_mode = os.fstat(special_fd).st_mode
-        except OSError:
-            os.close(special_fd)
-            return f"Error: Cannot inspect {path} after opening it."
-        if stat.S_IFMT(opened_mode) != stat.S_IFMT(target_mode):
-            os.close(special_fd)
-            return (
-                f"Error: {path} changed type while it was being opened; "
-                "refusing to write."
-            )
+        # afterwards would be a double close.
+        if err := _refuse_if_not_the_same_object(special_fd, target_st, path):
+            return err
 
         with os.fdopen(special_fd, "wb") as special_out:
             special_out.write(payload)
@@ -391,12 +418,33 @@ def write_output_securely(
             return f"Error: {path} already exists. Use --force to overwrite."
         raise
 
+    # The overwrite path opened an object that already existed, so the same
+    # question applies: is this the object lstat looked at? O_NOFOLLOW refuses
+    # a symlink but not a FIFO or a hardlink substituted for the regular file.
+    if target_st is not None and (
+        err := _refuse_if_not_the_same_object(fd, target_st, path)
+    ):
+        return err
+
     if force:
         # O_TRUNC reuses the existing file's mode, so an overwrite of a
         # world-readable file would stay world-readable. fchmod acts on the
         # open descriptor, so no path lookup and nothing to race.
-        with suppress(OSError, AttributeError):
+        #
+        # A failure here is NOT suppressed: it means the export is about to
+        # land in a file whose existing mode we could not tighten, which is
+        # exactly the "never briefly world-readable" promise above. Only the
+        # AttributeError - platforms with no os.fchmod - is tolerated.
+        try:
             os.fchmod(fd, 0o600)
+        except AttributeError:
+            pass
+        except OSError:
+            os.close(fd)
+            return (
+                f"Error: Cannot restrict permissions on {path}; "
+                "refusing to write export data into it."
+            )
 
     if isinstance(data, str):
         # newline="" is load-bearing: the default rewrites every \n as

@@ -335,7 +335,13 @@ unaffected.
 **Individuals (CSV and JSON):**
 - `given_name` → `"Living"`
 - `surname`, `suffix`, dates, places, occupations → cleared (empty)
-- `alt_names`, `notes` → cleared (JSON only)
+- `alt_names` → cleared (JSON only)
+- `notes` → withheld from **every** row, not only redacted ones (JSON only;
+  CSV has no notes column). A note on a deceased relative's record is where
+  genealogy software keeps prose like "her daughter, born 1992 at 14 Acacia
+  Avenue", so leaving those in republished the living person whose own row
+  had just been blanked. Occupations are kept: `OCCU` is a short fact about
+  its own subject, not prose about third parties
 - `xref`, `sex`, `source_count` → preserved
 - Cross-reference IDs (`famc_xref`, `fams_xrefs`) are cleared in CSV and JSON
   to prevent correlation attacks via family links
@@ -358,6 +364,11 @@ unaffected.
   `famc_xref` is blank and their xref is gone from `children_xrefs`, so nothing
   links them to the family; clearing the wedding would destroy a deceased
   couple's marriage record without withholding anything.
+- A `RESN` on the **family** record withholds both spouse names and the whole
+  marriage block, whatever the liveness verdict says about either spouse.
+  GEDCOM 5.5.1 allows the restriction notice on `FAM`, and the tool honoured it
+  on `INDI` while ignoring it here — so a family the user's own software had
+  marked confidential was published in full.
 
 ### Design Note
 

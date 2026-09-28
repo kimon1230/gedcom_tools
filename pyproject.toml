@@ -38,6 +38,7 @@ dev = [
     "black>=26.5",
     "mypy>=2.3",
     "pip-audit>=2.10",
+    "bandit>=1.9",
     "jsonschema>=4.26",
 ]
 # Reserved, not yet consumed by any import. The REPL command's `graph` subcommand
@@ -53,6 +54,13 @@ Homepage = "https://github.com/kimon1230/gedcom_tools"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.bandit]
+# B101 (assert_used): the one assert in src/ is a mypy narrowing guard that
+# already carries "# noqa: S101" for ruff's identical rule - converting it to
+# a raise would change runtime behaviour to satisfy a linter. Skipping the
+# rule keeps that decision in one place instead of two.
+skips = ["B101"]
 
 [tool.black]
 line-length = 88

@@ -435,6 +435,12 @@ def _is_trustworthy(
     return checked
 
 
+# The only month spellings ged4py parses into a structured date while leaving
+# month_num unset - it handles three of the twelve full names. Anything else
+# with no month_num is a token that merely looks like a month.
+_ACCEPTED_LONG_MONTHS = frozenset({"JUNE", "JULY", "SEPT"})
+
+
 def _cal_date_is_misparsed(cal_date: object) -> bool:
     """Whether ged4py's parse of one calendar date is a mis-parse.
 
@@ -448,9 +454,15 @@ def _cal_date_is_misparsed(cal_date: object) -> bool:
     """
     month = getattr(cal_date, "month", None)
     if month and getattr(cal_date, "month_num", None) is None:
-        # month_num is set for Hebrew/French-Republican months too, so this
-        # only reaches junk; MONTH_TO_NUM still admits ged4py's "JUNE".
-        if MONTH_TO_NUM.get(str(month).upper()[:3]) is None:
+        # month_num is set for Hebrew/French-Republican months too, so only
+        # junk and ged4py's three long spellings reach here.
+        #
+        # An enumerated set, not a three-character prefix: the prefix admitted
+        # any token that merely STARTS like a month, so "JANE 1900" and
+        # "DECD 1850" produced a TRUSTED year - enough to age someone past
+        # max_age and publish them - while W035 stayed silent, because it
+        # shares this predicate and saw nothing wrong.
+        if str(month).upper() not in _ACCEPTED_LONG_MONTHS:
             return True
 
     # A real dual date spans one year boundary ("1750/51" -> 1750/1751), so the
