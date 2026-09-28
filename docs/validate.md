@@ -135,7 +135,7 @@ These checks detect broken bidirectional links between INDI and FAM records. In 
 | W027 | **Multiple SEX records** | Individual has more than one SEX sub-record |
 | W028 | **Invalid SEX value** | SEX value is not M, F, U, or X |
 | W029 | **Sex-role mismatch** | Individual recorded as HUSB but has SEX F, or recorded as WIFE but has SEX M |
-| W036 | **Burial before death or birth** | Burial date earlier than the death it follows, or than the birth when the record has no death date |
+| W036 | **Burial before death or birth** | Burial date earlier than the death it follows, or earlier than the birth |
 
 Age and date thresholds are defined in `src/gedcom_tools/constants.py`.
 
@@ -143,6 +143,12 @@ W036 compares the burial's **latest** possible date against the other event's
 **earliest**, so only a definite contradiction is reported. `2 DATE AFT 1950`
 states a lower bound and no upper one, so a burial written that way beside a
 death in 1960 is not flagged — the file never said the burial came first.
+
+The two comparisons are independent: burial-before-birth is reported whether or
+not the record also has a death date. Checking death first and falling back to
+birth missed `BIRT 1900` / `DEAT BET 1800 AND 1950` / `BURI 1850`, where the
+burial precedes the birth by fifty years but sits inside the death's range. One
+warning is emitted when both apply, naming the birth as the stronger claim.
 
 **W026 known limitations:**
 - Requires month-level precision on both birth dates — year-only dates are skipped
