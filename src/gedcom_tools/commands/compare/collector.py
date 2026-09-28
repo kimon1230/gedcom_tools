@@ -8,8 +8,15 @@ from ged4py.parser import GedcomReader
 from gedcom_tools.commands.compare.models import CompareIndividual
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ged4py.model import Record
-from gedcom_tools.dates import extract_year_from_date
+from gedcom_tools.dates import (
+    BIRTH_EVENT_TAGS,
+    DEATH_EVENT_TAGS,
+    extract_year_for_validation,
+    extract_year_from_date,
+)
 from gedcom_tools.utils import (
     extract_xref,
     normalize_compare,
@@ -34,11 +41,33 @@ def _extract_place(record: Record, event_tag: str) -> str:
     return str(plac.value)
 
 
-def _extract_year(record: Record, path: str) -> int | None:
+def _first_year(
+    record: Record,
+    tags: tuple[str, ...],
+    reader: Callable[[object], int | None] = extract_year_from_date,
+) -> int | None:
+    """Year of the first of these events that yields one, in tag order.
+
+    The strict reader resolves independently rather than following whichever
+    tag the loose one settled on: a citation typed into BIRT would otherwise
+    mask a real christening date on the same record.
+    """
+    for tag in tags:
+        year = _extract_year(record, f"{tag}/DATE", reader)
+        if year is not None:
+            return year
+    return None
+
+
+def _extract_year(
+    record: Record,
+    path: str,
+    reader: Callable[[object], int | None] = extract_year_from_date,
+) -> int | None:
     date_rec = record.sub_tag(path)
     if date_rec is None or date_rec.value is None:
         return None
-    return extract_year_from_date(date_rec.value)
+    return reader(date_rec.value)
 
 
 def collect_individuals(
@@ -91,16 +120,17 @@ def _build_individual(
         if raw in ("M", "F"):
             sex = raw
 
-    birth_year = _extract_year(record, "BIRT/DATE")
-    death_year = _extract_year(record, "DEAT/DATE")
-
-    # Fallbacks: christening/baptism for birth, burial for death
-    if birth_year is None:
-        birth_year = _extract_year(record, "CHR/DATE")
-        if birth_year is None:
-            birth_year = _extract_year(record, "BAPM/DATE")
-    if death_year is None:
-        death_year = _extract_year(record, "BURI/DATE")
+    # Preferred tag first, then the fallbacks - christening/baptism for birth,
+    # burial for death. Same tuples the validator walks, so a recovery path
+    # added here cannot leave W035 blind to the dates it creates.
+    birth_year = _first_year(record, BIRTH_EVENT_TAGS)
+    death_year = _first_year(record, DEATH_EVENT_TAGS)
+    birth_year_scored = _first_year(
+        record, BIRTH_EVENT_TAGS, extract_year_for_validation
+    )
+    death_year_scored = _first_year(
+        record, DEATH_EVENT_TAGS, extract_year_for_validation
+    )
 
     birth_place = normalize_display(_extract_place(record, "BIRT"))
     death_place = normalize_display(_extract_place(record, "DEAT"))
@@ -136,6 +166,8 @@ def _build_individual(
         birth_place=birth_place,
         death_year=death_year,
         death_place=death_place,
+        birth_year_scored=birth_year_scored,
+        death_year_scored=death_year_scored,
         famc_xref=famc_xref,
         fams_xrefs=fams_xrefs,
         alt_surnames=alt_surnames_display,

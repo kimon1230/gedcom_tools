@@ -30,6 +30,7 @@ from gedcom_tools.utils import (
     EncodingInfo,
     detect_encoding,
     sanitize_error,
+    scrub_line,
     validate_input_file,
     xref_sort_key,
 )
@@ -113,7 +114,7 @@ class LanguagesResult:
                 f"across {self.total_texts} text(s)"
             )
 
-        lines: list[str] = [f"File: {self.file_path}"]
+        lines: list[str] = [f"File: {scrub_line(self.file_path)}"]
         if self.encoding_info:
             lines.append(f"Encoding: {self.encoding_info}")
         lines.append("")
@@ -210,7 +211,7 @@ class LanguagesResult:
             parts.append(f"{'1 event' if n_events == 1 else f'{n_events} events'}")
             return f"{self.language_filter_name}: {', '.join(parts)}"
 
-        lines: list[str] = [f"File: {self.file_path}"]
+        lines: list[str] = [f"File: {scrub_line(self.file_path)}"]
         if self.encoding_info:
             lines.append(f"Encoding: {self.encoding_info}")
         lines.append("")
@@ -297,8 +298,8 @@ class LanguagesResult:
         from pathlib import Path as _Path
 
         data: dict[str, Any] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "mode": "aggregate",
             "encoding": None,
             "languages": [
@@ -332,9 +333,9 @@ class LanguagesResult:
 
         if self.encoding_info:
             data["encoding"] = {
-                "detected": self.encoding_info.encoding,
+                "detected": self.encoding_info.display_encoding,
                 "has_bom": self.encoding_info.has_bom,
-                "declared": self.encoding_info.declared_charset,
+                "declared": self.encoding_info.display_declared,
             }
 
         return json.dumps(data, indent=2)
@@ -373,8 +374,8 @@ class LanguagesResult:
         from pathlib import Path as _Path
 
         data: dict[str, Any] = {
-            "file": self.file_path,
-            "filename": _Path(self.file_path).name,
+            "file": scrub_line(self.file_path),
+            "filename": scrub_line(_Path(self.file_path).name),
             "mode": "filter",
             "encoding": None,
             "language": self.language_filter_name,
@@ -395,9 +396,9 @@ class LanguagesResult:
 
         if self.encoding_info:
             data["encoding"] = {
-                "detected": self.encoding_info.encoding,
+                "detected": self.encoding_info.display_encoding,
                 "has_bom": self.encoding_info.has_bom,
-                "declared": self.encoding_info.declared_charset,
+                "declared": self.encoding_info.display_declared,
             }
 
         return json.dumps(data, indent=2)
@@ -783,10 +784,8 @@ def run(args: Namespace) -> int:
         # cli._run_command turns this into a clean exit; catching it in the
         # generic handler below would report a closed pipe as a failure.
         raise
-    except Exception as e:
-        if verbose:
-            raise
+    except Exception as e:  # noqa: BLE001 - CLI boundary, see report_error
         from gedcom_tools.utils import report_error
 
-        report_error(e)
+        report_error(e, verbose=verbose)
         return EXIT_ERROR

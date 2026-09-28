@@ -244,6 +244,14 @@ individuals. When present, these tags override all date-based inference:
 | `_LVNG` | Family Tree Maker (variant) | Living |
 | `_CONF_FLAG` | Personal Ancestral File (PAF) | Living (confidential) |
 | `_NLIV` | Brother's Keeper | Not living |
+| `RESN` | GEDCOM 5.5.1 (standard) | Living, when the value is `privacy`, `confidential` or `locked` |
+
+`RESN` is the only one whose **value** decides. The five vendor tags
+mean what their name says wherever they appear; `RESN none` publishes,
+and a `RESN` carrying any other value is ignored. It is also the only
+standard tag in the set - the others are extensions, and the tool
+honoured all five of them while ignoring the one the specification
+actually defines.
 
 A living tag is taken at face value, since believing it can only over-redact.
 `_NLIV` is honoured only when the same record carries independent death
@@ -256,7 +264,9 @@ When no custom tag decides the matter, estimation falls back to dates:
 
 1. **Birth year more than max_age years ago** → not living, whether or not the
    record has a death date
-2. **Has death year or burial date** → not living
+2. **Has death year or burial year** → not living. Burial is read the same
+   strict way as the others: `2 DATE (pre-need plot)` is a note about a plot
+   someone bought while alive, not evidence that they have died
 3. **Everything else, including an absent or unreadable birth date** →
    estimated living, so **redacted**
 
@@ -309,12 +319,29 @@ runs are filtered to plausible years and the first survivor wins, so
 `ref 6789 b. 1850` reports 1850 while `vol 6789 p. 4` reports nothing rather
 than 6789.
 
+**Non-Gregorian calendars are converted before they decide anything.** GEDCOM
+5.5.1 also allows Hebrew and French Republican dates, whose years count from a
+different epoch — Hebrew `5786` runs from late 2025 into 2026, and French
+Republican `230` falls in 2021. Taken at face
+value `230` reads as an age of roughly 1796, so liveness converts these to the
+Gregorian scale first. `birth_year` and `death_year` still report the year as
+the file writes it; only the decision uses the converted one. A year that falls
+outside the convertible range is treated as no year at all, which means
+redacted. Gregorian and Julian dates already share that scale and are
+unaffected.
+
 ### What Gets Redacted
 
 **Individuals (CSV and JSON):**
 - `given_name` → `"Living"`
 - `surname`, `suffix`, dates, places, occupations → cleared (empty)
-- `alt_names`, `notes` → cleared (JSON only)
+- `alt_names` → cleared (JSON only)
+- `notes` → withheld from **every** row, not only redacted ones (JSON only;
+  CSV has no notes column). A note on a deceased relative's record is where
+  genealogy software keeps prose like "her daughter, born 1992 at 14 Acacia
+  Avenue", so leaving those in republished the living person whose own row
+  had just been blanked. Occupations are kept: `OCCU` is a short fact about
+  its own subject, not prose about third parties
 - `xref`, `sex`, `source_count` → preserved
 - Cross-reference IDs (`famc_xref`, `fams_xrefs`) are cleared in CSV and JSON
   to prevent correlation attacks via family links
@@ -328,7 +355,20 @@ than 6789.
   identify the couple that married there, so leaving them next to a `"Living"`
   placeholder — plus any unredacted child's `famc_xref` and surname — hands the
   redacted parents straight back.
-- Child xrefs are cleared individually for children who are themselves living.
+- A living child's xref is **removed** from `children_xrefs` rather than
+  blanked in place, because a blank slot still gives their position in the
+  birth order. `child_count` keeps the family's real total — how many children
+  a couple had is a fact about the family, not a way to name one of them, and
+  `meta.redacted_count` already reports that redaction occurred.
+- A living **child** does not clear the marriage fields. Their own row's
+  `famc_xref` is blank and their xref is gone from `children_xrefs`, so nothing
+  links them to the family; clearing the wedding would destroy a deceased
+  couple's marriage record without withholding anything.
+- A `RESN` on the **family** record withholds both spouse names and the whole
+  marriage block, whatever the liveness verdict says about either spouse.
+  GEDCOM 5.5.1 allows the restriction notice on `FAM`, and the tool honoured it
+  on `INDI` while ignoring it here — so a family the user's own software had
+  marked confidential was published in full.
 
 ### Design Note
 

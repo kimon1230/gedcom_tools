@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import datetime
 from dataclasses import dataclass, field
+
+from gedcom_tools.dates import resolve_current_year
 
 
 @dataclass
@@ -50,6 +51,10 @@ class ExportFamily:
     marriage_place: str = ""
     child_count: int = 0
     children_xrefs: list[str] = field(default_factory=list)
+    # GEDCOM 5.5.1 allows RESN on a FAM record, not only on INDI. A family the
+    # user's software marked confidential was published in full: marriage
+    # date, named venue and both spouse names.
+    restricted: bool = False
 
 
 @dataclass
@@ -66,11 +71,13 @@ class ExportResult:
 # Living: Legacy Family Tree / Family Tree Maker (_LVG, _LVNG),
 #         RootsMagic (_LIVING), PAF (_CONF_FLAG).
 # Not living: Brother's Keeper (_NLIV).
-_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG"})
+# RESN is GEDCOM 5.5.1's own restriction notice; the rest are vendor tags.
+_LIVING_TAGS = frozenset({"_LVG", "_LIVING", "_LVNG", "_CONF_FLAG", "RESN"})
 _NOT_LIVING_TAGS = frozenset({"_NLIV"})
 
 
 def estimate_living(
+    *,
     birth_year: int | None,
     death_year: int | None,
     burial_year: int | None,
@@ -83,6 +90,11 @@ def estimate_living(
     This drives --redact-living, so unknown means living: a wrong "living"
     over-redacts one row, a wrong "not living" publishes a real person's
     details. Priority order:
+
+    `living_marker` is matched on the tag name alone. "RESN" reaches here only
+    when _detect_living_marker has already checked its value against the three
+    that mean withhold - it is the one marker whose value decides, and this
+    function cannot see values.
 
     1. _LVG/_LIVING/_LVNG/_CONF_FLAG → living. A file claiming someone IS
        living fails safe, so it is taken at face value.
@@ -97,9 +109,13 @@ def estimate_living(
        that someone has died.
     5. Everything else, including an absent or unparseable birth date → living.
     """
-    current_year = current_year or datetime.date.today().year
+    current_year = resolve_current_year(current_year)
 
     has_death_evidence = death_year is not None or burial_year is not None
+
+    # Case-folded here as well as at the producer, so the tag sets hold for any
+    # caller rather than only for _detect_living_marker's output.
+    living_marker = living_marker.upper()
 
     if living_marker in _LIVING_TAGS:
         return True

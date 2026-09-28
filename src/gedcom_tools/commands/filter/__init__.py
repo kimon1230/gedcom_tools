@@ -37,6 +37,7 @@ from gedcom_tools.utils import (
     EncodingInfo,
     check_output_safety,
     detect_encoding,
+    file_too_large_message,
     resolve_source_codec,
     sanitize_error,
     strip_bom,
@@ -181,11 +182,8 @@ def run(args: Namespace) -> int:
 
     file_size = file_path.stat().st_size
     if file_size > MAX_FILE_SIZE_BYTES:
-        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
-        actual_mb = file_size / (1024 * 1024)
         print(
-            f"Error: File is too large ({actual_mb:.1f} MB). "
-            f"Maximum supported size is {limit_mb} MB.",
+            f"Error: {file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)}",
             file=sys.stderr,
         )
         return EXIT_ERROR

@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Called by publish.yml so a release runs the same suite rather than a
+  # second copy of it that can drift.
+  workflow_call:
 
 permissions:
   contents: read
@@ -24,7 +27,13 @@ jobs:
           cache: pip
 
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        # pip upgrades itself first because the audit step below inspects the
+        # resolved environment: the pip that setup-python ships carries its own
+        # advisories, which would fail the build over the runner image rather
+        # than over anything in this repository.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
 
       - name: Lint
         run: ruff check .
@@ -34,6 +43,46 @@ jobs:
 
       - name: Type check
         run: mypy src/
+
+      # Audits the resolved environment, so it can go red from a third-party
+      # advisory rather than a code change - same trade as the uncapped dev
+      # tools.
+      #
+      # NOT --strict: this project is installed editable and is not on PyPI,
+      # so pip-audit cannot resolve it, and --strict escalates that to an
+      # error - including the "distribution marked as editable" notice that
+      # --skip-editable emits, so the two flags cannot be combined here.
+      # Verified both ways in a clean checkout. The gap --strict would close
+      # is a dependency that cannot be resolved; every real dependency here
+      # resolves, so the plain form fails on advisories as intended.
+      - name: Audit dependencies
+        run: pip-audit
+
+      # SAST for this project's own code. Added after a security review found
+      # a TOCTOU in the output writer that every other gate passed: bandit
+      # flags exactly that shape - an os.open whose descriptor is never
+      # re-checked, a permission call wrapped in a bare suppress.
+      - name: Static analysis
+        run: bandit -c pyproject.toml -r src/ -q
+
+      # .gitignore is the only thing standing between a real family tree and
+      # the public remote, and `git add -f` walks straight past it. The
+      # fixture trees are tracked on purpose; anything else carrying tree data
+      # is somebody's relatives. A pre-commit hook would cover this too, but
+      # only for people who installed it and did not pass --no-verify.
+      # Inspects what is TRACKED at HEAD, not history. The root-level JSON
+      # rule is broad on purpose - an export lands there by default - so a
+      # future root-level config file would need adding to the exemption.
+      - name: Check no tree data is tracked
+        run: |
+          stray=$(git ls-files \
+            | grep -iE '\.(ged|gedcom)(\..*)?$|\.csv$|^[^/]*\.json$' \
+            | grep -v '^tests/fixtures/' || true)
+          if [ -n "$stray" ]; then
+            echo "Tracked files carrying family tree data:"
+            echo "$stray"
+            exit 1
+          fi
 
   test:
     strategy:

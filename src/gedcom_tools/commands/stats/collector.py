@@ -361,7 +361,9 @@ class StatsCollector:
                 data.birth_date_has_full = has_full
 
                 # Only extract month from non-approximate dates for accuracy
-                if precision != "approximate":
+                # Same test the validation engine uses. "!= approximate" also
+                # admits "missing", which is what an over-long phrase yields.
+                if precision in ("full", "partial"):
                     data.birth_month = extract_month(date_rec.value)
 
         # Fallback to CHR/BAPM for birth year only (not month/precision)

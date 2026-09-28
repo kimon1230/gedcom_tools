@@ -16,6 +16,8 @@ from gedcom_tools.progress import Colors, glyphs
 from gedcom_tools.utils import (
     BOMS,
     GEDCOM_CHARSETS,
+    file_too_large_message,
+    scrub_line,
     strip_bom,
     write_output_securely,
 )
@@ -66,7 +68,7 @@ class ConvertResult:
             bom_label = "stripped"
 
         lines: list[str] = [
-            f"File: {self.source_file.name}",
+            f"File: {scrub_line(self.source_file.name)}",
             "",
             f"{colors.cyan}=== Conversion ==={colors.reset}",
             f"  Source encoding: {self.source_encoding}",
@@ -90,9 +92,9 @@ class ConvertResult:
 
     def format_json(self) -> str:
         data = {
-            "source_file": str(self.source_file),
+            "source_file": scrub_line(str(self.source_file)),
             "source_filename": self.source_file.name,
-            "output_file": str(self.output_file),
+            "output_file": scrub_line(str(self.output_file)),
             "output_filename": self.output_file.name,
             "source_encoding": self.source_encoding,
             "target_encoding": self.target_encoding,
@@ -190,12 +192,7 @@ def transcode(
 
     file_size = source_path.stat().st_size
     if file_size > MAX_FILE_SIZE_BYTES:
-        limit_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
-        actual_mb = file_size / (1024 * 1024)
-        msg = (
-            f"File is too large ({actual_mb:.1f} MB). "
-            f"Maximum supported size is {limit_mb} MB."
-        )
+        msg = file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)
         raise ValueError(msg)
 
     raw = source_path.read_bytes()

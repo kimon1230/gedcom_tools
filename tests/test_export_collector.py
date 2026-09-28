@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from gedcom_tools.commands.export.collector import collect_export_data
 from gedcom_tools.commands.export.formatters import format_json
 from gedcom_tools.commands.export.models import estimate_living
@@ -20,67 +22,172 @@ def _write_ged(tmp_path: Path, content: str, filename: str = "test.ged") -> Path
 
 
 class TestEstimateLiving:
+    def test_year_arguments_cannot_be_passed_positionally(self) -> None:
+        # The third parameter was once burial_date: str. Anything still calling
+        # positionally would land a date string in an int slot, where a truthy
+        # "" reads as death evidence and publishes every living person while
+        # meta.redacted_living still claims the control ran.
+        with pytest.raises(TypeError):
+            estimate_living(1900, None, None)  # type: ignore[misc]
+
     def test_has_death_year(self) -> None:
-        assert estimate_living(1900, 1980, None, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1900, death_year=1980, burial_year=None, current_year=2026
+            )
+            is False
+        )
 
     def test_has_burial_date(self) -> None:
-        assert estimate_living(1950, None, 2020, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1950, death_year=None, burial_year=2020, current_year=2026
+            )
+            is False
+        )
 
     def test_old_birth_year(self) -> None:
         # Born 1900, 126 years ago — exceeds max_age 110
-        assert estimate_living(1900, None, None, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1900, death_year=None, burial_year=None, current_year=2026
+            )
+            is False
+        )
 
     def test_recent_birth_no_death(self) -> None:
-        assert estimate_living(1980, None, None, current_year=2026) is True
+        assert (
+            estimate_living(
+                birth_year=1980, death_year=None, burial_year=None, current_year=2026
+            )
+            is True
+        )
 
     def test_no_birth_year_no_death_assumed_living(self) -> None:
         # No dates at all → nothing rules out a living person, so redact
-        assert estimate_living(None, None, None, current_year=2026) is True
+        assert (
+            estimate_living(
+                birth_year=None, death_year=None, burial_year=None, current_year=2026
+            )
+            is True
+        )
 
     def test_boundary_exactly_max_age(self) -> None:
         # Born 1916, current year 2026 → 110 years → exactly max_age → still living
-        assert estimate_living(1916, None, None, max_age=110, current_year=2026) is True
+        assert (
+            estimate_living(
+                birth_year=1916,
+                death_year=None,
+                burial_year=None,
+                max_age=110,
+                current_year=2026,
+            )
+            is True
+        )
 
     def test_boundary_one_year_over(self) -> None:
         # Born 1915, current year 2026 → 111 years → exceeds max_age
         assert (
-            estimate_living(1915, None, None, max_age=110, current_year=2026) is False
+            estimate_living(
+                birth_year=1915,
+                death_year=None,
+                burial_year=None,
+                max_age=110,
+                current_year=2026,
+            )
+            is False
         )
 
     def test_custom_max_age(self) -> None:
         # Born 1940, max_age=80, current year 2026 → 86 years → exceeds
-        assert estimate_living(1940, None, None, max_age=80, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1940,
+                death_year=None,
+                burial_year=None,
+                max_age=80,
+                current_year=2026,
+            )
+            is False
+        )
         # Born 1950, max_age=80, current year 2026 → 76 years → within
-        assert estimate_living(1950, None, None, max_age=80, current_year=2026) is True
+        assert (
+            estimate_living(
+                birth_year=1950,
+                death_year=None,
+                burial_year=None,
+                max_age=80,
+                current_year=2026,
+            )
+            is True
+        )
 
     def test_no_birth_with_old_birth_not_living(self) -> None:
         # Born 200 years ago, no death → not living (exceeds max_age)
-        assert estimate_living(1826, None, None, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1826, death_year=None, burial_year=None, current_year=2026
+            )
+            is False
+        )
 
     def test_living_tag_lvg(self) -> None:
         assert (
-            estimate_living(None, None, None, current_year=2026, living_marker="_LVG")
+            estimate_living(
+                birth_year=None,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_LVG",
+            )
+            is True
+        )
+
+    def test_living_tag_is_case_insensitive(self) -> None:
+        # Guards the fold in estimate_living itself, not the collector's
+        assert (
+            estimate_living(
+                birth_year=1900,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_lvg",
+            )
             is True
         )
 
     def test_living_tag_living(self) -> None:
         assert (
             estimate_living(
-                None, None, None, current_year=2026, living_marker="_LIVING"
+                birth_year=None,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_LIVING",
             )
             is True
         )
 
     def test_living_tag_lvng(self) -> None:
         assert (
-            estimate_living(None, None, None, current_year=2026, living_marker="_LVNG")
+            estimate_living(
+                birth_year=None,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_LVNG",
+            )
             is True
         )
 
     def test_living_tag_conf_flag(self) -> None:
         assert (
             estimate_living(
-                None, None, None, current_year=2026, living_marker="_CONF_FLAG"
+                birth_year=None,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_CONF_FLAG",
             )
             is True
         )
@@ -89,20 +196,36 @@ class TestEstimateLiving:
         # _NLIV comes from an untrusted file; with no death record to back it
         # up it cannot switch redaction off for someone born in 2000
         assert (
-            estimate_living(2000, None, None, current_year=2026, living_marker="_NLIV")
+            estimate_living(
+                birth_year=2000,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_NLIV",
+            )
             is True
         )
 
     def test_nliv_corroborated_by_death_year(self) -> None:
         assert (
-            estimate_living(2000, 2020, None, current_year=2026, living_marker="_NLIV")
+            estimate_living(
+                birth_year=2000,
+                death_year=2020,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_NLIV",
+            )
             is False
         )
 
     def test_nliv_corroborated_by_burial_date(self) -> None:
         assert (
             estimate_living(
-                2000, None, "3 FEB 2020", current_year=2026, living_marker="_NLIV"
+                birth_year=2000,
+                death_year=None,
+                burial_year=2020,
+                current_year=2026,
+                living_marker="_NLIV",
             )
             is False
         )
@@ -110,7 +233,13 @@ class TestEstimateLiving:
     def test_living_tag_overrides_missing_dates(self) -> None:
         # No dates, but tagged as living by software
         assert (
-            estimate_living(None, None, None, current_year=2026, living_marker="_LVG")
+            estimate_living(
+                birth_year=None,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_LVG",
+            )
             is True
         )
 
@@ -118,19 +247,36 @@ class TestEstimateLiving:
         # Uncorroborated _NLIV falls through to the date rules, and max_age
         # still settles it for someone born 200 years ago
         assert (
-            estimate_living(1826, None, None, current_year=2026, living_marker="_NLIV")
+            estimate_living(
+                birth_year=1826,
+                death_year=None,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_NLIV",
+            )
             is False
         )
 
     def test_old_birth_year_beats_missing_death_record(self) -> None:
         # No death evidence anywhere, but max_age is the ceiling regardless
-        assert estimate_living(1650, None, None, current_year=2026) is False
+        assert (
+            estimate_living(
+                birth_year=1650, death_year=None, burial_year=None, current_year=2026
+            )
+            is False
+        )
 
     def test_living_tag_overrides_death(self) -> None:
         # Software says living, but has death year — living tag wins
         # (trust the software's explicit marker)
         assert (
-            estimate_living(1900, 1980, None, current_year=2026, living_marker="_LVG")
+            estimate_living(
+                birth_year=1900,
+                death_year=1980,
+                burial_year=None,
+                current_year=2026,
+                living_marker="_LVG",
+            )
             is True
         )
 
@@ -396,9 +542,14 @@ class TestCollectorDates:
         assert ind.birth_year == 1795
         assert ind.liveness_birth_year == 1799
 
-    def test_birth_range_beats_christening_for_both_bounds(
+    def test_birth_range_beats_christening_for_the_reported_year(
         self, tmp_path: Path
     ) -> None:
+        # The REPORTED birth_year still takes BIRT and stops. The liveness
+        # bound no longer does: it was 1860 here, because the loop broke at
+        # BIRT, and is now 1861 - the latest of the three, which can only
+        # redact more. A christening cannot precede a birth, so a later CHR
+        # means the ancient BIRT beside it is wrong.
         ged = _write_ged(
             tmp_path,
             "0 @I1@ INDI\n1 NAME A /B/\n"
@@ -407,7 +558,7 @@ class TestCollectorDates:
         )
         ind = collect_export_data(ged).individuals[0]
         assert ind.birth_year == 1850
-        assert ind.liveness_birth_year == 1860
+        assert ind.liveness_birth_year == 1861
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +809,73 @@ class TestRedactLivingPhraseDates:
         ged = "0 @I1@ INDI\n1 NAME Eve /Alive/\n1 CHR\n2 DATE Census 1900 record\n"
         assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
 
+    @pytest.mark.parametrize("value", ["privacy", "confidential", "locked", "PRIVACY"])
+    def test_restriction_notice_withholds(self, tmp_path: Path, value: str) -> None:
+        # RESN is the only restriction notice GEDCOM 5.5.1 defines. Someone who
+        # marked relatives private in their software and then ran
+        # --redact-living had that ignored in favour of five vendor tags.
+        # The 1850 birth would otherwise publish them.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ann /Private/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    @pytest.mark.parametrize("value", ["none", ""])
+    def test_other_restriction_values_do_not_withhold(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        # Unlike the vendor tags, RESN's VALUE decides - the tag alone is not
+        # a do-not-publish signal.
+        ged = (
+            f"0 @I1@ INDI\n1 NAME Ada /Gone/\n1 RESN {value}\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_burial_alone_proves_death(self, tmp_path: Path) -> None:
+        # Born 1950 is well under the age ceiling and there is no DEAT, so the
+        # burial is the ONLY thing that can decide. Without it this record is
+        # withheld. Removing burial evidence entirely used to pass every test.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 3 MAR 1950\n"
+            "1 BURI\n2 DATE 4 OCT 2010\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_second_birth_event_is_not_ignored(self, tmp_path: Path) -> None:
+        # A tree merged from two sources routinely carries two BIRT events.
+        # Only the first was read, so a transcribed-wrong 1850 beside a real
+        # 1990 published someone who is alive.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_second_birth_event_order_does_not_matter(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ann /Alive/\n"
+            "1 BIRT\n2 DATE 1 JAN 1990\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_empty_date_line_is_skipped_not_treated_as_unknown(
+        self, tmp_path: Path
+    ) -> None:
+        # "2 DATE" with no value states nothing. ged4py returns an empty
+        # phrase rather than None, so it needs skipping explicitly or a good
+        # birth date beside it would withhold someone long dead.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /Gone/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
     def test_clean_christening_behind_dirty_birth_still_publishes(
         self, tmp_path: Path
     ) -> None:
@@ -781,3 +999,97 @@ class TestRedactLivingPhraseDates:
         result = collect_export_data(_write_ged(tmp_path, ged))
         data = json.loads(format_json(result, redact_living=True))
         assert data["individuals"][0]["birth_year"] == 1700
+
+
+class TestLivenessGateHardening:
+    """The three gate defects the security audit reproduced end to end.
+
+    Each test fails if its guard is reverted: restore the calendar skip, drop
+    the .upper() in _detect_living_marker, or put the break back in the
+    liveness birth loop, and exactly one of these goes red.
+    """
+
+    def test_french_republican_date_does_not_publish_a_living_person(
+        self, tmp_path: Path
+    ) -> None:
+        # Year 230 is 2021. Read as the bare number it was an age of ~1796,
+        # which aged a living person out of redaction.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Zoe /Recent/\n"
+            "1 BIRT\n2 DATE @#DFRENCH R@ 1 VEND 230\n2 PLAC 7 Secret Lane\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_hebrew_date_does_not_publish_a_living_person(
+        self, tmp_path: Path
+    ) -> None:
+        # 5786 is 2026
+        ged = (
+            "0 @I1@ INDI\n1 NAME Yael /Recent/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 5786\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_old_hebrew_date_publishes(self, tmp_path: Path) -> None:
+        # The over-redaction half: 5600 is 1840, so this person is long dead.
+        # Before the conversion, 2026 - 5600 was negative, never exceeded
+        # max_age, and every Hebrew-dated record redacted regardless of age.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Miri /Ancient/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 5600\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()
+
+    def test_unconvertible_hebrew_date_does_not_publish(self, tmp_path: Path) -> None:
+        # Year 100 predates the proleptic Gregorian epoch, so it stays untrusted
+        ged = "0 @I1@ INDI\n1 NAME Ora /Odd/\n1 BIRT\n2 DATE @#DHEBREW@ 1 TSH 100\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_lowercase_living_tag_is_honoured(self, tmp_path: Path) -> None:
+        # The tag sets are upper-case; ged4py returns what the file wrote. A
+        # hand-edited "_lvg" used to match nothing and fall through to the
+        # birth-year rule, which published on the ancient date beside it.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Eve /LowerTag/\n1 _lvg Y\n"
+            "1 BIRT\n2 DATE 1 JAN 1900\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_mixed_case_living_tag_is_honoured(self, tmp_path: Path) -> None:
+        ged = "0 @I1@ INDI\n1 NAME Ivy /MixTag/\n1 _Lvg Y\n1 BIRT\n2 DATE 1 JAN 1900\n"
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_uppercase_living_tag_still_works(self, tmp_path: Path) -> None:
+        # The case the fold must not break
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ada /UpperTag/\n1 _LVG Y\n"
+            "1 BIRT\n2 DATE 1 JAN 1900\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_christening_overrides_an_ancient_birth(
+        self, tmp_path: Path
+    ) -> None:
+        # A christening cannot precede a birth, so the 1850 BIRT is wrong and
+        # the person is alive. Breaking at BIRT published them.
+        ged = (
+            "0 @I1@ INDI\n1 NAME Ivan /Young/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE 1 JAN 2001\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_recent_baptism_overrides_an_ancient_birth(self, tmp_path: Path) -> None:
+        ged = (
+            "0 @I1@ INDI\n1 NAME Iris /Young/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 BAPM\n2 DATE 1 JAN 2001\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == {"@I1@"}
+
+    def test_genuinely_old_record_still_publishes(self, tmp_path: Path) -> None:
+        # The over-redaction guard: max() must not redact someone long dead
+        ged = (
+            "0 @I1@ INDI\n1 NAME Obed /Ancient/\n"
+            "1 BIRT\n2 DATE 1 JAN 1850\n"
+            "1 CHR\n2 DATE 1 JAN 1851\n"
+        )
+        assert _redacted_xrefs(tmp_path, ged) == set()

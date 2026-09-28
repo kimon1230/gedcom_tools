@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import io
 import json
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gedcom_tools import __version__
 from gedcom_tools.commands.export.models import estimate_living
+from gedcom_tools.utils import scrub_line
 
 if TYPE_CHECKING:
     from gedcom_tools.commands.export.models import (
@@ -56,12 +58,35 @@ _FAM_CSV_COLUMNS = [
 # than as text. Excel's DDE syntax (=cmd|' /C calc'!A0) turns an exported name
 # into code execution on whoever opens the file, so every cell carrying raw
 # GEDCOM text is prefixed with an apostrophe to force literal interpretation.
+# Xref columns are deliberately NOT routed through _csv_safe: ged4py's grammar
+# is @[A-Za-z0-9][^@]*@, so an xref can only ever lead with "@", which is not a
+# formula start in any current spreadsheet - and prefixing every ID cell would
+# break loading the export into another tool.
 _CSV_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _csv_safe(value: str) -> str:
-    """Neutralise a cell that a spreadsheet would otherwise read as a formula."""
-    return "'" + value if value and value[0] in _CSV_TRIGGERS else value
+    """Neutralise a cell that a spreadsheet would otherwise read as a formula.
+
+    Testing value[0] alone was not enough. A spreadsheet trims leading
+    whitespace on an unquoted field, so " =cmd|..." imports as a live formula,
+    and an invisible character hides the trigger just as well.
+
+    So: skip anything that could HIDE a trigger - whitespace, control and
+    format characters - and test whatever it is hiding. A trigger is never
+    skipped, because tab and CR are both control characters and triggers in
+    their own right.
+
+    The value is returned UNCHANGED apart from the prefix. A leading
+    apostrophe already makes the whole cell text, so there is no reason to
+    edit someone's name or place on the way through.
+    """
+    for char in value:
+        if char in _CSV_TRIGGERS:
+            return "'" + value
+        if not (char.isspace() or unicodedata.category(char) in ("Cc", "Cf")):
+            return value
+    return value
 
 
 def _redact_individual_csv(indi: ExportIndividual) -> list[str]:
@@ -115,6 +140,11 @@ def _spouse_is_living(fam: ExportFamily, living_xrefs: set[str]) -> bool:
     One is enough. A wedding date and a named venue identify the couple that
     married there, so leaving them beside two "Living" placeholders -- plus any
     unredacted child's famc_xref and surname -- hands back the redacted parents.
+
+    A redacted CHILD does NOT trigger this. Nothing links them to the family
+    once their row's famc_xref is blank and their xref is gone from
+    children_xrefs, so blanking the wedding would destroy a deceased couple's
+    marriage record without withholding anything.
     """
     return fam.husband_xref in living_xrefs or fam.wife_xref in living_xrefs
 
@@ -131,14 +161,23 @@ def _family_csv_row(
     marriage_year = fam.marriage_year
     marriage_place = fam.marriage_place
     if living_xrefs:
-        if fam.husband_xref in living_xrefs:
+        # A RESN the user put on the FAM record withholds the couple, the same
+        # way a living spouse does. Their software was told to keep this
+        # family private; publishing it discards that instruction.
+        if fam.restricted or fam.husband_xref in living_xrefs:
             husband_xref = ""
             husband_name = "Living"
-        if fam.wife_xref in living_xrefs:
+        if fam.restricted or fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
         children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
-        if _spouse_is_living(fam, living_xrefs):
+        # children_xrefs lists who can be SHOWN; child_count stays the real
+        # total, because how many children a couple had is a fact about the
+        # family and not a way to name one of them. Dropping the withheld
+        # entries rather than blanking them in place is what removes the
+        # birth-order position.
+        children_xrefs = [x for x in children_xrefs if x]
+        if _spouse_is_living(fam, living_xrefs) or fam.restricted:
             marriage_date = ""
             marriage_year = None
             marriage_place = ""
@@ -156,6 +195,33 @@ def _family_csv_row(
     ]
 
 
+def _living_xrefs(
+    result: ExportResult, redact_living: bool, max_age: int
+) -> set[str] | None:
+    """Xrefs of everyone the liveness rules estimate to be alive.
+
+    The two emitters ran identical copies of this. It decides who gets
+    published, so a change applied to one copy and not the other would have
+    made the CSV and the JSON disagree about who is alive.
+
+    None rather than an empty set when redaction is off, because the row
+    builders treat "no redaction requested" and "nobody is living" differently.
+    """
+    if not redact_living:
+        return None
+    return {
+        indi.xref
+        for indi in result.individuals
+        if estimate_living(
+            birth_year=indi.liveness_birth_year,
+            death_year=indi.liveness_death_year,
+            burial_year=indi.liveness_burial_year,
+            max_age=max_age,
+            living_marker=indi.living_marker,
+        )
+    }
+
+
 def format_csv(
     result: ExportResult,
     table: str = "individuals",
@@ -169,19 +235,7 @@ def format_csv(
 
     writer = csv.writer(buf)
 
-    living_xrefs: set[str] | None = None
-    if redact_living:
-        living_xrefs = {
-            indi.xref
-            for indi in result.individuals
-            if estimate_living(
-                indi.liveness_birth_year,
-                indi.liveness_death_year,
-                indi.liveness_burial_year,
-                max_age=max_age,
-                living_marker=indi.living_marker,
-            )
-        }
+    living_xrefs = _living_xrefs(result, redact_living, max_age)
 
     if table == "families":
         writer.writerow(_FAM_CSV_COLUMNS)
@@ -199,7 +253,7 @@ def format_csv(
 
 
 def _individual_to_dict(
-    indi: ExportIndividual, redacted: bool = False
+    indi: ExportIndividual, redacted: bool = False, *, withhold_notes: bool = False
 ) -> dict[str, Any]:
     if redacted:
         return {
@@ -242,7 +296,19 @@ def _individual_to_dict(
         "famc_xref": indi.famc_xref,
         "fams_xrefs": list(indi.fams_xrefs),
         "alt_names": [{"given": g, "surname": s} for g, s in indi.alt_names],
-        "notes": list(indi.notes),
+        # Dropped from EVERY row while redacting, not just redacted ones. A
+        # note is free prose, and the prose genealogy software puts there is
+        # exactly "her daughter Carol Roe, born 3 March 1992 at 14 Acacia
+        # Avenue" - on the DECEASED mother's record. Blanking the daughter's
+        # own fields and then republishing that sentence hands back her name,
+        # birth date and address, so the control undoes itself.
+        #
+        # Name-matching cannot rescue it: real notes say "my daughter", or use
+        # a maiden name, or a nickname. The cost is losing genuine notes about
+        # the dead, which is the same trade --redact-living already makes on
+        # dates. Occupations stay: OCCU is a short fact about its own subject,
+        # not prose about third parties.
+        "notes": [] if withhold_notes else list(indi.notes),
     }
 
 
@@ -258,14 +324,17 @@ def _family_to_dict(
     marriage_year = fam.marriage_year
     marriage_place = fam.marriage_place
     if living_xrefs:
-        if fam.husband_xref in living_xrefs:
+        # A RESN the user put on the FAM record withholds the couple, the same
+        # way a living spouse does. Their software was told to keep this
+        # family private; publishing it discards that instruction.
+        if fam.restricted or fam.husband_xref in living_xrefs:
             husband_xref = ""
             husband_name = "Living"
-        if fam.wife_xref in living_xrefs:
+        if fam.restricted or fam.wife_xref in living_xrefs:
             wife_xref = ""
             wife_name = "Living"
-        children_xrefs = ["" if x in living_xrefs else x for x in children_xrefs]
-        if _spouse_is_living(fam, living_xrefs):
+        children_xrefs = [x for x in children_xrefs if x not in living_xrefs]
+        if _spouse_is_living(fam, living_xrefs) or fam.restricted:
             marriage_date = ""
             marriage_year = None
             marriage_place = ""
@@ -288,24 +357,12 @@ def format_json(
     redact_living: bool = False,
     max_age: int = 110,
 ) -> str:
-    living_xrefs: set[str] | None = None
-    if redact_living:
-        living_xrefs = {
-            indi.xref
-            for indi in result.individuals
-            if estimate_living(
-                indi.liveness_birth_year,
-                indi.liveness_death_year,
-                indi.liveness_burial_year,
-                max_age=max_age,
-                living_marker=indi.living_marker,
-            )
-        }
+    living_xrefs = _living_xrefs(result, redact_living, max_age)
 
     data: dict[str, Any] = {
         "meta": {
-            "file": result.file_path,
-            "filename": Path(result.file_path).name,
+            "file": scrub_line(result.file_path),
+            "filename": scrub_line(Path(result.file_path).name),
             "encoding": result.encoding,
             "gedcom_tools_version": __version__,
             "individual_count": result.individual_count,
@@ -317,7 +374,9 @@ def format_json(
         },
         "individuals": [
             _individual_to_dict(
-                indi, redacted=living_xrefs is not None and indi.xref in living_xrefs
+                indi,
+                redacted=living_xrefs is not None and indi.xref in living_xrefs,
+                withhold_notes=redact_living,
             )
             for indi in result.individuals
         ],

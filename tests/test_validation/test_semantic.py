@@ -16,6 +16,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 death_year=2020,
                 famc_xrefs=[],
                 fams_xrefs=["@F1@"],
@@ -26,6 +27,7 @@ class TestSemanticValidator:
                 xref="@I2@",
                 line=10,
                 birth_year=1955,
+                birth_year_latest=1955,
                 death_year=2021,
                 famc_xrefs=[],
                 fams_xrefs=["@F1@"],
@@ -36,6 +38,7 @@ class TestSemanticValidator:
                 xref="@I3@",
                 line=20,
                 birth_year=1980,
+                birth_year_latest=1980,
                 famc_xrefs=["@F1@"],
                 fams_xrefs=[],
             )
@@ -48,6 +51,7 @@ class TestSemanticValidator:
                 wife_xref="@I2@",
                 chil_xrefs=["@I3@"],
                 marriage_year=1975,
+                marriage_year_latest=1975,
             )
         )
 
@@ -61,7 +65,9 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 death_year=1940,
+                death_year_latest=1940,
             )
         )
 
@@ -80,6 +86,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -87,7 +94,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1940,  # Born before parent
+                birth_year=1940,
+                birth_year_latest=1940,  # Born before parent
                 famc_xrefs=["@F1@"],
             )
         )
@@ -154,6 +162,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1990,
+                birth_year_latest=1990,
                 sex="M",
                 fams_xrefs=["@F1@"],
             )
@@ -162,7 +171,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=2000,  # Parent was 10
+                birth_year=2000,
+                birth_year_latest=2000,  # Parent was 10
                 famc_xrefs=["@F1@"],
             )
         )
@@ -186,6 +196,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1900,
+                birth_year_latest=1900,
                 sex="F",
                 fams_xrefs=["@F1@"],
             )
@@ -194,7 +205,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1985,  # Mother was 85
+                birth_year=1985,
+                birth_year_latest=1985,  # Mother was 85
                 famc_xrefs=["@F1@"],
             )
         )
@@ -218,6 +230,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1900,
+                birth_year_latest=1900,
                 sex="M",
                 fams_xrefs=["@F1@"],
             )
@@ -226,7 +239,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1990,  # Father was 90
+                birth_year=1990,
+                birth_year_latest=1990,  # Father was 90
                 famc_xrefs=["@F1@"],
             )
         )
@@ -250,7 +264,9 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1800,
+                birth_year_latest=1800,
                 death_year=1950,  # 150 years old
+                death_year_latest=1950,
             )
         )
 
@@ -267,6 +283,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -275,7 +292,8 @@ class TestSemanticValidator:
                 xref="@F1@",
                 line=20,
                 husb_xref="@I1@",
-                marriage_year=1940,  # Before birth
+                marriage_year=1940,
+                marriage_year_latest=1940,  # Before birth
             )
         )
 
@@ -292,6 +310,7 @@ class TestSemanticValidator:
                 xref="@I1@",
                 line=1,
                 birth_year=1950,
+                birth_year_latest=1950,
                 fams_xrefs=["@F1@"],
             )
         )
@@ -299,7 +318,8 @@ class TestSemanticValidator:
             IndividualInfo(
                 xref="@I2@",
                 line=10,
-                birth_year=1970,  # Before marriage
+                birth_year=1970,
+                birth_year_latest=1970,  # Before marriage
                 famc_xrefs=["@F1@"],
             )
         )
@@ -310,6 +330,7 @@ class TestSemanticValidator:
                 husb_xref="@I1@",
                 chil_xrefs=["@I2@"],
                 marriage_year=1980,
+                marriage_year_latest=1980,
             )
         )
 
@@ -381,10 +402,22 @@ class TestSiblingSpacing:
     def test_siblings_5_months_apart_w026(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=8)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=8,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -398,10 +431,22 @@ class TestSiblingSpacing:
     def test_siblings_9_months_apart_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=1)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=1,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=10)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=10,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -414,10 +459,22 @@ class TestSiblingSpacing:
     def test_twins_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=6)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=6,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=6)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=6,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -430,10 +487,22 @@ class TestSiblingSpacing:
     def test_year_only_dates_no_warning(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=None)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=None,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=None)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=None,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -447,10 +516,22 @@ class TestSiblingSpacing:
         validator = SemanticValidator()
         # I2 is older but listed second in GEDCOM
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1980, birth_month=8)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=8,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -463,14 +544,32 @@ class TestSiblingSpacing:
     def test_three_siblings_one_pair_violating(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1978, birth_month=1)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1978,
+                birth_year_latest=1978,
+                birth_month=1,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         # I3 is only 4 months after I2
         validator.collect_individual(
-            IndividualInfo(xref="@I3@", line=20, birth_year=1980, birth_month=7)
+            IndividualInfo(
+                xref="@I3@",
+                line=20,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=7,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=30, chil_xrefs=["@I1@", "@I2@", "@I3@"])
@@ -483,10 +582,22 @@ class TestSiblingSpacing:
     def test_cross_year_boundary(self):
         validator = SemanticValidator()
         validator.collect_individual(
-            IndividualInfo(xref="@I1@", line=1, birth_year=1979, birth_month=10)
+            IndividualInfo(
+                xref="@I1@",
+                line=1,
+                birth_year=1979,
+                birth_year_latest=1979,
+                birth_month=10,
+            )
         )
         validator.collect_individual(
-            IndividualInfo(xref="@I2@", line=10, birth_year=1980, birth_month=3)
+            IndividualInfo(
+                xref="@I2@",
+                line=10,
+                birth_year=1980,
+                birth_year_latest=1980,
+                birth_month=3,
+            )
         )
         validator.collect_family(
             FamilyInfo(xref="@F1@", line=20, chil_xrefs=["@I1@", "@I2@"])
@@ -559,3 +670,119 @@ class TestSexRoleMismatch:
         issues = validator.validate()
         w029 = [i for i in issues if i.code == ErrorCode.W029_SEX_ROLE_MISMATCH]
         assert len(w029) == 0
+
+
+class TestBurialChronology:
+    """A burial cannot precede the death it follows, nor the birth.
+
+    Split out of the redaction ruling that burial IS conclusive death
+    evidence: that settles what --redact-living does with a burial, and
+    leaves "BURI 1950 on a person born 1960" as a transcription error
+    nothing was naming.
+    """
+
+    def _one(self, **kwargs):
+        validator = SemanticValidator()
+        validator.collect_individual(IndividualInfo(xref="@I1@", line=1, **kwargs))
+        return [
+            i
+            for i in validator.validate()
+            if i.code == ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH
+        ]
+
+    def test_burial_before_death(self):
+        issues = self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=1950,
+        )
+        assert len(issues) == 1
+        assert "death (1960)" in issues[0].message
+
+    def test_burial_before_birth_when_there_is_no_death_date(self):
+        # Birth is the only anchor left, and it is still a contradiction
+        issues = self._one(
+            birth_year=1960,
+            birth_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=1950,
+        )
+        assert len(issues) == 1
+        assert "birth (1960)" in issues[0].message
+
+    def test_burial_after_death_is_silent(self):
+        assert not self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1960,
+            burial_year_latest=1960,
+        )
+
+    def test_an_open_upper_bound_is_not_a_contradiction(self):
+        # "BURI AFT 1950" states no upper bound, so its latest is unknown.
+        # Reading the stated year as the missing bound would invent one.
+        assert not self._one(
+            birth_year=1900,
+            birth_year_latest=1900,
+            death_year=1960,
+            death_year_latest=1960,
+            burial_year=1950,
+            burial_year_latest=None,
+        )
+
+    def test_no_burial_date_says_nothing(self):
+        assert not self._one(birth_year=1900, birth_year_latest=1900, death_year=1960)
+
+
+def test_a_dual_date_death_is_not_before_a_next_year_birth() -> None:
+    """Reading .year instead of .dual_year invented a reversed lifespan.
+
+    "1 MAR 1665/6" is March 1666, so a birth in January 1666 precedes it. The
+    old reading made it 1665 and reported E011 on a consistent record.
+    """
+    validator = SemanticValidator()
+    validator.collect_individual(
+        IndividualInfo(
+            xref="@I1@",
+            line=1,
+            birth_year=1666,
+            birth_year_latest=1666,
+            death_year=1666,
+            death_year_latest=1666,
+        )
+    )
+    codes = {i.code for i in validator.validate()}
+    assert ErrorCode.E011_DEATH_BEFORE_BIRTH not in codes
+
+
+def test_a_parent_born_after_the_child_is_not_reported_as_too_young() -> None:
+    """E012 owns that case and words it correctly.
+
+    The too-young test compared a signed gap against MIN_PARENT_AGE, so every
+    negative value passed it and the record drew both an E012 and a W020
+    reading "was -49 at birth" - a nonsense figure beside a correct one.
+    """
+    validator = SemanticValidator()
+    validator.collect_individual(
+        IndividualInfo(
+            xref="@C@",
+            line=1,
+            birth_year=1900,
+            birth_year_latest=1900,
+            famc_xrefs=["@F@"],
+        )
+    )
+    validator.collect_individual(
+        IndividualInfo(xref="@P@", line=2, birth_year=1950, birth_year_latest=1950)
+    )
+    validator.collect_family(
+        FamilyInfo(xref="@F@", line=3, husb_xref="@P@", chil_xrefs=["@C@"])
+    )
+    codes = {i.code for i in validator.validate()}
+    assert ErrorCode.E012_BIRTH_BEFORE_PARENT in codes
+    assert ErrorCode.W020_PARENT_TOO_YOUNG not in codes

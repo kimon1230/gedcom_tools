@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from gedcom_tools.utils import scrub_line
+
 if TYPE_CHECKING:
     from gedcom_tools.commands.relationship.models import (
         RelationshipResult,
@@ -46,7 +48,7 @@ def format_text(
         return "\n".join(r.description for r in result.relationships)
 
     lines: list[str] = []
-    lines.append(f"File: {result.file}")
+    lines.append(f"File: {scrub_line(result.file)}")
     lines.append("")
 
     if not result.related:
@@ -102,8 +104,8 @@ def format_text(
 
 def format_json(result: RelationshipResult) -> str:
     data: dict[str, Any] = {
-        "file": result.file,
-        "filename": Path(result.file).name,
+        "file": scrub_line(result.file),
+        "filename": scrub_line(Path(result.file).name),
         "primary": _individual_to_dict(result.primary),
         "target": _individual_to_dict(result.target),
         "related": result.related,

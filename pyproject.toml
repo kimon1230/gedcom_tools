@@ -15,10 +15,16 @@ dependencies = [
     # too, but relying on that transitive edge breaks `convert` at import time
     # the day ged4py drops it.
     "ansel>=1.0,<2",
+    # Imported directly by dates.py for Hebrew and French Republican dates.
+    # ged4py depends on it too, but its own HebrewDate.key() feeds the GEDCOM
+    # month index into convertdate's Nisan-based numbering and lands ~6 months
+    # out, so we call convertdate ourselves. Same reasoning as ansel above:
+    # relying on the transitive edge breaks the day ged4py drops it.
+    "convertdate>=2.4,<3",
     "fast-langdetect>=1.0.0,<2.0.0",
-    "rapidfuzz>=3.0.0",
+    "rapidfuzz>=3.0.0,<4",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.
-    "DoubleMetaphone>=1.2",
+    "DoubleMetaphone>=1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +38,7 @@ dev = [
     "black>=26.5",
     "mypy>=2.3",
     "pip-audit>=2.10",
+    "bandit>=1.9",
     "jsonschema>=4.26",
 ]
 # Reserved, not yet consumed by any import. The REPL command's `graph` subcommand
@@ -47,6 +54,13 @@ Homepage = "https://github.com/kimon1230/gedcom_tools"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.bandit]
+# B101 (assert_used): the one assert in src/ is a mypy narrowing guard that
+# already carries "# noqa: S101" for ruff's identical rule - converting it to
+# a raise would change runtime behaviour to satisfy a linter. Skipping the
+# rule keeps that decision in one place instead of two.
+skips = ["B101"]
 
 [tool.black]
 line-length = 88

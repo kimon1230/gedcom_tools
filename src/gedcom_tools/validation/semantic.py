@@ -18,6 +18,16 @@ from gedcom_tools.validation.issues import (
 )
 
 
+def _bound_phrase(year: int, inexact: bool, qualifier: str) -> str:
+    """A year for a message, qualified when it is a bound rather than a fact.
+
+    Loosening the chronology gates to see one-sided dates means these figures
+    are often derived: "BEF 1700" states no birth year, so reporting
+    "Born (1700)" tells the user their file says something it does not.
+    """
+    return f"{qualifier} ({year})" if inexact else f"({year})"
+
+
 @dataclass
 class SemanticValidator:
     """Validates genealogical logic and plausibility.
@@ -115,18 +125,28 @@ class SemanticValidator:
         return issues
 
     def _check_date_logic(self) -> list[ValidationIssue]:
-        """Check for impossible date relationships."""
-        issues = []
+        """Check for impossible date relationships.
+
+        Split by the record type each check walks, which is how every
+        other method in this class is scoped. The two loops share nothing
+        but the issue list, and the bound pairing a check needs is easier
+        to hold in mind without four unrelated ones beside it.
+        """
+        return self._check_individual_date_logic() + (self._check_family_date_logic())
+
+    def _check_individual_date_logic(self) -> list[ValidationIssue]:
+        """E011 death-before-birth, W036 burial order, E012 birth-before-parent."""
+        issues: list[ValidationIssue] = []
 
         for xref, indi in self.individuals.items():
             # Death before birth
-            if (
-                indi.birth_year is not None
-                and indi.death_year is not None
-                and indi.death_year < indi.birth_year
-            ):
-                death = indi.death_year
-                birth = indi.birth_year
+            # The LATEST the death can be, against the EARLIEST the birth can
+            # be. Any other pairing reports a contradiction the file does not
+            # actually state: "DEAT AFT 1850" beside "BIRT 1900" is perfectly
+            # consistent, since "after 1850" includes 1990.
+            death = indi.death_year_latest
+            birth = indi.birth_year
+            if death is not None and birth is not None and death < birth:
                 issues.append(
                     ValidationIssue(
                         code=ErrorCode.E011_DEATH_BEFORE_BIRTH,
@@ -136,8 +156,50 @@ class SemanticValidator:
                     )
                 )
 
-            # Birth before parent's birth
-            if indi.birth_year is not None:
+            # Burial cannot precede the death it follows, nor the birth.
+            # Both use the burial's LATEST bound against the other event's
+            # EARLIEST, so "BURI AFT 1950" beside "DEAT 1960" - which states
+            # no upper bound at all - is not reported as a contradiction the
+            # file never made.
+            #
+            # The two comparisons are INDEPENDENT. Picking death when present
+            # and birth otherwise dropped a burial before the BIRTH whenever
+            # any death year existed: "BIRT 1900 / DEAT BET 1800 AND 1950 /
+            # BURI 1850" passed both arms and reported clean, though the
+            # burial precedes the birth by fifty years. Birth is preferred in
+            # the message when both fire, because it is the stronger claim.
+            burial = indi.burial_year_latest
+            if burial is not None:
+                anchor_year, anchor_name = None, ""
+                if indi.death_year is not None and burial < indi.death_year:
+                    anchor_year, anchor_name = indi.death_year, "death"
+                # Read from indi rather than reusing the local the E011 block
+                # above set: same value today, but "which bound" is exactly the
+                # thing that must not depend on what a neighbouring check left
+                # in scope.
+                if indi.birth_year is not None and burial < indi.birth_year:
+                    anchor_year, anchor_name = indi.birth_year, "birth"
+                if anchor_year is not None:
+                    issues.append(
+                        ValidationIssue(
+                            code=ErrorCode.W036_BURIAL_BEFORE_DEATH_OR_BIRTH,
+                            message=(
+                                f"Burial ({burial}) before "
+                                f"{anchor_name} ({anchor_year})"
+                            ),
+                            line=indi.line,
+                            xref=xref,
+                        )
+                    )
+
+            # Birth before parent's birth.
+            # Gated on birth_year_latest, which is what the body below reads.
+            # Gating on birth_year skipped the check entirely for a one-sided
+            # date: "BIRT BEF 1700" has no earliest bound, so a child whose
+            # LATEST possible birth precedes the parent's earliest went
+            # unreported - the one date shape the second bound exists for.
+            child_latest = indi.birth_year_latest
+            if child_latest is not None:
                 for fam_xref in indi.famc_xrefs:
                     fam = self.families.get(fam_xref)
                     if not fam:
@@ -147,26 +209,52 @@ class SemanticValidator:
                         if not parent_xref:
                             continue
                         parent = self.individuals.get(parent_xref)
+                        # Latest the child could be born against the earliest
+                        # the parent could be - the only pairing where "before"
+                        # is certain rather than merely possible.
+                        parent_earliest = parent.birth_year if parent else None
                         if (
-                            parent
-                            and parent.birth_year is not None
-                            and indi.birth_year < parent.birth_year
+                            child_latest is not None
+                            and parent_earliest is not None
+                            and child_latest < parent_earliest
                         ):
+                            child_phrase = _bound_phrase(
+                                child_latest,
+                                indi.birth_year != indi.birth_year_latest,
+                                "no later than",
+                            )
+                            parent_phrase = _bound_phrase(
+                                parent_earliest,
+                                parent is not None
+                                and parent.birth_year != parent.birth_year_latest,
+                                "no earlier than",
+                            )
                             issues.append(
                                 ValidationIssue(
                                     code=ErrorCode.E012_BIRTH_BEFORE_PARENT,
-                                    message=f"Born ({indi.birth_year}) before parent "
-                                    f"{parent_xref} ({parent.birth_year})",
+                                    message=(
+                                        f"Born {child_phrase} before parent "
+                                        f"{parent_xref} {parent_phrase}"
+                                    ),
                                     line=indi.line,
                                     xref=xref,
                                 )
                             )
 
+        return issues
+
+    def _check_family_date_logic(self) -> list[ValidationIssue]:
+        """W024 marriage-before-birth and W025 child-before-marriage."""
+        issues: list[ValidationIssue] = []
+
         # Marriage before birth
         for fam_xref, fam in self.families.items():
-            if fam.marriage_year is None:
+            if fam.marriage_year is None and fam.marriage_year_latest is None:
                 continue
 
+            # Latest the marriage could be against the earliest the spouse
+            # could be born. "MARR BEF 1950" beside "BIRT 1900" is consistent.
+            marriage_latest = fam.marriage_year_latest
             for spouse_xref in [fam.husb_xref, fam.wife_xref]:
                 if not spouse_xref:
                     continue
@@ -174,12 +262,13 @@ class SemanticValidator:
                 if (
                     spouse
                     and spouse.birth_year is not None
-                    and fam.marriage_year < spouse.birth_year
+                    and marriage_latest is not None
+                    and marriage_latest < spouse.birth_year
                 ):
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W024_MARRIAGE_BEFORE_BIRTH,
-                            message=f"Marriage ({fam.marriage_year}) before "
+                            message=f"Marriage ({marriage_latest}) before "
                             f"{spouse_xref} birth ({spouse.birth_year})",
                             line=fam.line,
                             xref=fam_xref,
@@ -189,21 +278,85 @@ class SemanticValidator:
             # Child born before marriage (just a warning)
             for child_xref in fam.chil_xrefs:
                 child = self.individuals.get(child_xref)
+                child_latest = child.birth_year_latest if child else None
+                marriage_earliest = fam.marriage_year
                 if (
-                    child
-                    and child.birth_year is not None
-                    and child.birth_year < fam.marriage_year
+                    child_latest is not None
+                    and marriage_earliest is not None
+                    and child_latest < marriage_earliest
                 ):
                     issues.append(
                         ValidationIssue(
                             code=ErrorCode.W025_CHILD_BEFORE_MARRIAGE,
-                            message=f"Child {child_xref} born ({child.birth_year}) "
-                            f"before marriage ({fam.marriage_year})",
+                            message=f"Child {child_xref} born ({child_latest}) "
+                            f"before marriage ({marriage_earliest})",
                             line=fam.line,
                             xref=fam_xref,
                         )
                     )
 
+        return issues
+
+    def _parent_age_issues(
+        self,
+        child: IndividualInfo,
+        child_xref: str,
+        parent: IndividualInfo,
+        parent_xref: str,
+        too_old_code: ErrorCode,
+        label: str,
+    ) -> list[ValidationIssue]:
+        """Parent-age warnings, using a different bound pair for each direction.
+
+        "Too young" and "too old" sit in one if/elif but need OPPOSITE pairs,
+        so one age cannot serve both. Too young is definite only when even the
+        LARGEST possible gap is below the minimum - the latest the child can
+        have been born against the earliest the parent can have been. Too old
+        is definite only when even the SMALLEST possible gap exceeds the
+        maximum. Using a single age reports gaps the file never stated.
+        """
+        issues: list[ValidationIssue] = []
+
+        # "at most"/"at least" only when an operand is a range or one-sided;
+        # an exact pair still reads as a plain number.
+        inexact = (
+            child.birth_year != child.birth_year_latest
+            or parent.birth_year != parent.birth_year_latest
+        )
+        at_most = "at most " if inexact else ""
+        at_least = "at least " if inexact else ""
+
+        largest_gap = None
+        if child.birth_year_latest is not None and parent.birth_year is not None:
+            largest_gap = child.birth_year_latest - parent.birth_year
+
+        smallest_gap = None
+        if child.birth_year is not None and parent.birth_year_latest is not None:
+            smallest_gap = child.birth_year - parent.birth_year_latest
+
+        if largest_gap is not None and 0 <= largest_gap < MIN_PARENT_AGE:
+            issues.append(
+                ValidationIssue(
+                    code=ErrorCode.W020_PARENT_TOO_YOUNG,
+                    message=(
+                        f"{label} {parent_xref} was " f"{at_most}{largest_gap} at birth"
+                    ),
+                    line=child.line,
+                    xref=child_xref,
+                )
+            )
+        elif smallest_gap is not None and smallest_gap > MAX_PARENT_AGE_AT_BIRTH:
+            issues.append(
+                ValidationIssue(
+                    code=too_old_code,
+                    message=(
+                        f"{label} {parent_xref} was "
+                        f"{at_least}{smallest_gap} at birth"
+                    ),
+                    line=child.line,
+                    xref=child_xref,
+                )
+            )
         return issues
 
     def _check_age_plausibility(self) -> list[ValidationIssue]:
@@ -212,8 +365,14 @@ class SemanticValidator:
 
         for xref, indi in self.individuals.items():
             # Age at death
-            if indi.birth_year is not None and indi.death_year is not None:
-                age = indi.death_year - indi.birth_year
+            # The mirror of E011: the LONGEST lifespan the file could mean is
+            # the latest death against the earliest birth... but a DEFINITE
+            # "too long" needs the SHORTEST possible span to still exceed the
+            # limit, so it is the earliest death against the latest birth.
+            birth_latest = indi.birth_year_latest
+            death_earliest = indi.death_year
+            if birth_latest is not None and death_earliest is not None:
+                age = death_earliest - birth_latest
                 if age > MAX_LIFESPAN:
                     issues.append(
                         ValidationIssue(
@@ -224,62 +383,34 @@ class SemanticValidator:
                         )
                     )
 
-        # Parent age at child's birth
+        # Parent age at child's birth.
+        # Skip only when the child has NO bound at all. Gating on birth_year
+        # alone skipped W020 for a one-sided child date, because largest_gap -
+        # the pairing that makes "too young" definite - reads birth_year_latest.
+        # W021/W022 still cannot fire for such a child, since smallest_gap
+        # needs the earliest bound; _parent_age_issues guards each gap itself.
         for _fam_xref, fam in self.families.items():
             for child_xref in fam.chil_xrefs:
                 child = self.individuals.get(child_xref)
-                if not child or child.birth_year is None:
+                if not child or (
+                    child.birth_year is None and child.birth_year_latest is None
+                ):
                     continue
 
-                # Check father
-                if fam.husb_xref:
-                    father = self.individuals.get(fam.husb_xref)
-                    if father and father.birth_year is not None:
-                        age = child.birth_year - father.birth_year
-                        husb = fam.husb_xref
-                        if age < MIN_PARENT_AGE:
-                            issues.append(
-                                ValidationIssue(
-                                    code=ErrorCode.W020_PARENT_TOO_YOUNG,
-                                    message=f"Father {husb} was {age} at birth",
-                                    line=child.line,
-                                    xref=child_xref,
-                                )
-                            )
-                        elif age > MAX_PARENT_AGE_AT_BIRTH:
-                            issues.append(
-                                ValidationIssue(
-                                    code=ErrorCode.W022_FATHER_TOO_OLD,
-                                    message=f"Father {husb} was {age} at birth",
-                                    line=child.line,
-                                    xref=child_xref,
-                                )
-                            )
-
-                # Check mother
-                if fam.wife_xref:
-                    mother = self.individuals.get(fam.wife_xref)
-                    if mother and mother.birth_year is not None:
-                        age = child.birth_year - mother.birth_year
-                        wife = fam.wife_xref
-                        if age < MIN_PARENT_AGE:
-                            issues.append(
-                                ValidationIssue(
-                                    code=ErrorCode.W020_PARENT_TOO_YOUNG,
-                                    message=f"Mother {wife} was {age} at birth",
-                                    line=child.line,
-                                    xref=child_xref,
-                                )
-                            )
-                        elif age > MAX_PARENT_AGE_AT_BIRTH:
-                            issues.append(
-                                ValidationIssue(
-                                    code=ErrorCode.W021_MOTHER_TOO_OLD,
-                                    message=f"Mother {wife} was {age} at birth",
-                                    line=child.line,
-                                    xref=child_xref,
-                                )
-                            )
+                for parent_xref, too_old_code, label in (
+                    (fam.husb_xref, ErrorCode.W022_FATHER_TOO_OLD, "Father"),
+                    (fam.wife_xref, ErrorCode.W021_MOTHER_TOO_OLD, "Mother"),
+                ):
+                    if not parent_xref:
+                        continue
+                    parent = self.individuals.get(parent_xref)
+                    if parent is None:
+                        continue
+                    issues.extend(
+                        self._parent_age_issues(
+                            child, child_xref, parent, parent_xref, too_old_code, label
+                        )
+                    )
 
         return issues
 
@@ -288,7 +419,10 @@ class SemanticValidator:
         issues: list[ValidationIssue] = []
 
         for fam_xref, fam in self.families.items():
-            # Collect children with both birth_year and birth_month
+            # Only children whose birth year is a single year. A month alone
+            # does not make a date exact: "3 JAN 1801-1875" reads as a full
+            # precision date with month 1, but the year could be anywhere in a
+            # 74-year span, and spacing measured against that is meaningless.
             dated_children: list[tuple[int, int, str]] = []
             for child_xref in fam.chil_xrefs:
                 child = self.individuals.get(child_xref)
@@ -296,6 +430,7 @@ class SemanticValidator:
                     child
                     and child.birth_year is not None
                     and child.birth_month is not None
+                    and child.birth_year_latest == child.birth_year
                 ):
                     dated_children.append(
                         (child.birth_year, child.birth_month, child_xref)

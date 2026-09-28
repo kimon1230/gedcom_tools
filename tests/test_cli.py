@@ -1,6 +1,7 @@
 import argparse
 import errno
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -145,7 +146,11 @@ def test_exception_handling(tmp_path, capsys, monkeypatch):
     assert "error" in capsys.readouterr().err.lower()
 
 
-def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
+def test_verbose_prints_the_traceback_scrubbed(tmp_path, monkeypatch, capsys):
+    # It used to re-raise, which skipped the scrub. ged4py's ParserError quotes
+    # the offending source line, so in a real tree that is somebody's name or
+    # address - plus any escape sequence the file carries - going to the
+    # terminal of whoever followed the tool's own "re-run with --verbose".
     from gedcom_tools.commands import validate
 
     monkeypatch.setattr(validate, "run", _raise_error)
@@ -153,8 +158,61 @@ def test_verbose_reraises_exceptions(tmp_path, monkeypatch):
     f = tmp_path / "test.ged"
     f.write_text("0 HEAD\n0 TRLR\n", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="boom"):
-        main(["--verbose", "validate", str(f)])
+    assert main(["--verbose", "validate", str(f)]) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "RuntimeError" in err
+    assert "boom" in err
+    assert "Traceback" in err  # still useful for reporting a bug
+    assert "\x1b" not in err  # but no terminal control sequences
+
+
+@pytest.mark.parametrize(
+    "command",
+    # The eight commands whose ONLY size check is validate_input_file.
+    # Eleven call it; validate, filter and convert also enforce the cap
+    # themselves and are covered in test_validation/test_engine.py,
+    # test_filter_integration.py and test_convert.py. The first four here
+    # were covered already; compare, duplicates, relationship and languages
+    # gained the guard with no test, so removing any of them reproduced the
+    # original silent-OOM with nothing to catch it.
+    [
+        "export",
+        "stats",
+        "search",
+        "isolated",
+        "compare",
+        "duplicates",
+        "relationship",
+        "languages",
+    ],
+)
+def test_oversized_file_reports_cleanly_from_any_command(
+    tmp_path, capsys, monkeypatch, command
+):
+    """The cap was enforced by validate, filter and convert only.
+
+    Handing a large tree to export or stats read it until the OS killed the
+    process - no message, no exit code, nothing the user could act on.
+    """
+    monkeypatch.setattr("gedcom_tools.utils.MAX_FILE_SIZE_BYTES", 10)
+
+    f = tmp_path / "big.ged"
+    f.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", encoding="utf-8")
+
+    argv = [command, str(f)]
+    if command == "search":
+        argv.append("name:Smith")
+    elif command == "compare":
+        second = tmp_path / "big2.ged"
+        second.write_text("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", encoding="utf-8")
+        argv.append(str(second))
+    elif command == "relationship":
+        argv += ["@I1@", "@I2@"]
+
+    assert main(argv) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "too large" in err
+    assert "Maximum supported size" in err
 
 
 def test_validate_oversized_file_reports_cleanly(tmp_path, capsys, monkeypatch):
@@ -499,3 +557,151 @@ def test_handler_and_cli_render_an_error_identically(
 
     assert handler_err == cli_err
     assert "KeyError: 'indi_count'" in handler_err
+
+
+# A newline is legal in a POSIX filename and every command prints the path it
+# was given. validate flattened it; the other eight printed it as the file
+# wrote it, so the name decided what appeared at column 0 of the report.
+#
+# Two lists, not one: export emits CSV or JSON and has no "File:" line to
+# forge, and stats/isolated encode JSON with ensure_ascii=True, which turns a
+# C1 byte into the seven ASCII characters "\u009b" before the scrub is even
+# reached. Parametrising every command over both checks would look thorough
+# and assert nothing.
+_TEXT_PATH_EMITTERS = [
+    ("stats", []),
+    ("isolated", []),
+    ("search", ["surname=Smith"]),
+    ("duplicates", []),
+]
+
+_RAW_JSON_PATH_EMITTERS = [
+    ("export", ["--table", "individuals", "--to", "json"]),
+    ("search", ["surname=Smith"]),
+    ("duplicates", []),
+]
+
+_SPOOF_GED = (
+    "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n"
+    "0 @I1@ INDI\n1 NAME John /Smith/\n0 TRLR\n"
+)
+
+
+# POSIX permits a newline in a filename; Windows rejects it with EINVAL at
+# creation, so the attack this guards against cannot exist there and the
+# fixture cannot even be written. The scrub itself is platform-independent and
+# is still covered on Windows by the C1 test below.
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="a newline in a filename is a POSIX-only possibility",
+)
+@pytest.mark.parametrize("command,extra", _TEXT_PATH_EMITTERS)
+def test_a_filename_cannot_forge_a_line_of_the_report(
+    command, extra, tmp_path, capsys, monkeypatch
+):
+    spoofed = tmp_path / "tree\n\u2713 No errors found\nx.ged"
+    spoofed.write_text(_SPOOF_GED, encoding="utf-8")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main([command, str(spoofed), *extra])
+    out = capsys.readouterr().out
+
+    assert "File:" in out  # the line under test is actually being emitted
+    assert not any(ln.startswith("\u2713 No errors") for ln in out.splitlines())
+
+
+@pytest.mark.parametrize("command,extra", _RAW_JSON_PATH_EMITTERS)
+def test_a_filename_cannot_carry_c1_into_json(
+    command, extra, tmp_path, capsys, monkeypatch
+):
+    # These formatters pass ensure_ascii=False, so json.dumps is not the
+    # control here - it escapes C0 and leaves C1 alone, and U+009B is the
+    # 8-bit form of "ESC[".
+    spoofed = tmp_path / "t\x9b31mred.ged"
+    spoofed.write_text(_SPOOF_GED, encoding="utf-8")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main(["--format", "json", command, str(spoofed), *extra])
+    out = capsys.readouterr().out
+
+    assert "\\u009b" not in out  # not merely ascii-escaped by the encoder
+    assert "\x9b" not in out
+
+
+# The "1 CHAR" value is the file's own text, and it reaches reports twice: as
+# "declared", and as "detected", because detection upper-cases it when no BOM
+# decides instead. validate scrubbed both; eight other emitters did not.
+# export is here because it was NOT, and that is exactly how the raw value
+# escaped: it flattens EncodingInfo to a str at collection time, so the
+# display properties were no protection. Hand-listing consumers is the
+# failure mode this whole change exists to fix; keep this list complete.
+_ENCODING_JSON_EMITTERS = [
+    "stats",
+    "languages",
+    "search",
+    "duplicates",
+    "compare",
+    "export",
+]
+# Only these three interpolate EncodingInfo into text. search and duplicates
+# emit encoding in JSON only, so a text assertion there would pass vacuously.
+_ENCODING_TEXT_EMITTERS = ["stats", "languages", "compare"]
+
+_CHAR_SPOOF = (
+    b"0 HEAD\n1 SOUR T\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n"
+    b"1 CHAR UTF\x1b8\n0 @I1@ INDI\n1 NAME John /Smith/\n0 TRLR\n"
+)
+
+
+def _spoofed_char_file(tmp_path, name="chr.ged"):
+    # write_bytes: the point is a raw control byte in the header. A value like
+    # "UTF-8\x1b[31m" does NOT work - guess_codec rejects the whole name first
+    # and no encoding block is emitted at all, so the test could not fail.
+    path = tmp_path / name
+    path.write_bytes(_CHAR_SPOOF)
+    return path
+
+
+def _argv_for(command, path, tmp_path):
+    if command == "search":
+        return [command, str(path), "surname=Smith"]
+    if command == "compare":
+        return [command, str(path), str(_spoofed_char_file(tmp_path, "b.ged"))]
+    if command == "export":
+        return [command, str(path), "--table", "individuals"]
+    return [command, str(path)]
+
+
+@pytest.mark.parametrize("command", _ENCODING_JSON_EMITTERS)
+def test_the_char_header_cannot_carry_a_control_byte_into_json(
+    command, tmp_path, capsys, monkeypatch
+):
+    ged = _spoofed_char_file(tmp_path)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main(["--format", "json", *_argv_for(command, ged, tmp_path)])
+
+    # Decoded, not raw: stats and languages encode with ensure_ascii=True, so
+    # a "byte not in stdout" assertion passes there with the scrub removed.
+    data = json.loads(capsys.readouterr().out)
+    if command == "export":
+        # export nests it under meta as a bare string. Keyed on the command,
+        # not on the payload shape: inferring from a "meta" key would silently
+        # reroute any other command that grows one.
+        assert "\x1b" not in data["meta"]["encoding"]
+        return
+    blocks = [data[k] for k in ("encoding", "encoding_a", "encoding_b") if k in data]
+    assert blocks
+    for block in blocks:
+        assert "\x1b" not in block["detected"]
+        assert "\x1b" not in (block["declared"] or "")
+
+
+@pytest.mark.parametrize("command", _ENCODING_TEXT_EMITTERS)
+def test_the_char_header_cannot_carry_a_control_byte_into_text(
+    command, tmp_path, capsys, monkeypatch
+):
+    ged = _spoofed_char_file(tmp_path)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    main(_argv_for(command, ged, tmp_path))
+    out = capsys.readouterr().out
+
+    assert "Encoding" in out  # the line under test is actually emitted
+    assert "\x1b" not in out

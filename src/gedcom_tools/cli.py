@@ -313,13 +313,10 @@ def _run_command(args: Namespace) -> int:
                 raise
             _silence_stdout()
             return EXIT_SUCCESS
-    except Exception as e:
-        if args.verbose:
-            # Note: --verbose shows file paths in traceback, acceptable for local CLI
-            raise
+    except Exception as e:  # noqa: BLE001 - CLI boundary, see report_error
         from gedcom_tools.utils import report_error
 
-        report_error(e)
+        report_error(e, verbose=args.verbose)
         return EXIT_ERROR
 
 

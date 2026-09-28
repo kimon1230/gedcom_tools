@@ -1810,11 +1810,11 @@ class TestEdgeCases:
                 top=10,
             )
 
-        # Verbose keeps the traceback: the parse failure escapes run().
-        with pytest.raises(OSError, match="Unexpected EOF"):
-            run(make_args(verbose=True))
+        # Verbose prints the traceback rather than letting it escape, so the
+        # scrub still applies to whatever the parser quoted out of the file.
+        assert run(make_args(verbose=True)) == EXIT_ERROR
 
-        # Without it the same failure is reported as an exit code.
+        # Without it the same failure is reported without the traceback.
         assert run(make_args(verbose=False)) == EXIT_ERROR
 
     def test_name_suffix_handling(self, tmp_path: Path) -> None:

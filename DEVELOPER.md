@@ -4,8 +4,8 @@
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/kimon1230/gedcom-tools.git
-   cd gedcom-tools
+   git clone https://github.com/kimon1230/gedcom_tools.git
+   cd gedcom_tools
    ```
 
 2. Create and activate a virtual environment:
@@ -28,7 +28,7 @@ gedcom_tools/
 │       ├── __init__.py          # Package init, version
 │       ├── cli.py               # Main entry point, argument parsing
 │       ├── constants.py         # Shared constants (exit codes, thresholds)
-│       ├── dates.py             # Shared date parsing utilities
+│       ├── dates.py             # Shared date parsing + the liveness trust gate
 │       ├── graph.py             # Graph algorithms (UnionFind, components, ParentChildGraph, BFS traversal)
 │       ├── language_detect.py   # fastText language detection wrapper (lazy model load, cache dir)
 │       ├── progress.py          # Terminal UI (Colors, PhaseTracker, GlyphSet/--ascii)
@@ -194,6 +194,24 @@ Each command follows the same pattern: `register_subcommand(subparsers)` to wire
 
 The parity gate in `tests/test_filter_parser.py` calls production `parse_line()` and compares against ged4py across a large generated sample. It must keep calling the production function — reimplementing the comparison against `_LINE_RE` directly turns the gate into a test of itself.
 
+**`dates.py` invariant — three readings of a year, and only two may drive a decision.** `extract_year_from_date` / `extract_year_latest_from_date` report whatever year the text contains; that is what `export`, `stats` and `search` show, what `relationship` and `isolated` display, and what `compare` blocks on. Recovering it from free text is the whole point of the phrase handling. Two stricter readings sit beside it, and they differ from each other, so there are four `_extract_year_bounded` wrappers rather than two:
+
+| Reader | Consumed by | Accepts a phrase? | Year floor |
+|--------|-------------|-------------------|------------|
+| `extract_year_for_liveness` / `..._latest_for_liveness` | `--redact-living` | **No** | `MIN_PLAUSIBLE_YEAR` |
+| `extract_year_for_validation` / `..._latest_for_validation` | age and chronology checks; `compare`/`duplicates` **scoring** | **Yes**, if clean | `1` |
+
+The split is not tidiness. Liveness refuses every phrase because the recovery cannot separate a date from a citation shaped like one — `12.1823.4` has the token profile of `12/2/1882` — and acting on the wrong one publishes a living person. Validation accepts a clean phrase because `12/2/1882` is a date a human reads without difficulty and it yields a correct `E011`, and it drops the 1000 floor because a floor written to reject a four-digit run in a note has no business rejecting a spec-conformant `1 JAN 0950`. Mixing them up publishes a living person's record, so:
+
+- **A structured date kind is not proof of a date.** ged4py validates neither month tokens nor years: `2 DATE Reg 1823` parses as a SIMPLE date whose month is `"REG"`, and `2 DATE 3/1990` is read as the dual year **3**. `_is_trustworthy` therefore checks the month resolves and the year is plausible, on `date`, `date1` **and** `date2` — `date2` because it is a half of the value like any other — the gate is caller-independent and checks every present half against BOTH bounds, so it no longer matters which reader asked. It also fails closed when it examined no calendar date at all.
+- **The year bound is NOT calendar-scoped — conversion comes first.** Hebrew and French Republican years count from another epoch, so they are converted to the Gregorian scale and *then* bounded like everything else. An earlier design exempted them from the bound instead; that let `@#DFRENCH R@ 1 VEND 230` — a date in 2021 — reach `estimate_living` as the number 230, read as an age of roughly 1796, and publish a living person. Every half of a range is converted, and a half that will not convert makes the whole value unreadable rather than leaving the other half standing as a bound the file never gave. Conversion goes through `convertdate` directly: ged4py's own `HebrewDate.key()` feeds its GEDCOM month index (`TSH`=1) into a library that numbers months from Nisan, which lands about six months out — and Nisan–Elul lands a year LOW, the direction that publishes someone.
+- **Untrusted fails to `None`, never to a guess.** `None` flows to `estimate_living` rule 5 — unknown means living, so the record is redacted. Any change that makes an untrusted year fall back to the reported one reopens the leak; that fallback is what the deleted `liveness_birth_year` property used to do.
+
+The guards are proven by reverting them, and the failure sets below are measured, not estimated — a recipe a maintainer cannot reproduce is worse than none on a redaction guard. Mutate a **copy** of `src/` and run under `PYTHONPATH=<copy>/src`: the venv's editable install otherwise shadows the copy and every mutation appears to survive. Copy `docs/` alongside `src/` and `tests/`, or `test_stats_schema.py` contributes six collection errors that have nothing to do with the mutation.
+
+- Making `is_clean_date_phrase` (public, `dates.py`) return `True` unconditionally fails **18** tests — 13 in `test_dates.py`, 4 in `test_compare_collector.py`, 1 in `test_validation/test_engine.py`. Note what is *not* in that list: `test_export_collector.py`. The liveness readers pass `allow_phrase=False`, so they never reach this function at all, and `--redact-living` is guarded by the policy split rather than by the phrase gate. The `test_compare_collector.py` failures are the scoring reader, which does accept a clean phrase.
+- Replacing the separate liveness fallback loop in `export/collector.py` with a single `BIRT/DATE` read fails **7**, all in `test_export_collector.py`: `TestCollectorDates::test_christening_fallback_carries_latest_bound`, `::test_baptism_fallback_carries_latest_bound`, `::test_birth_range_beats_christening_for_the_reported_year`, `TestRedactLivingPhraseDates::test_second_birth_event_is_not_ignored`, `::test_clean_christening_behind_dirty_birth_still_publishes`, `TestLivenessGateHardening::test_recent_christening_overrides_an_ancient_birth`, and `::test_recent_baptism_overrides_an_ancient_birth`.
+
 ### Validation Engine (4-Phase Design)
 
 The validation engine (`src/gedcom_tools/validation/engine.py`) processes GEDCOM files in four sequential phases:
@@ -271,7 +289,10 @@ Error codes follow a consistent scheme in `issues.py`:
 - `E0xx` - Errors (fatal issues that indicate invalid GEDCOM)
 - `W0xx` - Warnings (issues that may indicate problems but aren't fatal)
 
-The severity is automatically derived from the code prefix.
+The severity is automatically derived from the code prefix. `W036` is the
+highest code in use; a new one needs an entry in the `ErrorCode` enum, a
+human-readable line in the description map beside it — a bare code in a report
+is useless to the reader — and a row in the table in `docs/validate.md`.
 
 ## Test Data
 
@@ -367,6 +388,15 @@ mypy src/
 ```bash
 pip-audit
 ```
+
+This also runs in the `quality` CI job and fails the build, so it can go red
+from a third-party advisory rather than a code change — the same trade the
+uncapped dev tools already make. The `Install` step upgrades pip first,
+because the pip `setup-python` ships carries its own advisories and would
+otherwise fail the build over the runner image. The job additionally refuses
+any tracked `.ged`/`.gedcom`/`.csv`/root-level `.json` outside
+`tests/fixtures/`: `.gitignore` is all that stands between a real family tree
+and the public remote, and `git add -f` walks straight past it.
 
 ## Adding a New Command
 

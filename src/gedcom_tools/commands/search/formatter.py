@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from gedcom_tools.utils import scrub_line
+
 if TYPE_CHECKING:
     from gedcom_tools.commands.search.models import (
         MatchDetail,
@@ -103,7 +105,7 @@ def format_text(
         return "\n".join(lines)
 
     lines = []
-    lines.append(f"File: {result.file_path}")
+    lines.append(f"File: {scrub_line(result.file_path)}")
     lines.append(f"Query: {result.query_string}")
     lines.append("")
 
@@ -154,13 +156,13 @@ def format_text(
 
 def format_json(result: SearchResult) -> str:
     data: dict[str, Any] = {
-        "file": result.file_path,
-        "filename": Path(result.file_path).name,
+        "file": scrub_line(result.file_path),
+        "filename": scrub_line(Path(result.file_path).name),
         "query": result.query_string,
         "encoding": {
-            "detected": result.encoding.encoding,
+            "detected": result.encoding.display_encoding,
             "has_bom": result.encoding.has_bom,
-            "declared": result.encoding.declared_charset,
+            "declared": result.encoding.display_declared,
         },
         "total_individuals": result.total_individuals,
         "match_count": len(result.matches),

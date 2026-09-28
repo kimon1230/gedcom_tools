@@ -21,6 +21,13 @@ class CompareIndividual:
     birth_place: str = ""
     death_year: int | None = None
     death_place: str = ""
+
+    # The same years, read strictly: populated only when the date text is a
+    # date and nothing else. A year scraped out of "Reg. 1823 vol II" is shown
+    # and blocked on, but never scored - scoring it asserts a disagreement the
+    # file never stated, and that demotes a true match out of the certain set.
+    birth_year_scored: int | None = None
+    death_year_scored: int | None = None
     famc_xref: str | None = None
     fams_xrefs: list[str] = field(default_factory=list)
 

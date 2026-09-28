@@ -8,8 +8,8 @@ import os
 import re
 import stat
 import sys
+import traceback
 import unicodedata
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,7 +22,11 @@ from ged4py.parser import (  # type: ignore[attr-defined]
     guess_codec,
 )
 
-from gedcom_tools.constants import EXIT_ERROR, EXIT_USAGE_ERROR
+from gedcom_tools.constants import (
+    EXIT_ERROR,
+    EXIT_USAGE_ERROR,
+    MAX_FILE_SIZE_BYTES,
+)
 
 if TYPE_CHECKING:
     from ged4py.model import Record
@@ -199,22 +203,49 @@ _BIDI_CHARS = frozenset(
 )
 
 
+# A translate table deletes in one pass; the per-character generator this
+# replaces walked the whole string in Python for every message.
+_BIDI_DELETE = dict.fromkeys(ord(c) for c in _BIDI_CHARS)
+
+
 def sanitize_error(msg: str) -> str:
     """Strip control characters, ANSI escapes, and bidi overrides from error text."""
     result = _ANSI_ESCAPE_RE.sub("", msg)
     result = _C0_CONTROL_RE.sub("", result)
-    return "".join(c for c in result if c not in _BIDI_CHARS)
+    return result.translate(_BIDI_DELETE)
 
 
-def report_error(e: Exception) -> None:
+def scrub_line(text: str) -> str:
+    r"""Strip control sequences AND flatten line breaks, for single-line output.
+
+    sanitize_error deliberately keeps "\n" so a wrapped exception still reads
+    as paragraphs. Anything printed as ONE line of a report needs the stronger
+    form: ged4py joins CONT sub-lines with "\n", and POSIX allows a newline in
+    a filename, so either can otherwise print a forged verdict at column 0 of
+    the tool's own output.
+    """
+    return sanitize_error(text).replace("\r", " ").replace("\n", " ")
+
+
+def report_error(e: Exception, verbose: bool = False) -> None:
     """Print an unexpected exception to stderr in the one house format.
 
     Every generic ``except Exception`` handler routes through here so the same
     failure reads the same way whichever command hit it. The type name matters:
     a bare ``Error: 'foo'`` from a KeyError tells the user nothing.
+
+    Under --verbose the traceback is printed here rather than by re-raising.
+    Re-raising bypassed the scrub, and ged4py's ParserError quotes the whole
+    offending line - which in a real tree is somebody's name, address or note,
+    plus any escape sequence the file carries. The traceback keeps its
+    newlines, because a traceback that is not on separate lines is useless.
     """
     print(f"Error: {type(e).__name__}: {sanitize_error(str(e))}", file=sys.stderr)
-    print("Re-run with --verbose for a full traceback.", file=sys.stderr)
+    if verbose:
+        trace = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(sanitize_error(trace), file=sys.stderr, end="")
+    else:
+        print("Re-run with --verbose for a full traceback.", file=sys.stderr)
 
 
 def check_output_safety(
@@ -259,6 +290,36 @@ def check_output_safety(
 SYMLINK_OUTPUT_ERROR = "Output path is a symlink; refusing to follow it."
 
 
+def _refuse_if_not_the_same_object(
+    fd: int, expected: os.stat_result, path: Path
+) -> str | None:
+    """Refuse unless `fd` is the very object `expected` was taken from.
+
+    The write path decides WHAT KIND of write to perform from a pre-open
+    lstat, so it has to prove the descriptor it got back is that object.
+    O_NOFOLLOW refuses a symlink swapped in during the window, but not a FIFO
+    put in place of a regular file, and not a different FIFO put in place of
+    the one that was inspected.
+
+    (st_dev, st_ino) answers identity; comparing only the type bits answers a
+    weaker question, and an attacker who wins the race supplies an object of
+    whatever type passes. Closes the fd on refusal, before any fdopen takes
+    ownership of it.
+    """
+    try:
+        opened = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        return f"Error: Cannot inspect {path} after opening it."
+    if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(fd)
+        return (
+            f"Error: {path} was replaced while it was being opened; "
+            "refusing to write."
+        )
+    return None
+
+
 def write_output_securely(
     path: Path,
     data: str | bytes,
@@ -266,7 +327,7 @@ def write_output_securely(
     force: bool,
     encoding: str = "utf-8",
 ) -> str | None:
-    """Write `data` to `path` through a single create-or-fail open.
+    """Write `data` to `path` through a single symlink-refusing open.
 
     Returns an error message for the caller to print, or None on success.
     `encoding` applies to str data only; bytes go out untouched.
@@ -281,29 +342,55 @@ def write_output_securely(
     create-or-fail but symlinks are followed and the mode is ignored — the
     same concession the `sys.platform != "win32"` chmod guard already made.
     """
-    target_mode: int | None
+    target_st: os.stat_result | None
     try:
-        target_mode = os.lstat(path).st_mode
+        target_st = os.lstat(path)
     except OSError:
         # Nothing there yet (or the parent is unreadable): let the atomic open
         # below decide. A propagating FileNotFoundError here would break every
         # ordinary "create a new file" write.
-        target_mode = None
+        target_st = None
 
-    if target_mode is not None and (
-        stat.S_ISCHR(target_mode) or stat.S_ISFIFO(target_mode)
+    if target_st is not None and (
+        stat.S_ISCHR(target_st.st_mode) or stat.S_ISFIFO(target_st.st_mode)
     ):
         # /dev/null and named pipes: nothing to create, nothing to truncate,
-        # and no mode worth setting. Write them the plain way.
+        # and no mode worth setting - but still opened through the same
+        # O_NOFOLLOW gate as everything else. write_text() resolves the path a
+        # second time, so a symlink swapped in after the lstat would be
+        # followed, which is the window this function exists to close.
         #
         # lstat, not stat: stat() follows symlinks, so a link aimed at a FIFO
         # or a device would look identical to the real thing and get written
-        # through — exactly what the symlink guard below exists to stop.
-        # Anything else, links included, falls through to O_NOFOLLOW.
-        if isinstance(data, str):
-            path.write_text(data, encoding=encoding, newline="")
-        else:
-            path.write_bytes(data)
+        # through. Anything else, links included, falls through below.
+        # This branch used to write unconditionally. Everything else in this
+        # function refuses an existing path without --force, so a FIFO planted
+        # at the output path during the parse phase received the whole export
+        # while the run reported success and left a 0-byte pipe on disk. The
+        # user asked to create a file; honour that answer here too.
+        if not force:
+            return f"Error: {path} already exists. Use --force to overwrite."
+
+        payload = data.encode(encoding) if isinstance(data, str) else data
+        try:
+            special_fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as e:
+            if e.errno == errno.ELOOP or path.is_symlink():
+                return f"Error: {SYMLINK_OUTPUT_ERROR}"
+            raise
+        # O_NOFOLLOW closes the symlink swap but not a TYPE swap: replace the
+        # FIFO with an ordinary file between the lstat above and this open and
+        # the export lands in it - no --force, no truncation, at whatever mode
+        # that file already carries. Re-check on the DESCRIPTOR, which names
+        # the object actually opened rather than resolving the path again.
+        #
+        # Before fdopen, which takes ownership of the fd: closing it by hand
+        # afterwards would be a double close.
+        if err := _refuse_if_not_the_same_object(special_fd, target_st, path):
+            return err
+
+        with os.fdopen(special_fd, "wb") as special_out:
+            special_out.write(payload)
         return None
 
     flags = (
@@ -331,12 +418,33 @@ def write_output_securely(
             return f"Error: {path} already exists. Use --force to overwrite."
         raise
 
+    # The overwrite path opened an object that already existed, so the same
+    # question applies: is this the object lstat looked at? O_NOFOLLOW refuses
+    # a symlink but not a FIFO or a hardlink substituted for the regular file.
+    if target_st is not None and (
+        err := _refuse_if_not_the_same_object(fd, target_st, path)
+    ):
+        return err
+
     if force:
         # O_TRUNC reuses the existing file's mode, so an overwrite of a
         # world-readable file would stay world-readable. fchmod acts on the
         # open descriptor, so no path lookup and nothing to race.
-        with suppress(OSError, AttributeError):
+        #
+        # A failure here is NOT suppressed: it means the export is about to
+        # land in a file whose existing mode we could not tighten, which is
+        # exactly the "never briefly world-readable" promise above. Only the
+        # AttributeError - platforms with no os.fchmod - is tolerated.
+        try:
             os.fchmod(fd, 0o600)
+        except AttributeError:
+            pass
+        except OSError:
+            os.close(fd)
+            return (
+                f"Error: Cannot restrict permissions on {path}; "
+                "refusing to write export data into it."
+            )
 
     if isinstance(data, str):
         # newline="" is load-bearing: the default rewrites every \n as
@@ -368,21 +476,48 @@ def normalize_compare(text: str) -> str:
 
 @dataclass
 class EncodingInfo:
-    """BOM + CHAR header detection result."""
+    """BOM + CHAR header detection result.
+
+    Both string fields carry the file's own "1 CHAR" text: `declared_charset`
+    verbatim, and `encoding` as its upper-cased form whenever there is no BOM
+    to decide instead. So both are attacker-controlled, and both reach reports.
+
+    They are NOT scrubbed in place. `encoding` selects the codec in
+    `resolve_source_codec`, so cleaning it at construction would quietly turn a
+    malformed "ANS\x01EL" into a valid ANSEL selection - repairing a header
+    the tool should refuse. Display goes through the properties below instead;
+    control flow keeps the raw value.
+    """
 
     encoding: str
     has_bom: bool = False
     declared_charset: str | None = None
 
+    @property
+    def display_encoding(self) -> str:
+        """`encoding` as it may be printed or serialised."""
+        return scrub_line(self.encoding)
+
+    @property
+    def display_declared(self) -> str | None:
+        """`declared_charset` as it may be printed or serialised."""
+        if self.declared_charset is None:
+            return None
+        return scrub_line(self.declared_charset)
+
     def __str__(self) -> str:
-        parts = [self.encoding]
+        # Scrubbed, because this is the default text output's encoding line.
+        # json.dumps at least escapes a control byte; this surface hands it to
+        # the terminal untouched, and the TTY filter deliberately does not
+        # cover redirected output.
+        parts = [self.display_encoding]
         if self.has_bom:
             parts.append("(with BOM)")
         if (
             self.declared_charset
             and self.declared_charset.lower() != self.encoding.lower()
         ):
-            parts.append(f"(declared: {self.declared_charset})")
+            parts.append(f"(declared: {self.display_declared})")
         return " ".join(parts)
 
 
@@ -524,6 +659,24 @@ def xref_sort_key(xref: str) -> tuple[str, int, str]:
     return ("", 0, xref)
 
 
+def file_too_large_message(file_size: int, limit: int) -> str:
+    """The one wording for "this file is past the cap", without a prefix.
+
+    Four call sites enforce the limit - three commands decode the file
+    themselves and bypass validate_input_file - and all four printed their own
+    copy of this sentence, so a rewording would have reached three of them.
+
+    `limit` is a parameter rather than a read of MAX_FILE_SIZE_BYTES: every
+    module imports its own binding of that constant and the tests patch them
+    one at a time, so a helper that resolved it would report a limit other
+    than the one that actually fired.
+    """
+    return (
+        f"File is too large ({file_size / (1024 * 1024):.1f} MB). "
+        f"Maximum supported size is {limit // (1024 * 1024)} MB."
+    )
+
+
 def validate_input_file(file_path: Path) -> int | None:
     """Validate input file exists and is readable. Returns error code or None."""
     if not file_path.exists():
@@ -537,6 +690,19 @@ def validate_input_file(file_path: Path) -> int | None:
     if not os.access(file_path, os.R_OK):
         print(
             f"Error: Cannot read file (permission denied): {file_path}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # The cap was enforced by validate, filter and convert only, so a large
+    # tree given to export or stats was read until the OS killed the process -
+    # no message, no exit code, nothing to act on. Every command already calls
+    # this gate, so checking here covers all of them. The three existing checks
+    # stay: they guard the same limit for callers using the API directly.
+    file_size = file_path.stat().st_size
+    if file_size > MAX_FILE_SIZE_BYTES:
+        print(
+            f"Error: {file_too_large_message(file_size, MAX_FILE_SIZE_BYTES)}",
             file=sys.stderr,
         )
         return EXIT_ERROR

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from gedcom_tools import __version__
 from gedcom_tools.progress import Colors, glyphs
+from gedcom_tools.utils import scrub_line
 
 UNLIMITED_DEPTH: int = 2**20
 
@@ -159,7 +160,7 @@ class FilterResult:
                 rows.append((label, src, out, rem))
 
         lines: list[str] = [
-            f"File: {self.source_path}",
+            f"File: {scrub_line(self.source_path)}",
             "",
             f"{colors.cyan}=== Filter Results ==={colors.reset}",
             "",
@@ -209,9 +210,9 @@ class FilterResult:
         from pathlib import Path as _Path
 
         data = {
-            "source_file": self.source_path,
+            "source_file": scrub_line(self.source_path),
             "source_filename": _Path(self.source_path).name,
-            "output_file": self.output_path,
+            "output_file": scrub_line(self.output_path),
             "output_filename": _Path(self.output_path).name,
             "source": _counts_dict(self.source_counts),
             "output": _counts_dict(self.output_counts),

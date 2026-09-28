@@ -1,8 +1,10 @@
+import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from ged4py.date import DateValue
+from ged4py.calendar import HebrewDate
+from ged4py.date import DateValue, DateValueTypes
 from ged4py.parser import GedcomReader
 
 from gedcom_tools.dates import (
@@ -11,13 +13,17 @@ from gedcom_tools.dates import (
     MONTH_TO_NUM,
     classify_date_precision,
     extract_month,
+    extract_year_for_liveness,
     extract_year_for_validation,
     extract_year_from_date,
     extract_year_latest_for_liveness,
+    extract_year_latest_for_validation,
     extract_year_latest_from_date,
     get_century,
+    has_unreadable_structure,
     is_clean_date_phrase,
     is_phrase_date,
+    resolve_current_year,
 )
 from gedcom_tools.utils import count_sources_recursive
 
@@ -640,14 +646,8 @@ def test_phrase_extraction(
     assert classify_date_precision(date_val)[0] == precision
 
 
-@pytest.mark.parametrize("text,year,latest,month,precision", PHRASE_CASES)
-def test_year_and_precision_agree(
-    text: str,
-    year: int | None,
-    latest: int | None,
-    month: int | None,
-    precision: str,
-) -> None:
+@pytest.mark.parametrize("text", [case[0] for case in PHRASE_CASES])
+def test_year_and_precision_agree(text: str) -> None:
     # A populated year and a "missing" precision would let stats put someone in
     # the timeline while its own precision breakdown says the date is absent.
     date_val = DateValue.parse(text)
@@ -748,7 +748,7 @@ def test_validation_year_keeps_a_clean_phrase_year() -> None:
     assert extract_year_for_validation(clean) == 1989
 
 
-def test_liveness_year_rejects_even_a_clean_phrase() -> None:
+def test_liveness_reader_rejects_even_a_clean_phrase() -> None:
     # The liveness twin of the test above. A clean phrase cannot be told apart
     # from a citation shaped like a date, and acting on a wrong one publishes
     # a living person - so redaction refuses the whole class.
@@ -826,11 +826,118 @@ def test_pre_floor_year_is_validated_but_not_acted_on(text: str, expected: int) 
     "text,expected",
     [
         ("1 JAN 1900", 1900),
-        ("1750/51", 1750),  # dual date, the older year is real
-        ("@#DHEBREW@ 1 TSH 5786", 5786),  # Hebrew years are out of range by design
+        # Dual date: the SECOND number is the Gregorian one. Under Old
+        # Style the year turned on 25 March, so a dual date names one day
+        # under two conventions and 1751 is the one on this scale. This
+        # row asserted 1750 and encoded an off-by-one that reported
+        # "Death (1665) before birth (1666)" on consistent files.
+        ("1750/51", 1751),
     ],
 )
 def test_plausible_structured_year_survives(text: str, expected: int) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+
+
+# Was asserted to survive as the literal 5786. It must not: estimate_living
+# subtracts the year from the current one, so a Hebrew or French Republican
+# year has to reach it on the Gregorian scale or it means nothing.
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Verified against convertdate, not against ged4py: its HebrewDate.key()
+        # feeds the GEDCOM month index (TSH=1) into convertdate's Nisan-based
+        # numbering and lands ~6 months out. Each of these was pinned a year
+        # wrong while that was the conversion.
+        ("@#DHEBREW@ 1 TSH 5786", 2025),
+        ("@#DHEBREW@ 1 TSH 5700", 1939),
+        ("@#DHEBREW@ 1 TSH 5600", 1839),
+        # Tishrei-Tevet landed a year HIGH, which over-redacts and is merely
+        # wrong. Nisan-Elul landed a year LOW, which publishes a living person
+        # - so this row is the one that matters.
+        ("@#DHEBREW@ 1 NSN 5676", 1916),
+        ("@#DFRENCH R@ 1 VEND 230", 2021),  # the French Republic ended in year XIV
+        ("@#DFRENCH R@ 1 VEND 8", 1799),
+    ],
+)
+def test_non_gregorian_year_is_converted_for_decisions(
+    text: str, expected: int
+) -> None:
+    assert extract_year_for_validation(DateValue.parse(text)) == expected
+    assert extract_year_latest_for_liveness(DateValue.parse(text)) == expected
+
+
+def test_adar_sheni_in_a_common_year_does_not_convert() -> None:
+    # ADS names a 13th month. A common year has 12, and convertdate's to_jd
+    # would silently return 1 Nisan rather than refusing.
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 ADS 5785")) is None
+    # ...but a leap year really does have one.
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 ADS 5784")) == 2024
+
+
+def test_day_beyond_the_month_does_not_convert() -> None:
+    # Elul has 29 days; to_gregorian would roll a 30th into the next year.
+    assert (
+        extract_year_for_validation(DateValue.parse("@#DHEBREW@ 30 ELL 5785")) is None
+    )
+
+
+def test_mixed_calendar_range_keeps_its_gregorian_bound() -> None:
+    # Dropping the Gregorian half made this read as 1840 - an age of ~186 -
+    # and published a living person.
+    date_val = DateValue.parse("BET @#DHEBREW@ 1 TSH 5600 AND 2010")
+    assert extract_year_latest_for_liveness(date_val) == 2010
+
+
+def test_unreadable_half_poisons_the_whole_range() -> None:
+    # Skipping the bad half instead would leave the good one standing alone,
+    # so "BET <unreadable> AND 2010" would read as a firm 2010 - a bound the
+    # file never actually gave. Unknown has to stay unknown.
+    for text in (
+        "BET @#DHEBREW@ 30 ELL 5785 AND 2010",  # day 30 of a 29-day month
+        "BET @#DHEBREW@ 1 ADS 5785 AND 2010",  # 13th month of a 12-month year
+    ):
+        date_val = DateValue.parse(text)
+        assert extract_year_latest_for_liveness(date_val) is None
+        assert extract_year_for_validation(date_val) is None
+
+    # ...while a range whose halves both read is unaffected.
+    clean = DateValue.parse("BET 1850 AND 2010")
+    assert extract_year_latest_for_liveness(clean) == 2010
+    assert extract_year_for_validation(clean) == 1850
+
+
+def test_absurd_year_does_not_abort_the_run() -> None:
+    # convertdate raises ValueError for a French year past its range and
+    # OverflowError for a huge one; neither may escape.
+    huge = "@#DFRENCH R@ 1 VEND " + "9" * 400
+    assert extract_year_for_validation(DateValue.parse(huge)) is None
+    assert (
+        extract_year_for_validation(DateValue.parse("@#DFRENCH R@ 1 VEND 3000")) is None
+    )
+
+
+def test_bc_year_is_not_read_as_ad() -> None:
+    # ged4py gives year=100, bc=True. Without the negation the chronology
+    # checks see AD 100 and invent a reversed lifespan.
+    assert extract_year_for_validation(DateValue.parse("100 B.C.")) is None
+
+
+def test_non_gregorian_year_is_still_reported_as_written() -> None:
+    # Only the decision path converts; export and stats show the file's value
+    assert extract_year_from_date(DateValue.parse("@#DHEBREW@ 1 TSH 5786")) == 5786
+
+
+def test_year_outside_the_convertible_range_is_not_trusted() -> None:
+    # Hebrew year 100 predates the proleptic Gregorian epoch
+    assert extract_year_for_validation(DateValue.parse("@#DHEBREW@ 1 TSH 100")) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("1 JAN 1900", 1900), ("@#DJULIAN@ 1 JAN 1700", 1700)],
+)
+def test_bounded_calendars_are_unchanged(text: str, expected: int) -> None:
+    # The conversion must not touch the two calendars that never needed it
     assert extract_year_for_validation(DateValue.parse(text)) == expected
 
 
@@ -847,3 +954,126 @@ def test_junk_month_on_the_upper_bound_is_caught() -> None:
         extract_year_latest_for_liveness(DateValue.parse("BET 1900 AND Reg 1823"))
         is None
     )
+
+
+def test_a_structured_kind_with_no_calendar_date_is_not_trusted() -> None:
+    # ged4py has no shape like this today, but _is_trustworthy gates redaction
+    # and its loop used to fall through to "trusted" when it examined nothing
+    from gedcom_tools.dates import _is_trustworthy
+
+    stub = type("StubDate", (), {"kind": DateValueTypes.SIMPLE})()
+    assert not _is_trustworthy(stub, None, allow_phrase=False, year_floor=1000)
+
+
+def test_current_year_zero_is_honoured_not_swallowed() -> None:
+    # "or" read an explicit 0 as absent and reached for the clock instead
+    assert resolve_current_year(0) == 0
+    assert resolve_current_year(1850) == 1850
+    assert resolve_current_year(None) == datetime.date.today().year
+
+
+def test_hebrew_dispatch_survives_a_ged4py_class_rename() -> None:
+    # The old dispatch compared type(...).__name__, so a rename upstream would
+    # route Hebrew down the Gregorian arm and read 5786 as a 58th-century year
+    renamed = type("RenamedHebrew", (HebrewDate,), {})
+    date_val = DateValue.parse("@#DHEBREW@ 1 TSH 5786")
+    cal = date_val.date
+    cal.__class__ = renamed
+    assert extract_year_for_liveness(date_val) == 2025
+
+
+class TestTheTrustGateChecksBothBounds:
+    """The gate is two-sided and does not know which reader called it.
+
+    A non-Gregorian year spans two Gregorian ones, so "the year" is two
+    numbers. Checking one and returning the other is how a date outside the
+    ceiling reached a caller; threading the caller's choice instead would
+    swap which check runs, and that is worse - it drops the floor for the
+    latest reader, which is the direction that publishes a living person.
+    """
+
+    def test_a_year_past_the_ceiling_is_refused_by_both_readers(self) -> None:
+        # 5788 spans 2027/2028. The earliest cleared a 2027 cap; the latest
+        # did not, and the latest is what extract_year_latest_* returns.
+        date_val = DateValue.parse("@#DHEBREW@ 5788")
+        assert extract_year_for_liveness(date_val, 2026) is None
+        assert extract_year_latest_for_liveness(date_val, 2026) is None
+
+    def test_a_year_below_the_floor_is_refused_by_the_latest_reader_too(
+        self,
+    ) -> None:
+        # 4760 spans 999/1000. Had the gate been made caller-dependent, the
+        # latest reader would have bounds-checked 1000, cleared the liveness
+        # floor of 1000, and returned a year for a date whose earliest bound
+        # the same policy rejects - publishing someone the file never dated.
+        date_val = DateValue.parse("@#DHEBREW@ 4760")
+        assert extract_year_for_liveness(date_val, 2026) is None
+        assert extract_year_latest_for_liveness(date_val, 2026) is None
+
+    def test_the_floor_is_the_liveness_policy_not_the_gate(self) -> None:
+        # The same date under validation, which carries no 1000 floor. The
+        # gate itself is reader-agnostic; the POLICY differs.
+        date_val = DateValue.parse("@#DHEBREW@ 4760")
+        assert extract_year_for_validation(date_val, 2026) == 999
+        assert extract_year_latest_for_validation(date_val, 2026) == 1000
+
+    def test_a_current_year_hebrew_date_is_still_trusted(self) -> None:
+        # Over-rejection guard: 5787 spans 2026/2027 and sits one Hebrew year
+        # below the refused case, so it proves the ceiling rejects 5788
+        # without rejecting dates that are merely recent.
+        date_val = DateValue.parse("@#DHEBREW@ 5787")
+        assert extract_year_for_liveness(date_val, 2026) == 2026
+        assert extract_year_latest_for_liveness(date_val, 2026) == 2027
+
+    def test_ordinary_and_one_sided_dates_are_unaffected(self) -> None:
+        assert extract_year_for_liveness(DateValue.parse("1 JAN 1900")) == 1900
+        assert extract_year_latest_for_liveness(DateValue.parse("BEF 1900")) == 1900
+        # A mixed-calendar range still converts both halves.
+        mixed = DateValue.parse("BET 1800 AND @#DHEBREW@ 5700")
+        assert extract_year_for_liveness(mixed) == 1800
+        assert extract_year_latest_for_liveness(mixed) == 1940
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("1 MAR 1665/6", 1666),
+        ("12 MAR 1637/1638", 1638),
+        ("1750/51", 1751),
+    ],
+)
+def test_a_dual_date_reads_the_gregorian_year(text: str, expected: int) -> None:
+    # Old Style turned the year on 25 March, so a date written "1665/6" is one
+    # day under two conventions and the second number is the Gregorian one.
+    # Both bounds are that year - a dual date is not a range.
+    date_val = DateValue.parse(text)
+    assert extract_year_for_validation(date_val) == expected
+    assert extract_year_latest_for_validation(date_val) == expected
+
+
+# Only tokens ged4py parses as a structured date reach this predicate: its
+# month grammar is [A-Z]{3,4}, so "MARCHED 1700" and "DECEMB 1850" are
+# PHRASE values taking a different route with its own gate. These four
+# fit the grammar and were all trusted before.
+@pytest.mark.parametrize("text", ["JANE 1900", "DECD 1850", "JANU 1700", "OCTO 1800"])
+def test_a_token_that_merely_starts_like_a_month_is_not_one(text: str) -> None:
+    """The check matched a three-character prefix, so junk passed as a month.
+
+    "JANE 1900" parses as a structured date whose month is "JANE", and the
+    year beside it became trustworthy - enough to age someone past max_age and
+    publish them - while W035 stayed silent, because it shares this predicate
+    and saw nothing wrong.
+    """
+    date_val = DateValue.parse(text)
+    assert extract_year_latest_for_liveness(date_val) is None
+    assert has_unreadable_structure(date_val)
+
+
+@pytest.mark.parametrize("text", ["JUNE 1900", "JULY 1900", "SEPT 1900"])
+def test_the_long_spellings_ged4py_accepts_still_work(text: str) -> None:
+    # ged4py parses three of the twelve full names and leaves month_num unset
+    # for them, which is the whole reason the fallback exists. Rejecting these
+    # would break real dates.
+    date_val = DateValue.parse(text)
+    assert extract_year_latest_for_liveness(date_val) == 1900
+    assert not has_unreadable_structure(date_val)

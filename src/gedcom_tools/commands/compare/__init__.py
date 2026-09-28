@@ -262,10 +262,8 @@ def run(args: Namespace) -> int:
         # cli._run_command turns this into a clean exit; catching it in the
         # generic handler below would report a closed pipe as a failure.
         raise
-    except Exception as e:
-        if verbose:
-            raise
+    except Exception as e:  # noqa: BLE001 - CLI boundary, see report_error
         from gedcom_tools.utils import report_error
 
-        report_error(e)
+        report_error(e, verbose=verbose)
         return EXIT_ERROR
