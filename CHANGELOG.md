@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1]
+
+A maintenance release. Output is unchanged; only the install requirements move.
+
+### Changed
+- **`convertdate` now needs 2.5 or later, and `fast-langdetect` 1.1 or later.** convertdate 2.5 renamed the Hebrew month-length function the date code calls and deprecated the old name, which a future release will remove; fast-langdetect 1.1 started shipping type information, under which the old import no longer type-checks. Both are ordinary `pip install --upgrade` targets, and language detection gives the same results on 1.1 as on 1.0
+
+### Fixed
+- **Two tests of the output writer's swap protection crashed under pytest 9.2.** They replaced `os.fstat` for the whole process, and pytest now calls it on its own capture files during teardown. The fake now answers only for the file under test. The protection itself was never affected, and disabling it still fails both tests
+
 ## [1.4.0]
 
 A minor rather than a patch release: `export` and `stats` now report years for dates they previously reported as unknown, and `export --redact-living` withholds a small number of people it used to publish.
