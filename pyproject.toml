@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +7,23 @@ name = "kimon-gedcom-tools"
 version = "1.4.1"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Sociology :: Genealogy",
+    "Topic :: Utilities",
+]
 dependencies = [
     "ged4py>=0.5.2,<0.6",
     # Imported directly by commands/convert/transcoder.py. ged4py pulls it in
@@ -42,8 +57,9 @@ dev = [
     "jsonschema>=4.26",
 ]
 # Reserved, not yet consumed by any import. The REPL command's `graph` subcommand
-# is what will use it; the extra ships ahead of that because README and the 1.1.1
-# release notes already document `pip install kimon-gedcom-tools[graph]`.
+# is what will use it. No longer advertised in the README, since installing it
+# adds nothing yet; kept so anyone who followed the 1.1.1 release notes still
+# resolves.
 graph = ["kimon-gedgraph>=1.0.0,<2.0.0"]
 
 [project.scripts]

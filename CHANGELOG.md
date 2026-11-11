@@ -6,9 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [1.4.1]
 
-A maintenance release. Output is unchanged; only the install requirements move.
+A maintenance release. Output is unchanged; only the install requirements and package metadata move.
+
+### Added
+- **Python 3.14 is tested and supported.** CI now runs the full suite on 3.14 on Linux and Windows. `DoubleMetaphone` has no prebuilt wheel for 3.14 yet, so installing there needs a C compiler; the README's requirements say so
+- **The PyPI page lists supported Python versions, licence and topic.** The package carried no classifiers, so PyPI showed none and its filters skipped it
 
 ### Changed
+- **The README no longer advertises `pip install kimon-gedcom-tools[graph]`.** It promised GraphViz chart generation, but nothing in the tool uses that dependency yet, so the install added a package and no feature. The extra still resolves for anyone who already depends on it
+- **The licence is declared as an SPDX expression** (`license = "MIT"`) rather than the table form setuptools has deprecated and will stop building after February 2027. Building from source now needs setuptools 77 or later
 - **`convertdate` now needs 2.5 or later, and `fast-langdetect` 1.1 or later.** convertdate 2.5 renamed the Hebrew month-length function the date code calls and deprecated the old name, which a future release will remove; fast-langdetect 1.1 started shipping type information, under which the old import no longer type-checks. Both are ordinary `pip install --upgrade` targets, and language detection gives the same results on 1.1 as on 1.0
 
 ### Fixed
