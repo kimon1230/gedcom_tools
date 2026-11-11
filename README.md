@@ -16,9 +16,6 @@ CLI utility for GEDCOM file validation, analysis, and search.
 
 ```bash
 pip install kimon-gedcom-tools
-
-# With optional GraphViz chart generation (pedigree, relationship, hourglass, bowtie)
-pip install kimon-gedcom-tools[graph]
 ```
 
 Or for development:
@@ -1371,6 +1368,7 @@ software.
 ## Requirements
 
 - Python 3.11 or higher
+- On Python 3.14, a C compiler: the `DoubleMetaphone` dependency publishes no prebuilt wheel for 3.14 yet, so pip builds it from source. Linux and macOS usually have one; on Windows it means the Microsoft C++ Build Tools
 
 ## License
 

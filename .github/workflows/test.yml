@@ -7,6 +7,13 @@ on:
   # Called by publish.yml so a release runs the same suite rather than a
   # second copy of it that can drift.
   workflow_call:
+  # Dev tools are uncapped and nothing else runs tests while the repo is idle,
+  # so a breaking upstream release would otherwise go unseen until the next
+  # push. Mondays 06:00 UTC. GitHub disables a public repo's schedule after
+  # 60 days without a commit and sends no notice; re-enable it from the
+  # Actions tab after a long pause.
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -89,7 +96,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.13"]
+        python-version: ["3.11", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
 
     env:

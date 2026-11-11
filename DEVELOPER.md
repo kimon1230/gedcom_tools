@@ -506,7 +506,7 @@ a phantom entry locally that CI never sees.
 - `DoubleMetaphone` - Double Metaphone phonetic encoding for European name matching (used by search, compare, and duplicates commands via `--phonetic metaphone`)
 
 ### Optional
-- `kimon-gedgraph` - GraphViz chart generation, declared as the `graph` extra (`pip install kimon-gedcom-tools[graph]`). **Reserved, not yet consumed by any import** — the REPL command's `graph` subcommand is what will use it. The extra ships ahead of that because the README and the 1.1.1 release notes already document the install. Import name is `gedgraph`, not the distribution name
+- `kimon-gedgraph` - GraphViz chart generation, declared as the `graph` extra (`pip install kimon-gedcom-tools[graph]`). **Reserved, not yet consumed by any import** — the REPL command's `graph` subcommand is what will use it. The README stopped advertising it in 1.4.1, because installing it added a dependency and no feature; the extra itself stays so a requirements file written from the 1.1.1 release notes still resolves. Import name is `gedgraph`, not the distribution name
 
 ### Development
 - `pytest` - Testing framework
@@ -539,8 +539,8 @@ When making changes:
 
 Publishing is driven by a GitHub release, which triggers `publish.yml`. That
 workflow now **calls `test.yml` and waits for it** before building, so the full
-matrix — quality, both Linux legs, both Windows legs and both redirected-output
-legs — has to pass before anything reaches PyPI. It previously ran no tests at
+matrix — quality, the three Linux legs (3.11, 3.13, 3.14), the three Windows legs
+and both redirected-output legs — has to pass before anything reaches PyPI. It previously ran no tests at
 all, so a tag cut from a red commit shipped regardless. It calls the workflow
 rather than repeating its steps, which is what stops the release gate and the
 pull-request gate drifting apart.
