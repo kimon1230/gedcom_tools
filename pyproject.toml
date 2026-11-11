@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kimon-gedcom-tools"
-version = "1.4.0"
+version = "1.4.1"
 description = "CLI utility for GEDCOM file validation, analysis, and search"
 readme = "README.md"
 license = {text = "MIT"}
@@ -20,8 +20,8 @@ dependencies = [
     # month index into convertdate's Nisan-based numbering and lands ~6 months
     # out, so we call convertdate ourselves. Same reasoning as ansel above:
     # relying on the transitive edge breaks the day ged4py drops it.
-    "convertdate>=2.4,<3",
-    "fast-langdetect>=1.0.0,<2.0.0",
+    "convertdate>=2.5,<3",
+    "fast-langdetect>=1.1.0,<2.0.0",
     "rapidfuzz>=3.0.0,<4",
     # 1.1 has no wheels and its Cython source fails to build on 3.13.
     "DoubleMetaphone>=1.2,<2",

@@ -19,6 +19,15 @@
    pip install -e ".[dev]"
    ```
 
+4. When picking the project up again after a break, refresh the environment:
+   ```bash
+   pip install -U --upgrade-strategy eager -e ".[dev]"
+   ```
+   The dev tools are deliberately uncapped and CI installs the newest of
+   everything on every run, so a stale `.venv` can pass locally while CI fails,
+   or the reverse. A plain `pip install -U` is not enough: it leaves any
+   package whose installed version still satisfies its floor where it is.
+
 ## Project Structure
 
 ```
@@ -491,7 +500,8 @@ a phantom entry locally that CI never sees.
 ### Runtime
 - `ged4py` - GEDCOM file parsing
 - `ansel` - ANSEL codec, imported directly by `commands/convert/transcoder.py`. `ged4py` also depends on it, but the declaration is deliberate: relying on that transitive edge breaks `convert` at import time the day `ged4py` drops it
-- `fast-langdetect` - fastText language detection, used by the `languages` command and by `stats`. Imported lazily — it pulls in an HTTP stack, which cost about 32 ms on every invocation when it was imported at module scope
+- `convertdate` - Hebrew and French Republican to Gregorian conversion, imported directly by `dates.py`. `ged4py` depends on it too, but its own `HebrewDate.key()` is about six months out (see the `dates.py` invariants above), so the conversion is done here. Needs 2.5+ for `hebrew.month_length`
+- `fast-langdetect` - fastText language detection, used by the `languages` command and by `stats`. Imported lazily — it pulls in an HTTP stack, which cost about 32 ms on every invocation when it was imported at module scope. Imported from `fast_langdetect.infer`: the package root re-exports the classes without an `__all__`, which strict mypy rejects now that 1.1 ships `py.typed`
 - `rapidfuzz` - Jaro-Winkler string similarity (used by compare command). Also imported lazily, for the same reason
 - `DoubleMetaphone` - Double Metaphone phonetic encoding for European name matching (used by search, compare, and duplicates commands via `--phonetic metaphone`)
 

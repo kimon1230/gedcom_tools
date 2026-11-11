@@ -1,5 +1,15 @@
 # gedcom-tools
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/kimon1230/gedcom_tools/test.yml?branch=main&label=tests)](https://github.com/kimon1230/gedcom_tools/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/kimon-gedcom-tools)](https://pypi.org/project/kimon-gedcom-tools/)
+[![Python](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fkimon1230%2Fgedcom_tools%2Fmain%2Fpyproject.toml)](https://pypi.org/project/kimon-gedcom-tools/)
+[![Downloads](https://img.shields.io/pypi/dm/kimon-gedcom-tools)](https://pypistats.org/packages/kimon-gedcom-tools)
+[![License: MIT](https://img.shields.io/pypi/l/kimon-gedcom-tools)](LICENSE)
+[![Coverage](https://img.shields.io/badge/coverage-%E2%89%A595%25%20enforced-brightgreen)](https://github.com/kimon1230/gedcom_tools/blob/main/pyproject.toml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![mypy: strict](https://img.shields.io/badge/mypy-strict-2a6db2)](https://mypy-lang.org/)
+
 CLI utility for GEDCOM file validation, analysis, and search.
 
 ## Installation
