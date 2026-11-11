@@ -819,7 +819,7 @@ class TestWriteOutputSecurely:
             st_dev = os.lstat(fifo).st_dev
             st_ino = os.lstat(fifo).st_ino + 1
 
-        monkeypatch.setattr(os, "fstat", lambda fd: _Swapped())
+        _fake_fstat_for(fifo, _Swapped(), monkeypatch)
         try:
             result = write_output_securely(fifo, "data", force=True)
         finally:
@@ -1181,6 +1181,26 @@ def test_a_failed_permission_tighten_refuses_the_write(
     assert "Cannot restrict permissions" in result
 
 
+def _fake_fstat_for(
+    target: Path, fake: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Make fstat lie about `target` only.
+
+    Patching os.fstat outright also lies to pytest, whose capture teardown
+    calls fstat on its own descriptors before monkeypatch is undone.
+    """
+    real_fstat = os.fstat
+    seen = os.lstat(target)
+
+    def _fstat(fd: int) -> object:
+        st = real_fstat(fd)
+        if (st.st_dev, st.st_ino) == (seen.st_dev, seen.st_ino):
+            return fake
+        return st
+
+    monkeypatch.setattr(os, "fstat", _fstat)
+
+
 @posix_only
 def test_a_regular_file_swapped_for_another_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1203,7 +1223,7 @@ def test_a_regular_file_swapped_for_another_is_refused(
         st_dev = real.st_dev
         st_ino = real.st_ino + 1
 
-    monkeypatch.setattr(os, "fstat", lambda fd: _Different())
+    _fake_fstat_for(out, _Different(), monkeypatch)
     result = write_output_securely(out, "secret", force=True)
 
     assert result is not None

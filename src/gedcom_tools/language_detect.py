@@ -26,10 +26,10 @@ def _load_backend() -> None:
     global LangDetectConfig, LangDetector
     if LangDetectConfig is not None and LangDetector is not None:
         return
-    from fast_langdetect import (  # type: ignore[import-untyped]
-        LangDetectConfig as _Config,
-    )
-    from fast_langdetect import LangDetector as _Detector
+    # The package root re-exports these without an __all__, which strict mypy
+    # treats as private now that fast-langdetect ships py.typed.
+    from fast_langdetect.infer import LangDetectConfig as _Config
+    from fast_langdetect.infer import LangDetector as _Detector
 
     if LangDetectConfig is None:
         LangDetectConfig = _Config

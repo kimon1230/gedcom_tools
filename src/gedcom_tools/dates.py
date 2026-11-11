@@ -236,8 +236,8 @@ def _hebrew_gregorian_year(
         # ADS in a common year: 13 months were named, 12 exist.
         return None
     if day is None:
-        day = hebrew.month_days(year, month) if latest else 1
-    if day > hebrew.month_days(year, month):
+        day = hebrew.month_length(year, month) if latest else 1
+    if day > hebrew.month_length(year, month):
         # to_gregorian does no range checking of its own and would silently
         # roll "30 ELL" into the following year.
         return None
